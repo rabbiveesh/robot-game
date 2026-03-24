@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Robot Buddy Adventure</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a1a;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      overflow: hidden;
+    }
+
+    #gameCanvas {
+      display: none;
+      max-width: 100vw;
+      max-height: 100vh;
+      border-radius: 8px;
+      box-shadow: 0 0 40px rgba(0, 230, 118, 0.15);
+      cursor: pointer;
+      image-rendering: pixelated;
+    }
+
+    /* ─── TITLE SCREEN ─── */
+
+    #titleScreen {
+      text-align: center;
+      color: #fff;
+      animation: fadeIn 1s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    #titleScreen h1 {
+      font-size: 3.5rem;
+      color: #00E676;
+      text-shadow: 0 0 20px rgba(0, 230, 118, 0.4);
+      margin-bottom: 4px;
+    }
+
+    #titleScreen h2 {
+      font-size: 1.8rem;
+      color: #FFD54F;
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+
+    #titleScreen p.subtitle {
+      color: #90CAF9;
+      font-size: 1.1rem;
+      margin-bottom: 40px;
+    }
+
+    .input-group {
+      margin-bottom: 24px;
+    }
+
+    .input-group label {
+      display: block;
+      font-size: 1.2rem;
+      color: #B0BEC5;
+      margin-bottom: 8px;
+    }
+
+    .input-group input {
+      width: 300px;
+      padding: 14px 20px;
+      font-size: 1.4rem;
+      border: 3px solid #2196F3;
+      border-radius: 12px;
+      background: #16213e;
+      color: #fff;
+      text-align: center;
+      outline: none;
+      transition: border-color 0.3s;
+    }
+
+    .input-group input:focus {
+      border-color: #00E676;
+    }
+
+    .input-group input::placeholder {
+      color: #546E7A;
+    }
+
+    .api-section {
+      margin-top: 16px;
+      margin-bottom: 32px;
+    }
+
+    .api-toggle {
+      color: #78909C;
+      font-size: 0.9rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .api-toggle:hover { color: #B0BEC5; }
+
+    .api-details {
+      display: none;
+      margin-top: 12px;
+    }
+
+    .api-details.show { display: block; }
+
+    .api-details input {
+      width: 300px;
+      padding: 10px 16px;
+      font-size: 0.95rem;
+      border: 2px solid #37474F;
+      border-radius: 8px;
+      background: #16213e;
+      color: #78909C;
+      text-align: center;
+      outline: none;
+    }
+
+    .api-details input:focus {
+      border-color: #7E57C2;
+      color: #B0BEC5;
+    }
+
+    .api-details .hint {
+      color: #546E7A;
+      font-size: 0.8rem;
+      margin-top: 6px;
+    }
+
+    /* ─── SAVE SLOTS ─── */
+
+    .save-slots {
+      margin: 24px auto;
+      max-width: 460px;
+    }
+
+    .save-slots h3 {
+      color: #78909C;
+      font-size: 0.95rem;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+
+    .save-slot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #16213e;
+      border: 2px solid #263238;
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+    }
+
+    .save-slot:hover {
+      border-color: #00E676;
+      background: #1a2940;
+    }
+
+    .save-slot.selected {
+      border-color: #00E676;
+      box-shadow: 0 0 12px rgba(0, 230, 118, 0.2);
+    }
+
+    .save-slot.empty .slot-info {
+      color: #455A64;
+      font-style: italic;
+    }
+
+    .slot-number {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #FFD54F;
+      min-width: 60px;
+      text-align: left;
+    }
+
+    .slot-info {
+      flex: 1;
+      text-align: left;
+      padding: 0 12px;
+    }
+
+    .slot-name {
+      font-size: 1rem;
+      color: #E0E0E0;
+      font-weight: 600;
+    }
+
+    .slot-details {
+      font-size: 0.78rem;
+      color: #78909C;
+      margin-top: 2px;
+    }
+
+    .slot-actions {
+      display: flex;
+      gap: 6px;
+    }
+
+    .slot-btn {
+      padding: 6px 14px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: transform 0.15s;
+    }
+
+    .slot-btn:hover { transform: scale(1.05); }
+    .slot-btn:active { transform: scale(0.95); }
+
+    .slot-btn.load {
+      background: #2196F3;
+      color: #fff;
+    }
+
+    .slot-btn.new {
+      background: #00E676;
+      color: #1a1a2e;
+    }
+
+    .slot-btn.delete {
+      background: #455A64;
+      color: #B0BEC5;
+      padding: 6px 8px;
+    }
+
+    .slot-btn.delete:hover {
+      background: #F44336;
+      color: #fff;
+    }
+
+    #newGameSection {
+      display: none;
+      margin-top: 16px;
+      animation: fadeIn 0.3s ease;
+    }
+
+    #startBtn {
+      padding: 18px 60px;
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: #1a1a2e;
+      background: linear-gradient(135deg, #00E676, #69F0AE);
+      border: none;
+      border-radius: 16px;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      box-shadow: 0 4px 20px rgba(0, 230, 118, 0.3);
+    }
+
+    #startBtn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 6px 30px rgba(0, 230, 118, 0.5);
+    }
+
+    #startBtn:active {
+      transform: scale(0.98);
+    }
+
+    .controls-hint {
+      margin-top: 30px;
+      color: #546E7A;
+      font-size: 0.85rem;
+      line-height: 1.6;
+    }
+
+    .controls-hint kbd {
+      background: #1e3a5f;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: inherit;
+      color: #90CAF9;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- TITLE SCREEN -->
+  <div id="titleScreen">
+    <h1>ROBOT BUDDY</h1>
+    <h2>ADVENTURE</h2>
+    <p class="subtitle">A Math & Phonics RPG</p>
+
+    <!-- SAVE FILE SELECTOR -->
+    <div class="save-slots" id="saveSlots"></div>
+
+    <!-- NEW GAME FORM (shown when picking an empty slot or "New" on a filled one) -->
+    <div id="newGameSection">
+      <div class="input-group">
+        <label for="nameInput">What's your name, hero?</label>
+        <input type="text" id="nameInput" placeholder="Type your name..." maxlength="20">
+      </div>
+
+      <div class="api-section">
+        <div class="api-toggle" onclick="toggleApi()">Settings (optional)</div>
+        <div id="apiDetails" class="api-details">
+          <label style="display:flex; align-items:center; justify-content:center; gap:8px; margin-bottom:12px; cursor:pointer; color:#B0BEC5;">
+            <input type="checkbox" id="ttsToggle" checked style="width:18px;height:18px;cursor:pointer;">
+            Read dialogue aloud (Text-to-Speech)
+          </label>
+          <input type="password" id="apiKeyInput" placeholder="Anthropic API Key (optional)">
+          <div class="hint">Adds dynamic AI-generated robot dialogue. Game works great without it too!</div>
+        </div>
+      </div>
+
+      <button id="startBtn" onclick="startNewGame()">START ADVENTURE!</button>
+    </div>
+
+    <div class="controls-hint">
+      <kbd>Arrow keys</kbd> Move &nbsp;|&nbsp;
+      <kbd>SPACE</kbd> Talk &nbsp;|&nbsp;
+      <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> Answer
+    </div>
+  </div>
+
+  <!-- GAME CANVAS -->
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- Scripts in dependency order -->
+  <script src="sprites.js"></script>
+  <script src="world.js"></script>
+  <script src="characters.js"></script>
+  <script src="dialogue.js"></script>
+  <script src="game.js"></script>
+
+  <script>
+    let selectedSlot = -1;
+
+    // Build save slot UI on load
+    function renderSaveSlots() {
+      const container = document.getElementById('saveSlots');
+      const slots = getSaveSlots();
+      container.innerHTML = '<h3>- Save Files -</h3>';
+
+      slots.forEach((save, i) => {
+        const div = document.createElement('div');
+        div.className = 'save-slot' + (save ? '' : ' empty') + (selectedSlot === i ? ' selected' : '');
+
+        if (save) {
+          const mathBands = ['', 'Add <5', '+/- <10', '+/- <15', '+/- <20', 'Multiply'];
+          div.innerHTML = `
+            <span class="slot-number">FILE ${i + 1}</span>
+            <div class="slot-info">
+              <div class="slot-name">${escHtml(save.name)}</div>
+              <div class="slot-details">
+                ${formatSaveDate(save.timestamp)} · ${formatPlayTime(save.playTime)}
+                · ${save.dumDums || 0} Dum Dums · Math: ${mathBands[save.skill?.math?.band || 1]}
+              </div>
+            </div>
+            <div class="slot-actions">
+              <button class="slot-btn load" onclick="event.stopPropagation(); loadGame(${i})">LOAD</button>
+              <button class="slot-btn delete" onclick="event.stopPropagation(); eraseSlot(${i})">X</button>
+            </div>
+          `;
+        } else {
+          div.innerHTML = `
+            <span class="slot-number">FILE ${i + 1}</span>
+            <div class="slot-info">
+              <span class="slot-name">- empty -</span>
+            </div>
+            <div class="slot-actions">
+              <button class="slot-btn new" onclick="event.stopPropagation(); pickSlotForNew(${i})">NEW</button>
+            </div>
+          `;
+        }
+
+        container.appendChild(div);
+      });
+    }
+
+    function escHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    function pickSlotForNew(slotIndex) {
+      selectedSlot = slotIndex;
+      document.getElementById('newGameSection').style.display = 'block';
+      document.getElementById('nameInput').focus();
+      renderSaveSlots();
+    }
+
+    function loadGame(slotIndex) {
+      selectedSlot = slotIndex;
+      launchCanvas();
+      initGame(null, null, slotIndex, true);
+    }
+
+    function eraseSlot(slotIndex) {
+      const slots = getSaveSlots();
+      const name = slots[slotIndex]?.name || 'this file';
+      if (confirm(`Erase ${name}'s save file?`)) {
+        deleteSlot(slotIndex);
+        if (selectedSlot === slotIndex) {
+          selectedSlot = -1;
+          document.getElementById('newGameSection').style.display = 'none';
+        }
+        renderSaveSlots();
+      }
+    }
+
+    function startNewGame() {
+      if (selectedSlot < 0) {
+        // Auto-pick first empty slot
+        const slots = getSaveSlots();
+        selectedSlot = slots.findIndex(s => s === null);
+        if (selectedSlot < 0) selectedSlot = 0; // overwrite slot 1 if all full
+      }
+
+      const name = document.getElementById('nameInput').value.trim();
+      if (!name) {
+        const input = document.getElementById('nameInput');
+        input.style.borderColor = '#FF5252';
+        input.placeholder = 'Please enter your name!';
+        input.focus();
+        return;
+      }
+
+      const apiKey = document.getElementById('apiKeyInput')?.value.trim() || '';
+      TTS_ENABLED = document.getElementById('ttsToggle')?.checked ?? true;
+      launchCanvas();
+      initGame(name, apiKey, selectedSlot, false);
+    }
+
+    function launchCanvas() {
+      document.getElementById('titleScreen').style.display = 'none';
+      const canvas = document.getElementById('gameCanvas');
+      canvas.style.display = 'block';
+      resizeCanvas();
+      window.addEventListener('resize', resizeCanvas);
+    }
+
+    function toggleApi() {
+      document.getElementById('apiDetails').classList.toggle('show');
+    }
+
+    function resizeCanvas() {
+      const canvas = document.getElementById('gameCanvas');
+      const ratio = 960 / 720;
+      const windowRatio = window.innerWidth / window.innerHeight;
+      if (windowRatio > ratio) {
+        canvas.style.height = '100vh';
+        canvas.style.width = 'auto';
+      } else {
+        canvas.style.width = '100vw';
+        canvas.style.height = 'auto';
+      }
+    }
+
+    // Handle Enter on name input
+    document.getElementById('nameInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') startNewGame();
+    });
+
+    // Render save slots on page load
+    renderSaveSlots();
+  </script>
+</body>
+</html>
