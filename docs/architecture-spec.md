@@ -559,9 +559,49 @@ We don't rewrite everything at once. The prototype stays playable while we build
 
 Each step is independently shippable. The game works at every intermediate state.
 
+## Resolved Decisions
+
+- **Bundler**: Rollup
+- **Test runner**: Vitest
+- **State management**: Immutable state + reducer pattern (see `docs/examples/reducer-vs-mutable.js`)
+- **Presentation testing**: Playwright for smoke tests (low priority). Domain unit tests are what matter.
+
+### Why Immutable + Reducer
+
+1. **Event log IS the stealth assessment.** Every interaction is a data point. The log is the raw truth; the reducer's interpretation can evolve without losing data.
+
+2. **Retroactive reprocessing.** When we discover confounders (e.g., mouse skill inflating response times for young kids), we can replay old event logs with an updated reducer and recalculate profiles. Mutable state can't do this — the old state was overwritten.
+
+3. **Confounder resilience.** Raw events capture what happened. The reducer decides what it MEANS. These are separate concerns. Examples of confounders we'll discover over time:
+   - Mouse/trackpad skill (slow click ≠ slow thinking)
+   - Sibling interference (sudden random clicking pattern)
+   - Parent helping (suspiciously fast correct answer from a kid who was struggling)
+   - Distraction (long idle followed by rapid correct answers = came back, wasn't stuck)
+   - Screen size / button hit targets (misclicks on small screens aren't wrong answers)
+
+4. **Parent dashboard replay.** Show "here's what happened today" by replaying the session event log. Comes free.
+
+5. **Composition.** Split the reducer into focused sub-reducers (band progression, frustration detection, CRA tracking, pace adjustment) each independently testable.
+
+### Event Sourcing with Snapshots (Bounded Growth)
+
+Events accumulate during a session (50-200 events, trivial in memory). On save:
+
+```
+Save data = {
+  profileSnapshot: replay(allEvents),     // collapsed state (~500 bytes)
+  sessionLogs: [                          // last 5 sessions for dashboard
+    { date, events: [...] },              // ~2-5KB each
+  ],                                      // hard cap: 5 sessions, 200 events each
+}
+```
+
+On load: restore from snapshot. No replay needed. Total ceiling: ~30KB in localStorage.
+
+Session logs older than 5 sessions are collapsed into the snapshot and discarded. Unbounded growth is not possible.
+
 ## Open Questions
 
-- **Bundler choice**: esbuild (fast, simple) vs rollup (more ecosystem) vs none (native ES modules, simplest but slower in browser)?
-- **Test runner**: vitest (fast, ES module native, good DX) vs jest (more established) vs bare node:test?
-- **State management**: plain objects with methods (current direction) vs immutable state + reducer pattern? Reducers would make the event flow more explicit and testable, but add verbosity.
-- **How much of the presentation layer do we test?** Probably none — it's canvas drawing. But the UI logic (dialogue state machine, quest journal state) could be tested if extracted from rendering.
+- **How much of the presentation layer do we test?** Probably just Playwright smoke tests (loads, can enter name, can move, can complete a puzzle). Domain unit tests are the priority.
+- **Do we need a formal event bus / pub-sub?** Or is the reducer + direct calls sufficient? Leaning toward direct calls — event bus adds indirection we don't need at this scale.
+- **Should the event log be exportable?** (JSON dump for researchers / parents who want to analyze their kid's learning data.) Probably yes, trivially — it's already JSON.
