@@ -247,9 +247,55 @@ One interaction now yields:
 - Same core interaction model underneath
 - Math IS the gameplay because the interaction is rich enough to be interesting
 
+## Self-Selected Answer Mode
+
+During intake (and periodically during play), let the kid CHOOSE how they want to answer:
+
+```
+How do you want to figure it out?
+
+  🔢 Pick the answer     ✏️ Type it     ⭐ Count them out
+```
+
+### Why this matters
+
+1. **Autonomy (SDT).** The kid feels in control from the first interaction. This is their game, not a test.
+
+2. **Direct signal.** Instead of inferring answer mode preference from behavior, the kid tells us. Then we compare self-assessment to actual performance:
+
+| Picks | Gets it right | Interpretation |
+|-------|--------------|----------------|
+| "Pick" | Yes | Comfortable with choices. Maybe ready to try harder. |
+| "Pick" | No | Needs choices AND needs an easier band. |
+| "Type it" | Yes | Confident and correct. Fluent. |
+| "Type it" | No | Overconfident at this band. Interesting metacognition gap. |
+| "Count them out" | Yes (quickly) | Prefers concrete but may not need it. Nudge toward representational. |
+| "Count them out" | Yes (slowly) | Actually needed the concrete support. Right CRA stage. |
+
+3. **Metacognition tracking.** The gap between what a kid picks and what they succeed at is itself a signal. A kid who always picks "type it" and gets 80% right has good self-knowledge. A kid who always picks "type it" and gets 40% right needs gentler redirection — not forced into choices (that kills autonomy), but Sparky might say "Want to try counting them? It's fun!"
+
+### When to offer the choice
+
+- **Intake**: questions 1 and 3. Questions 2 and 4 use whatever they last picked. If they switched between 1 and 3, that's notable.
+- **Regular play**: every 5-8 interactions, or when the adaptive system is about to change the answer mode dial, give the kid the choice instead of forcing the transition. "Hey boss, want to try typing the answer this time?"
+- **Never force.** If the kid always picks "count them out," that's fine. The system notes it and may gently suggest alternatives, but the kid's choice is respected.
+
+### Domain events
+
+```js
+AnswerModeChosen {
+  type: 'ANSWER_MODE_CHOSEN',
+  chosen: 'choice' | 'free_input' | 'concrete_build',
+  questionBand: number,
+  operation: string,
+}
+```
+
+This feeds into the answer mode dial but weighted less than actual performance — what the kid picks is a preference signal, what they succeed at is an ability signal. Both matter.
+
 ## Open Questions
 
 - Should the "Show me!" / "Tell me!" buttons be available on every single interaction, or should we hide them once the kid demonstrates they don't need them? (Risk: kid gets stuck on one hard problem and can't find the hint button because it was hidden.)
 - For elimination mode, do we show all 3 choices and let the kid X out, or show 3 and require them to X one before they can submit? (Forced elimination = more signal, but more friction.)
-- How do we handle the transition from multiple choice to free input gracefully? Maybe a "bonus round" where Sparky says "I bet you can do this WITHOUT the choices!" and if they fail, choices come back without judgment.
-- At what point does the answer mode dial affect the INTAKE? Probably never — intake always uses multiple choice for accessibility. The dial only kicks in during regular play.
+- Should the self-selected mode choice use icons only (for pre-readers) or icons + text? Probably icons + TTS reading the options aloud.
+- Can we use the self-selection data to detect learning style shifts over time? (e.g., kid starts always picking "count" and gradually shifts to "type" over weeks — that's CRA progression happening naturally)
