@@ -393,7 +393,7 @@ function getRandomFallbackLine(npcId) {
 
 // ─── TEXT-TO-SPEECH ──────────────────────────────────────
 
-let TTS_ENABLED = true;
+let TTS_ENABLED = false;
 
 // Voice settings per speaker — pitch and rate give each character personality
 const SPEAKER_VOICE = {
@@ -466,19 +466,16 @@ function startDialogue(lines, onComplete) {
   DIALOGUE.charTimer = 0;
   DIALOGUE.waitingForInput = false;
   DIALOGUE.onComplete = onComplete || null;
-
-  // Speak the first line
-  if (lines.length > 0) {
-    speakLine(lines[0].speaker, lines[0].text);
-  }
 }
 
 function advanceDialogue() {
   if (!DIALOGUE.active) return;
   if (!DIALOGUE.waitingForInput) {
-    // Skip typewriter — show full line, but don't restart speech (it's already playing)
-    DIALOGUE.charIndex = DIALOGUE.lines[DIALOGUE.currentLine].text.length;
+    // Skip typewriter — show full line and speak it now
+    const line = DIALOGUE.lines[DIALOGUE.currentLine];
+    DIALOGUE.charIndex = line.text.length;
     DIALOGUE.waitingForInput = true;
+    speakLine(line.speaker, line.text);
     return;
   }
   DIALOGUE.currentLine++;
@@ -491,10 +488,6 @@ function advanceDialogue() {
   DIALOGUE.charIndex = 0;
   DIALOGUE.charTimer = 0;
   DIALOGUE.waitingForInput = false;
-
-  // Speak the new line
-  const line = DIALOGUE.lines[DIALOGUE.currentLine];
-  speakLine(line.speaker, line.text);
 }
 
 function updateDialogue(dt) {
@@ -505,8 +498,10 @@ function updateDialogue(dt) {
     DIALOGUE.charTimer -= DIALOGUE.charSpeed;
     DIALOGUE.charIndex++;
   }
-  if (DIALOGUE.charIndex >= line.text.length) {
+  if (DIALOGUE.charIndex >= line.text.length && !DIALOGUE.waitingForInput) {
     DIALOGUE.waitingForInput = true;
+    // Speak after text is fully visible, not before
+    speakLine(line.speaker, line.text);
   }
 }
 

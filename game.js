@@ -54,6 +54,14 @@ function initInput() {
       }
     }
 
+    // Toggle TTS at runtime
+    if (e.key === 't' || e.key === 'T') {
+      if (GAME.state !== 'TITLE') {
+        TTS_ENABLED = !TTS_ENABLED;
+        if (!TTS_ENABLED) stopSpeech();
+      }
+    }
+
     // Number keys for challenge choices
     if (GAME.state === 'CHALLENGE' && !CHALLENGE.answered && !CHALLENGE.showTeaching) {
       const num = parseInt(e.key);
