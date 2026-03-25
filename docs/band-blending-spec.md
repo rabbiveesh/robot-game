@@ -179,30 +179,26 @@ This gives the "spaced practice" effect from the education research.
 ```js
 LearnerProfile {
   // EXISTING
-  mathBand: 6,           // center of distribution (was: hard level)
-  streak: 2,             // still tracked for UI/motivation, NOT for promotion
+  mathBand: 6,              // center of distribution (was: hard level)
+  streak: 2,                // display only — Sparky celebrates streaks, no mechanical effect
 
   // NEW
-  spreadWidth: 0.5,      // distribution width
+  spreadWidth: 0.5,         // distribution width (0 = tight, 1 = wide)
+  promoteThreshold: 0.75,   // accuracy at center band needed to promote
+  stretchThreshold: 0.60,   // accuracy at above-center needed to promote
 
-  // CHANGED MEANING
-  // streakToPromote: REMOVED — promotion is now accuracy-based
-  // Instead:
-  promoteThreshold: 0.75,  // accuracy at center needed to promote
-  stretchThreshold: 0.60,  // accuracy at above-center needed to promote
+  // REMOVED
+  // streakToPromote — replaced by accuracy-based promotion
 }
 ```
 
-Wait — removing `streakToPromote` is a bigger change. For backward compatibility and because the intake assessor sets it, let's keep it but make it a secondary signal:
+Streak-based promotion is removed entirely. Band blending eliminates the problem streaks were solving — there's no cliff to overcome because the kid is already seeing stretch problems before promotion. Promotion is just "shift the center up" after the kid has proven sustained accuracy at and above their current center.
 
-```js
-// Promote when EITHER:
-//   A) Accuracy-based: center accuracy >= 75% AND stretch accuracy >= 60% (new)
-//   B) Streak-based: N correct in a row (legacy, still works for kids who are consistently perfect)
-// Whichever triggers first.
-```
+`streakToPromote` is removed from the profile. `streak` is kept as a display-only counter (kids like seeing streaks, Sparky can celebrate them) but it has zero effect on band progression.
 
-This way the gifted kid who gets everything right still promotes fast (streak triggers), and the struggling kid who's 65% at band 1 can also promote (accuracy-based triggers because they're doing well enough at center and getting some band 2 stretch problems right).
+The intake assessor no longer sets `streakToPromote`. It sets `promoteThreshold` and `stretchThreshold` instead — a confident fast kid gets lower thresholds (promotes sooner), a cautious kid gets higher ones (more evidence needed).
+
+Before promotion, the system also varies stretch problems along CRA and answer mode axes. A kid at band 6 getting band 7 stretch problems starts with maximum support (concrete + multiple choice). As they succeed at band 7, the same problems shift to representational, then abstract, then free input. By the time they promote to band 7 as center, they've done band 7 at full difficulty. Promotion is a formality — the kid barely notices because nothing actually changed.
 
 ## Tests
 
