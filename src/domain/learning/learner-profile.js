@@ -81,6 +81,7 @@ export function learnerReducer(state, event) {
       const windowEntry = Object.freeze({
         correct: event.correct,
         operation: event.operation,
+        subSkill: event.subSkill || null,
         band: event.band,
         centerBand: event.centerBand ?? event.band,
         responseTimeMs: event.responseTimeMs,
@@ -88,7 +89,7 @@ export function learnerReducer(state, event) {
         timestamp: event.timestamp,
       });
       const newWindow = pushEntry(state.rollingWindow, windowEntry);
-      const newStats = recordOperation(state.operationStats, event.operation, event.correct);
+      const newStats = recordOperation(state.operationStats, event.operation, event.correct, event.subSkill);
 
       // Streak is display-only — update it for UI but it doesn't drive promotion
       let newStreak = state.streak;

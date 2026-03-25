@@ -55,6 +55,92 @@ export function sampleFromDistribution(dist, rng) {
   return 10; // floating point safety
 }
 
+// ─── SUB-SKILL CLASSIFICATION ───────────────────────────
+
+export function classifyAddition(a, b) {
+  if (a < 10 && b < 10) return 'add_single';
+  const onesSum = (a % 10) + (b % 10);
+  if (onesSum < 10) return 'add_no_carry';
+  const tensSum = Math.floor(a / 10) + Math.floor(b / 10) + (onesSum >= 10 ? 1 : 0);
+  if (tensSum >= 10) return 'add_carry_tens';
+  return 'add_carry';
+}
+
+export function classifySubtraction(a, b) {
+  if (a < 10 && b < 10) return 'sub_single';
+  const onesA = a % 10;
+  const onesB = b % 10;
+  if (onesA >= onesB) return 'sub_no_borrow';
+  // Borrow from ones — check if tens borrow also propagates
+  const tensA = Math.floor(a / 10) % 10;
+  const tensB = Math.floor(b / 10) % 10;
+  // After borrowing 1 from tens for ones, does tens column still need to borrow?
+  if (tensA - 1 < tensB) return 'sub_borrow_tens';
+  return 'sub_borrow';
+}
+
+export function classifyMultiplication(a, b) {
+  const smaller = Math.min(a, b);
+  const larger = Math.max(a, b);
+  if (smaller <= 2) return 'mul_trivial';
+  if (smaller <= 5 && larger <= 6) return 'mul_easy';
+  return 'mul_hard';
+}
+
+export function classifyDivision(dividend, divisor) {
+  const answer = dividend / divisor;
+  const mulClass = classifyMultiplication(divisor, answer);
+  if (mulClass === 'mul_trivial') return 'div_easy';
+  if (mulClass === 'mul_easy') return 'div_easy';
+  return 'div_hard';
+}
+
+export function classifyBond(total, part) {
+  if (total <= 10) return 'bond_small';
+  return 'bond_large';
+}
+
+function classifyChallenge(a, b, operation) {
+  switch (operation) {
+    case 'add': return classifyAddition(a, b);
+    case 'sub': return classifySubtraction(a, b);
+    case 'multiply': return classifyMultiplication(a, b);
+    case 'divide': return classifyDivision(a, b);
+    case 'number_bond': return classifyBond(a, b); // a=total, b=part for bonds
+    default: return null;
+  }
+}
+
+// ─── FEATURE EXTRACTION ─────────────────────────────────
+
+export function extractFeatures(a, b, operation, answer) {
+  const onesA = a % 10;
+  const onesB = b % 10;
+  const tensA = Math.floor(a / 10);
+  const tensB = Math.floor(b / 10);
+
+  return Object.freeze({
+    carries: operation === 'add' && onesA + onesB >= 10,
+    carriesTens: operation === 'add' && tensA + tensB + (onesA + onesB >= 10 ? 1 : 0) >= 10,
+    borrows: operation === 'sub' && onesA < onesB,
+    borrowsTens: operation === 'sub' && (tensA % 10) - (onesA < onesB ? 1 : 0) < (tensB % 10),
+    crossesTenBoundary: Math.floor(a / 10) !== Math.floor(answer / 10),
+    maxDigit: Math.max(onesA, onesB, a > 9 ? tensA : 0, b > 9 ? tensB : 0),
+    maxDigitGte7: Math.max(onesA, onesB) >= 7,
+    hasRoundNumber: onesA === 0 || onesB === 0,
+    nearDoubles: Math.abs(a - b) <= 2 && operation === 'add',
+    answerSize: answer,
+    answerGte10: answer >= 10,
+    answerGte20: answer >= 20,
+    answerGte50: answer >= 50,
+    operandSize: Math.max(a, b),
+    isSquare: operation === 'multiply' && a === b,
+    hasFactorFive: (operation === 'multiply' || operation === 'divide') && (a % 5 === 0 || b % 5 === 0),
+    bothFactorsGt5: operation === 'multiply' && Math.min(a, b) > 5,
+    onesPair: `${Math.min(onesA, onesB)}_${Math.max(onesA, onesB)}`,
+  });
+}
+
 // ─── OPERATIONS ─────────────────────────────────────────
 
 // Map operations to their internal name
@@ -288,15 +374,19 @@ export function generateChallenge(profile, rng) {
   const operation = pickOperation(profile, sampledBand, rng);
   const { a, b, answer, question, op } = generateNumbers(sampledBand, operation, rng);
   const choices = makeChoices(answer, rng);
+  const subSkill = classifyChallenge(a, b, operation);
+  const features = extractFeatures(a, b, operation, answer);
 
   return Object.freeze({
     question,
     correctAnswer: answer,
     choices: Object.freeze(choices.map(c => Object.freeze(c))),
     operation,
+    subSkill,
+    features,
     centerBand: profile.mathBand,
     sampledBand,
-    band: sampledBand, // backward compat — adapter and events use this
+    band: sampledBand,
     numbers: Object.freeze({ a, b, op }),
   });
 }
