@@ -418,6 +418,7 @@
       slots.forEach((save, i) => {
         const div = document.createElement('div');
         div.className = 'save-slot' + (save ? '' : ' empty') + (selectedSlot === i ? ' selected' : '');
+        div.onclick = () => save ? loadGame(i) : pickSlotForNew(i);
 
         if (save) {
           const mathBands = ['', 'Add <5', '+/- <10', '+/- <15', '+/- <20', 'Multiply'];
