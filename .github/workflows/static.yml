@@ -31,14 +31,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install and build
+        run: |
+          npm ci
+          npm run build
+          npm test
+
       - name: Prepare deploy directory
         run: |
-          mkdir -p _site
+          mkdir -p _site/dist
           # Copy only the game files that the browser needs
           cp index.html _site/
           cp *.js _site/ 2>/dev/null || true
-          # If we have a built bundle later, copy that too
-          if [ -d dist ]; then cp -r dist/* _site/; fi
+          # Copy the built learning domain bundle
+          cp dist/learning-domain.js _site/dist/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
