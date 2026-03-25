@@ -146,15 +146,18 @@
 
   window.runIntakeQuiz = function (onComplete) {
     const INTAKE_QUESTIONS = 4;
-    const START_BAND = 3;
-    let currentBand = START_BAND;
+    // Use the parent's configured band as an anchor for intake
+    const configuredBand = profileState.mathBand;
+    const startBand = Math.min(configuredBand + 1, 3); // start near configured, cap at 3
+    const ceiling = configuredBand + 2; // don't wildly exceed what parent expects
+    let currentBand = startBand;
     let questionIndex = 0;
     const answers = [];
 
     function askNext() {
       if (questionIndex >= INTAKE_QUESTIONS) {
-        // Process results
-        const results = processIntakeResults(answers);
+        // Process results — pass configured band so placement is anchored
+        const results = processIntakeResults(answers, configuredBand);
         profileState = learnerReducer(profileState, {
           type: 'INTAKE_COMPLETED',
           ...results,
@@ -193,7 +196,7 @@
           responseTimeMs,
           skippedText: false,
         });
-        currentBand = nextIntakeBand(currentBand, wasCorrect);
+        currentBand = nextIntakeBand(currentBand, wasCorrect, ceiling);
         questionIndex++;
         // Small delay then next question
         setTimeout(askNext, 300);

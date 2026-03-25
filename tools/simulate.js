@@ -221,7 +221,7 @@ function run() {
 
     const mark = correct ? `${C.green}✓${C.reset}` : `${C.red}✗${C.reset}`;
     const timeStr = `${(responseTimeMs / 1000).toFixed(1)}s`;
-    const nextBand = nextIntakeBand(currentBand, correct);
+    const nextBand = nextIntakeBand(currentBand, correct, 10);
     const skipTag = skippedText ? `  ${C.dim}[skipped text]${C.reset}` : '';
     console.log(`  Q${i + 1}  band:${currentBand}  ${challenge.question.padEnd(20)} ${mark}  ${timeStr}  → next band: ${nextBand}${skipTag}`);
 

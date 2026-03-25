@@ -9,13 +9,14 @@ export function generateIntakeQuestion(currentBand, questionIndex, rng) {
   return generateChallenge(tempProfile, rng);
 }
 
-export function processIntakeResults(answers) {
+export function processIntakeResults(answers, configuredBand = null) {
   // answers: [{ band, correct, responseTimeMs, skippedText }]
+  // configuredBand: the starting band the parent picked on the title screen (if any)
+  //
   // Determine final band:
-  //   Start at band 3
-  //   Correct -> next question band +2
-  //   Wrong -> next question band -1
   //   Final band = last correct band (min 1)
+  //   If parent configured a starting band, clamp placement to configuredBand + 2
+  //   (don't wildly exceed what the parent thinks their kid can do)
 
   let lastCorrectBand = 1;
   for (const answer of answers) {
@@ -23,7 +24,12 @@ export function processIntakeResults(answers) {
       lastCorrectBand = answer.band;
     }
   }
-  const mathBand = Math.max(1, Math.min(10, lastCorrectBand));
+  let mathBand = Math.max(1, Math.min(10, lastCorrectBand));
+
+  // Respect parent's configured band as an anchor — don't exceed it by more than 2
+  if (configuredBand != null && configuredBand >= 1) {
+    mathBand = Math.min(mathBand, configuredBand + 2);
+  }
 
   // Analyze response times
   const times = answers
@@ -68,7 +74,9 @@ export function processIntakeResults(answers) {
 }
 
 // Calculate the next band for the next intake question
-export function nextIntakeBand(currentBand, correct) {
-  if (correct) return Math.min(10, currentBand + 2);
+// ceiling: optional max band (e.g. configuredBand + 2) to avoid throwing
+// multiplication at a kid whose parent said "Add <5"
+export function nextIntakeBand(currentBand, correct, ceiling = 10) {
+  if (correct) return Math.min(ceiling, currentBand + 2);
   return Math.max(1, currentBand - 1);
 }

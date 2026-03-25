@@ -37,6 +37,11 @@ describe('nextIntakeBand', () => {
     expect(nextIntakeBand(10, true)).toBe(10);
   });
 
+  it('respects ceiling parameter', () => {
+    expect(nextIntakeBand(3, true, 4)).toBe(4); // would be 5, clamped to 4
+    expect(nextIntakeBand(2, true, 3)).toBe(3); // would be 4, clamped to 3
+  });
+
   it('does not go below band 1', () => {
     expect(nextIntakeBand(1, false)).toBe(1);
   });
@@ -109,5 +114,40 @@ describe('processIntakeResults', () => {
     ];
     const result = processIntakeResults(answers);
     expect(result.streakToPromote).toBe(2);
+  });
+
+  it('clamps placement to configuredBand + 2 when parent set a low band', () => {
+    // Kid aces intake up to band 9, but parent configured band 1 (Add <5)
+    const answers = [
+      { band: 3, correct: true, responseTimeMs: 2000 },
+      { band: 5, correct: true, responseTimeMs: 2500 },
+      { band: 7, correct: true, responseTimeMs: 3000 },
+      { band: 9, correct: true, responseTimeMs: 2000 },
+    ];
+    const result = processIntakeResults(answers, 1);
+    expect(result.mathBand).toBe(3); // clamped to configuredBand(1) + 2
+  });
+
+  it('does not clamp when configuredBand is null', () => {
+    const answers = [
+      { band: 3, correct: true, responseTimeMs: 2000 },
+      { band: 5, correct: true, responseTimeMs: 2500 },
+      { band: 7, correct: true, responseTimeMs: 3000 },
+      { band: 9, correct: true, responseTimeMs: 2000 },
+    ];
+    const result = processIntakeResults(answers, null);
+    expect(result.mathBand).toBe(9);
+  });
+
+  it('allows placement at configuredBand + 2 when kid demonstrates ability', () => {
+    // Parent set band 4, kid proves they can handle band 6
+    const answers = [
+      { band: 3, correct: true, responseTimeMs: 2000 },
+      { band: 5, correct: true, responseTimeMs: 2500 },
+      { band: 7, correct: false, responseTimeMs: 5000 },
+      { band: 6, correct: true, responseTimeMs: 3000 },
+    ];
+    const result = processIntakeResults(answers, 4);
+    expect(result.mathBand).toBe(6); // configuredBand(4) + 2 = 6, kid proved band 6
   });
 });
