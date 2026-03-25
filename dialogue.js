@@ -287,28 +287,54 @@ Sometimes you'll be asked to introduce a math challenge — weave it into your d
 
 async function fetchRobotDialogue(context) {
   if (!API_KEY) return null;
+  const provider = window.AI_PROVIDER || 'anthropic';
+
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': API_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 200,
-        system: ROBOT_SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: context }],
-      }),
-    });
-    const data = await response.json();
-    return data.content?.[0]?.text || null;
+    if (provider === 'gemini') {
+      return await fetchGeminiDialogue(context);
+    }
+    return await fetchAnthropicDialogue(context);
   } catch (e) {
     console.warn('API call failed:', e);
     return null;
   }
+}
+
+async function fetchAnthropicDialogue(context) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': API_KEY,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      system: ROBOT_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: context }],
+    }),
+  });
+  const data = await response.json();
+  return data.content?.[0]?.text || null;
+}
+
+async function fetchGeminiDialogue(context) {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: ROBOT_SYSTEM_PROMPT }] },
+        contents: [{ parts: [{ text: context }] }],
+        generationConfig: { maxOutputTokens: 200 },
+      }),
+    },
+  );
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
 }
 
 async function prefetchDialogue(playerName) {
@@ -409,15 +435,35 @@ const SPEAKER_VOICE = {
   'default':            { pitch: 1.0, rate: 1.0 },
 };
 
-function speakLine(speaker, text) {
-  if (!TTS_ENABLED || !window.speechSynthesis) return;
+// ElevenLabs voice IDs — free tier voices
+const ELEVENLABS_VOICES = {
+  'Sparky':             'pNInz6obpgDQGcFmaJgB',  // Adam — energetic
+  'Mommy':              'EXAVITQu4vr4xnSDxMaL',  // Bella — warm
+  'Professor Gizmo':    'VR6AewLTigWG4xSOukaG',  // Arnold — deep
+  'B0RK.exe':           'pNInz6obpgDQGcFmaJgB',  // Adam — energetic
+  'Old Oak':            'VR6AewLTigWG4xSOukaG',  // Arnold — deep
+  'default':            'pNInz6obpgDQGcFmaJgB',  // Adam
+};
 
-  // Cancel any current speech
-  window.speechSynthesis.cancel();
+let _elevenLabsAudio = null;
+
+function speakLine(speaker, text) {
+  if (!TTS_ENABLED) return;
 
   // Clean text — strip emojis and special chars that sound weird spoken
   const clean = text.replace(/[🤖🚀⭐🌟🍭📍#]/g, '').replace(/\*[^*]+\*/g, '').trim();
   if (!clean) return;
+
+  if (window.VOICE_PROVIDER === 'elevenlabs' && window.ELEVENLABS_KEY) {
+    speakElevenLabs(speaker, clean);
+  } else {
+    speakBrowser(speaker, clean);
+  }
+}
+
+function speakBrowser(speaker, clean) {
+  if (!window.speechSynthesis) return;
+  window.speechSynthesis.cancel();
 
   const utterance = new SpeechSynthesisUtterance(clean);
   const voiceSettings = SPEAKER_VOICE[speaker] || SPEAKER_VOICE.default;
@@ -425,7 +471,6 @@ function speakLine(speaker, text) {
   utterance.rate = voiceSettings.rate;
   utterance.volume = 0.8;
 
-  // Try to pick a good voice — prefer English voices
   const voices = window.speechSynthesis.getVoices();
   const englishVoice = voices.find(v => v.lang.startsWith('en') && v.localService) ||
                        voices.find(v => v.lang.startsWith('en')) ||
@@ -435,8 +480,50 @@ function speakLine(speaker, text) {
   window.speechSynthesis.speak(utterance);
 }
 
+async function speakElevenLabs(speaker, clean) {
+  // Stop any current audio
+  if (_elevenLabsAudio) {
+    _elevenLabsAudio.pause();
+    _elevenLabsAudio = null;
+  }
+
+  const voiceId = ELEVENLABS_VOICES[speaker] || ELEVENLABS_VOICES.default;
+  try {
+    const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'xi-api-key': window.ELEVENLABS_KEY,
+      },
+      body: JSON.stringify({
+        text: clean,
+        model_id: 'eleven_turbo_v2_5',
+        voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+      }),
+    });
+    if (!response.ok) {
+      console.warn('ElevenLabs TTS failed, falling back to browser');
+      speakBrowser(speaker, clean);
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    _elevenLabsAudio = new Audio(url);
+    _elevenLabsAudio.volume = 0.8;
+    _elevenLabsAudio.play();
+    _elevenLabsAudio.onended = () => URL.revokeObjectURL(url);
+  } catch (e) {
+    console.warn('ElevenLabs TTS error:', e);
+    speakBrowser(speaker, clean);
+  }
+}
+
 function stopSpeech() {
   if (window.speechSynthesis) window.speechSynthesis.cancel();
+  if (_elevenLabsAudio) {
+    _elevenLabsAudio.pause();
+    _elevenLabsAudio = null;
+  }
 }
 
 // Pre-load voices (some browsers need this)
