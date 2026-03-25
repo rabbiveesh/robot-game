@@ -143,11 +143,21 @@ describe('learnerReducer — PUZZLE_ATTEMPTED', () => {
 });
 
 describe('learnerReducer — BEHAVIOR', () => {
-  it('text_skipped increases pace and decreases textSpeed', () => {
+  it('text_skipped increases pace, decreases textSpeed, and increments skipCount', () => {
     const s0 = createProfile({ pace: 0.5, textSpeed: 0.035 });
     const s1 = learnerReducer(s0, { type: 'BEHAVIOR', signal: 'text_skipped' });
     expect(s1.pace).toBeCloseTo(0.6);
     expect(s1.textSpeed).toBeCloseTo(0.03);
+    expect(s1.textSkipCount).toBe(1);
+  });
+
+  it('text_skipped still increments skipCount when pace is capped at 1.0', () => {
+    const s0 = createProfile({ pace: 1.0, textSpeed: 0.01 });
+    const s1 = learnerReducer(s0, { type: 'BEHAVIOR', signal: 'text_skipped' });
+    expect(s1.pace).toBe(1.0); // stays capped
+    expect(s1.textSkipCount).toBe(1);
+    const s2 = learnerReducer(s1, { type: 'BEHAVIOR', signal: 'text_skipped' });
+    expect(s2.textSkipCount).toBe(2); // keeps counting
   });
 
   it('rapid_clicking reduces wrongsBeforeTeach', () => {

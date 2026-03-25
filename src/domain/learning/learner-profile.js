@@ -24,6 +24,7 @@ export function createProfile(overrides = {}) {
       number_bond: 'concrete',
     }),
     intakeCompleted: false,
+    textSkipCount: 0,
     rollingWindow: createWindow(),
     operationStats: createOperationStats(),
     ...overrides,
@@ -106,6 +107,7 @@ export function learnerReducer(state, event) {
             ...state,
             pace: Math.min(1, state.pace + 0.1),
             textSpeed: Math.max(0.01, state.textSpeed - 0.005),
+            textSkipCount: state.textSkipCount + 1,
           });
         case 'rapid_clicking':
           return Object.freeze({

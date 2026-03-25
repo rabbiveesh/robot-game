@@ -128,8 +128,8 @@ function generateNumbers(band, operation, rng) {
     }
 
     case 6: {
-      const doSub = rng() < 0.45;
-      if (doSub) {
+      const doSub6 = operation === 'sub' || (operation !== 'add' && rng() < 0.45);
+      if (doSub6) {
         a = Math.floor(rng() * 30) + 20;
         b = Math.floor(rng() * (a - 5)) + 5;
         answer = a - b;
@@ -146,8 +146,8 @@ function generateNumbers(band, operation, rng) {
     }
 
     case 7: {
-      const doSub = rng() < 0.45;
-      if (doSub) {
+      const doSub7 = operation === 'sub' || (operation !== 'add' && rng() < 0.45);
+      if (doSub7) {
         a = Math.floor(rng() * 70) + 25;
         b = Math.floor(rng() * (a - 5)) + 5;
         answer = a - b;

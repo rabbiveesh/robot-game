@@ -130,4 +130,32 @@ describe('challenge-generator', () => {
     expect(addCount).toBeGreaterThan(iterations * 0.4);
     expect(subCount).toBeGreaterThan(iterations * 0.2);
   });
+
+  it('generates subtraction when operation is sub at bands 6-7', () => {
+    // Regression: bands 6-7 ignored the operation parameter and flipped a coin
+    for (const band of [6, 7]) {
+      const profile = createProfile({
+        mathBand: band,
+        operationStats: Object.freeze({
+          add: Object.freeze({ correct: 1, attempts: 10 }),  // low accuracy → growth
+          sub: Object.freeze({ correct: 9, attempts: 10 }),  // high accuracy → strength
+          multiply: Object.freeze({ correct: 0, attempts: 0 }),
+          divide: Object.freeze({ correct: 0, attempts: 0 }),
+          number_bond: Object.freeze({ correct: 0, attempts: 0 }),
+        }),
+      });
+      // Force sub to be picked by weighting, then verify the question is actually subtraction
+      for (let i = 0; i < 50; i++) {
+        const c = generateChallenge(profile, seededRng(i));
+        if (c.operation === 'sub') {
+          expect(c.numbers.op).toBe('-');
+          expect(c.question).toMatch(/-/);
+        }
+        if (c.operation === 'add') {
+          expect(c.numbers.op).toBe('+');
+          expect(c.question).toMatch(/\+/);
+        }
+      }
+    }
+  });
 });
