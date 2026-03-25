@@ -355,10 +355,13 @@ function executePortal(portal) {
   ROBOT.followQueue = [];
   ROBOT.moving = false;
 
-  // Secret area entry dialogue
+  // Secret area entry dialogue — lock movement immediately to prevent
+  // the player from walking out before the dialogue box appears
+  if (portal.toMap === 'dream' || portal.toMap === 'doghouse' || portal.toMap === 'grove') {
+    if (typeof GAME !== 'undefined') GAME.state = 'DIALOGUE';
+  }
   if (portal.toMap === 'dream') {
     setTimeout(() => {
-      if (typeof GAME !== 'undefined') GAME.state = 'DIALOGUE';
       startDialogue([
         { speaker: 'Sparky', text: 'Bzzzzt... where... are we? Everything looks... DREAMY...' },
         { speaker: 'Sparky', text: 'My circuits feel all tingly! Is this a dream?! BEEP BOOP DREAM MODE!' },
@@ -366,7 +369,6 @@ function executePortal(portal) {
     }, 300);
   } else if (portal.toMap === 'doghouse') {
     setTimeout(() => {
-      if (typeof GAME !== 'undefined') GAME.state = 'DIALOGUE';
       startDialogue([
         { speaker: 'Sparky', text: 'W-WHAT?! ERROR ERROR! My v-v-visual sensors are GLITCHING!' },
         { speaker: 'Sparky', text: 'Boss... I think we walked through a WALL! This place is... b r o k e n...' },
@@ -375,7 +377,6 @@ function executePortal(portal) {
     }, 300);
   } else if (portal.toMap === 'grove') {
     setTimeout(() => {
-      if (typeof GAME !== 'undefined') GAME.state = 'DIALOGUE';
       startDialogue([
         { speaker: 'Sparky', text: 'WAIT... how did we get here?! My GPS is TOTALLY BROKEN!' },
         { speaker: 'Sparky', text: 'We walked OVER the trees?! Boss, you are a GENIUS!' },
