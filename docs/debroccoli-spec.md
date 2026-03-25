@@ -77,3 +77,7 @@ This is still Abstract-tier only. But it's a quick win while we design the real 
 - **Adaptive Learning Spec**: CRA stage tracking already exists in the learner profile. The mini-games are the CONSUMERS of that data — "this kid is at Representational for addition" tells us to use the number-line mini-game, not the drag-to-group game.
 - **RPG Quest Spec**: quests would specify which mini-game types are available at each step, with the CRA stage determining the default.
 - **Architecture Spec**: mini-games would be presentation-layer components. The domain produces challenge data; the mini-game renders it and reports events back.
+
+## Presentation Migration
+
+**See `docs/presentation-migration.md` for migration trigger and plan.**

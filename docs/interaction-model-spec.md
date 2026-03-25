@@ -299,3 +299,7 @@ This feeds into the answer mode dial but weighted less than actual performance â
 - For elimination mode, do we show all 3 choices and let the kid X out, or show 3 and require them to X one before they can submit? (Forced elimination = more signal, but more friction.)
 - Should the self-selected mode choice use icons only (for pre-readers) or icons + text? Probably icons + TTS reading the options aloud.
 - Can we use the self-selection data to detect learning style shifts over time? (e.g., kid starts always picking "count" and gradually shifts to "type" over weeks â€” that's CRA progression happening naturally)
+
+## Presentation Migration
+
+**See `docs/presentation-migration.md` for migration trigger and plan.**

@@ -263,3 +263,7 @@ async function handleVoiceAnswer(time) {
 8. Works in Chrome. Hidden in Firefox. Tested in Safari if available.
 9. All parser tests pass
 10. Events include voice-specific signal fields
+
+## Presentation Migration
+
+**See `docs/presentation-migration.md` for migration trigger and plan.**
