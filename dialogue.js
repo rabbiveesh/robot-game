@@ -378,6 +378,7 @@ const FALLBACK_NPC_LINES = {
   grove_spirit: [
     "How... did you find this place? The trees have hidden it for ages...",
     "Welcome, little one. The old oaks have been waiting for someone brave.",
+    "It's dangerous to go alone... take this!",
     "This grove holds the oldest secrets of Robot Village...",
     "The leaves whisper your name... they say you are very clever.",
   ],
