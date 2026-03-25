@@ -233,8 +233,69 @@ operationStats: { ... }, // per-operation tracking (see above)
 - How do we handle the transition from concrete to structured as numbers get larger? (At some point dots become impractical and the game needs to nudge toward structured even if the kid prefers concrete)
 - Are there other representation styles beyond concrete/structured worth exploring? (e.g., story-based: "You have 12 cookies and give 5 to Sparky...")
 
-## Research Parking Lot
+## Research Findings
 
-Avishai is doing additional research on thinking styles — specifically how concrete vs abstract reasoning maps to real differences between kids. This section will be updated with findings.
+### The Procedural vs Conceptual Tension (Veesh's research, 2026-03-25)
 
-Key observation from playtesting: one child struggles with "count the dots" but succeeds with "tens and ones columns" — suggesting representation style is a real and important axis, not just preference.
+Math education research identifies two approaches that are both necessary:
+
+- **Procedural fluency** (memorized facts, algorithms) frees working memory for complex problems
+- **Conceptual understanding** (why it works) enables transfer and novel problem-solving
+
+The game needs both. The RPG quest system (see `rpg-quest-spec.md`) provides conceptual framing (story problems, real-world schemas). The adaptive system provides procedural drill when needed, but only as much as needed.
+
+### Why Gifted Kids Fail at Traditional Math
+
+Research-backed reasons this matters for our design:
+
+1. **"Speed = Smart" is wrong.** Gifted kids often process deeply, which looks slow. Timed pressure blocks working memory. → Our game should NEVER time-pressure. The `pace` dial controls presentation speed, not answer deadlines.
+
+2. **Repetition kills engagement.** A gifted kid gets it after problem #2. By #5 they're bored. By #15, careless errors from disengagement. → The `streakToPromote` dial (set to 2 for fast learners) prevents this. But we should also detect the pattern: right-right-wrong(fast/careless)-right and NOT treat the wrong as a real failure.
+
+3. **Top-down thinkers.** Many gifted kids need the big picture first, then fill in the details. → The RPG quest system naturally provides this: "Here's why you need this math" comes before "solve this problem."
+
+4. **2e profiles (twice exceptional).** College-level reasoning but average processing speed or working memory. → Our system must separate *understanding* from *speed*. A slow correct answer is just as good as a fast one. The `pace` dial should never penalize slow thinkers.
+
+### Why Pure Discovery Fails for Some Kids
+
+The flip side — some kids need explicit instruction:
+
+1. **Working memory overload.** Open-ended problems without scaffolding max out cognitive load. → The `scaffolding` and `hintVisibility` dials control this. Low-scaffolding kids get step-by-step breakdowns.
+
+2. **Need for worked examples.** Some kids learn best by studying a solved problem first, then trying their own. → Teaching mode should sometimes SHOW a worked example before asking the kid to solve a similar one.
+
+### Concrete-Representational-Abstract (CRA) Progression
+
+The `representationStyle` dial should actually be a **3-stage progression**, not a binary:
+
+| Stage | What it looks like | When to use |
+|-------|-------------------|-------------|
+| **Concrete** | Dots, stars, physical objects. Count them up. | Young kids, new concepts, low bands |
+| **Representational** | Number lines, tens/ones blocks, bar models, drawings | Transitional — understands the concept, building mental models |
+| **Abstract** | Just the numbers and symbols. No visual aids needed. | Mastered — procedural fluency achieved for this operation |
+
+A kid can be at different CRA stages for different operations (concrete for division, abstract for addition). This should be tracked per-operation, not globally.
+
+Key observation: Veesh's daughter struggles with concrete (dots) but succeeds with representational (tens/ones columns) — she's past concrete for her operations. The game was showing her the wrong stage.
+
+### Spaced Practice & Interleaving
+
+Instead of drilling the same operation type repeatedly, the research says:
+- **Interleave** different operation types within a session (add, then multiply, then subtract)
+- **Space** practice over time (revisit old bands periodically)
+
+This maps to the quest system's micro-quest generation: vary the math type per quest, and periodically generate "review" quests that revisit earlier material.
+
+### Schema-Based Instruction
+
+Teach kids to recognize problem PATTERNS, not keyword-hunt:
+- "Altogether" doesn't always mean add
+- "Left over" doesn't always mean subtract
+- The underlying STORY determines the operation
+
+The RPG quest system is inherently schema-based — every problem is embedded in a story context. Different NPCs provide different schemas (sharing = division, shopping = multiplication, building = multi-step).
+
+## Relationship to Other Specs
+
+- **RPG Quest Spec** (`rpg-quest-spec.md`): defines how math is embedded in gameplay. The adaptive system provides difficulty scaling and representation choices; the quest system provides story context and motivation.
+- **Future: Phonics Spec**: dropped from current scope. TTS dialogue is the wrong medium for phonics instruction. Would need dedicated UX (letter tracing, phoneme audio, blending animations).
