@@ -233,7 +233,7 @@ function run() {
   console.log(`\n  ${C.bold}Intake result:${C.reset}`);
   console.log(`    Placed at band: ${C.bold}${intakeResult.mathBand}${C.reset} (${BAND_NAMES[intakeResult.mathBand] || '?'})`);
   console.log(`    Pace: ${intakeResult.pace.toFixed(2)}   Scaffolding: ${intakeResult.scaffolding.toFixed(2)}`);
-  console.log(`    Streak to promote: ${intakeResult.streakToPromote}`);
+  console.log(`    Promote threshold: ${intakeResult.promoteThreshold}  Stretch threshold: ${intakeResult.stretchThreshold}`);
   console.log(`    Text speed: ${intakeResult.textSpeed}`);
   console.log();
 
@@ -256,15 +256,16 @@ function run() {
 
   for (let q = 1; q <= totalQuestions; q++) {
     const challenge = generateChallenge(profile, rng);
-    const band = profile.mathBand;
+    const centerBand = profile.mathBand;
+    const sampledBand = challenge.sampledBand;
 
-    // Is this easy for the kid? (band well below their ceiling)
-    const kidAcc = kidProfile?.accuracy[band] ?? 0.7;
+    // Is this easy for the kid? (sampled band well below their ceiling)
+    const kidAcc = kidProfile?.accuracy[sampledBand] ?? 0.7;
     const isEasyForKid = kidAcc > 0.85 && profile.streak >= 2;
 
     const sim = simulateAnswer(
-      kidProfile || { accuracy: { [band]: 0.7 }, speed: { fast: [1500, 4000], normal: [2000, 5000] }, boredomChance: 0 },
-      band,
+      kidProfile || { accuracy: { [sampledBand]: 0.7 }, speed: { fast: [1500, 4000], normal: [2000, 5000] }, boredomChance: 0 },
+      sampledBand,
       rng,
       isEasyForKid,
     );
@@ -279,7 +280,8 @@ function run() {
       type: 'PUZZLE_ATTEMPTED',
       correct: sim.correct,
       operation: challenge.operation,
-      band,
+      band: sampledBand,
+      centerBand,
       responseTimeMs: sim.responseTimeMs,
       attemptNumber: 1,
       timestamp: Date.now(),
@@ -308,7 +310,10 @@ function run() {
     const opStr = challenge.operation.padEnd(6);
     const qStr = challenge.question.replace(/\n/g, ' ');
     const num = `#${q}`.padStart(4);
-    const streakStr = `streak:${profile.streak}`;
+    const bandStr = sampledBand !== centerBand
+      ? `${C.dim}c:${centerBand}${C.reset}→${sampledBand}`
+      : `band:${sampledBand}`;
+    const spreadStr = `sw:${profile.spreadWidth.toFixed(2)}`;
 
     let bandTag = '';
     if (newBand > prevBand) {
@@ -326,7 +331,7 @@ function run() {
       }
     }
 
-    console.log(`  ${num}  ${opStr} band:${band}  ${qStr.padEnd(22)} ${mark}  ${timeStr}  ${streakStr.padEnd(10)} pace:${profile.pace.toFixed(2)}${bandTag}${boredomTag}${frustTag}`);
+    console.log(`  ${num}  ${opStr} ${bandStr.padEnd(12)} ${qStr.padEnd(22)} ${mark}  ${timeStr}  ${spreadStr}${bandTag}${boredomTag}${frustTag}`);
   }
 
   // ─── FINAL PROFILE ───────────────────────────────────
@@ -340,7 +345,7 @@ function run() {
   console.log(`${C.bold}${C.yellow}${'═'.repeat(50)}${C.reset}\n`);
 
   console.log(`  Band: ${C.bold}${profile.mathBand}${C.reset} (${BAND_NAMES[profile.mathBand] || '?'})${''.padEnd(8)}Questions: ${totalQuestions}`);
-  console.log(`  Pace: ${profile.pace.toFixed(2)}${''.padEnd(14)}Scaffolding: ${profile.scaffolding.toFixed(2)}`);
+  console.log(`  Spread: ${profile.spreadWidth.toFixed(2)}${''.padEnd(12)}Pace: ${profile.pace.toFixed(2)}${''.padEnd(8)}Scaffolding: ${profile.scaffolding.toFixed(2)}`);
   console.log(`  Frustration events: ${frustrationEvents}`);
   console.log(`  Overall accuracy: ${((totalCorrect / totalQuestions) * 100).toFixed(0)}% (${totalCorrect}/${totalQuestions})`);
   console.log(`  Rolling window accuracy: ${(finalAcc * 100).toFixed(0)}% (${finalCorrectInWindow}/${win.entries.length})`);
