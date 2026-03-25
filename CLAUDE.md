@@ -7,7 +7,7 @@ A math education RPG for kids (ages 4-10). Zelda-style top-down tile game where 
 - **`main` branch**: Working prototype. Playable at https://rabbiveesh.github.io/robot-game/
   - Vanilla JS, no build step, flat file structure (sprites.js, world.js, characters.js, dialogue.js, game.js, index.html)
   - Global mutable state everywhere — this is the prototype, not the target architecture
-  - Features: tile map, player movement, robot companion, NPC dialogue, math/phonics challenges, 3 save slots, TTS, secret areas
+  - Features: tile map, player movement, robot companion, NPC dialogue, math challenges, 3 save slots, TTS, secret areas
 
 - **`adaptive-learning-design` branch**: Design specs for the real architecture (docs/ only, no code)
   - `docs/adaptive-learning-spec.md` — learner profiles, intake quiz, frustration detection, CRA progression

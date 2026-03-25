@@ -317,7 +317,7 @@
   <div id="titleScreen">
     <h1>ROBOT BUDDY</h1>
     <h2>ADVENTURE</h2>
-    <p class="subtitle">A Math & Phonics RPG</p>
+    <p class="subtitle">A Math RPG</p>
 
     <!-- SAVE FILE SELECTOR -->
     <div class="save-slots" id="saveSlots"></div>
@@ -344,10 +344,9 @@
 
       <!-- STARTING LEVEL -->
       <div class="input-group" style="margin-bottom:16px;">
-        <label style="margin-bottom:8px; display:block; color:#B0BEC5;">Starting level</label>
+        <label style="margin-bottom:8px; display:block; color:#B0BEC5;">Starting math level</label>
         <div style="display:flex; gap:12px; justify-content:center; flex-wrap:wrap;">
           <div style="text-align:left;">
-            <div style="color:#FFD54F; font-size:0.8rem; margin-bottom:4px;">Math</div>
             <select id="mathLevel" style="padding:8px 12px; font-size:1rem; border-radius:8px; border:2px solid #37474F; background:#16213e; color:#fff; cursor:pointer;">
               <option value="1">Add &lt;5</option>
               <option value="2">+/- &lt;10</option>
@@ -359,17 +358,6 @@
               <option value="8">Multiply x1-5</option>
               <option value="9">Multiply x1-12</option>
               <option value="10">Division</option>
-            </select>
-          </div>
-          <div style="text-align:left;">
-            <div style="color:#69F0AE; font-size:0.8rem; margin-bottom:4px;">Reading</div>
-            <select id="phonicsLevel" style="padding:8px 12px; font-size:1rem; border-radius:8px; border:2px solid #37474F; background:#16213e; color:#fff; cursor:pointer;">
-              <option value="1">Letter Sounds</option>
-              <option value="2">Identify Letters</option>
-              <option value="3">CVC Words</option>
-              <option value="4">Blends</option>
-              <option value="5">Digraphs</option>
-              <option value="6">Long Words</option>
             </select>
           </div>
         </div>
@@ -517,7 +505,6 @@
       const opts = {
         gender: selectedGender,
         mathBand: parseInt(document.getElementById('mathLevel').value) || 1,
-        phonicsBand: parseInt(document.getElementById('phonicsLevel').value) || 1,
       };
       launchCanvas();
       initGame(name, apiKey, selectedSlot, false, opts);

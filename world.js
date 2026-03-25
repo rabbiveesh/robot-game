@@ -230,7 +230,7 @@ const NPC_DEFS_BY_MAP = {
       tileX: 3,
       tileY: 3,
       spriteFn: 'mommy',
-      dialogueContext: 'Mommy is at home. She loves the player and says encouraging things. She might ask a gentle phonics question or just give a hug.',
+      dialogueContext: 'Mommy is at home. She loves the player and says encouraging things. She might ask a gentle math question or just give a hug.',
     },
   ],
   lab: [
