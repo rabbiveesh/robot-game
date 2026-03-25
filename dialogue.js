@@ -15,7 +15,7 @@ const DIALOGUE = {
 
 const CHALLENGE = {
   active: false,
-  type: null,          // 'math' or 'phonics'
+  type: null,          // 'math'
   question: '',
   correctAnswer: null,
   choices: [],
@@ -42,12 +42,6 @@ const SKILL = {
     totalCorrect: 0,
     totalAttempts: 0,
   },
-  phonics: {
-    band: 1,         // 1-3
-    streak: 0,
-    totalCorrect: 0,
-    totalAttempts: 0,
-  },
 };
 
 // Math bands:
@@ -62,14 +56,8 @@ const SKILL = {
 //  9: multiply 1-12
 // 10: division (inverse of ×1-12)
 
-// Phonics bands:
-// 1: letter sounds
-// 2: identify letter by sound
-// 3: blend CVC words
-
 const MATH_BAND_NAMES = ['', 'Add <5', '+/- <10', '+/- <15', '+/- <20', 'x1 x2',
   '+/- <50', '+/- <100', 'x1-5', 'x1-12', 'Divide'];
-const PHONICS_BAND_NAMES = ['', 'Sounds', 'Letters', 'CVC', 'Blends', 'Digraphs', 'Long Words'];
 
 function recordResult(subject, correct) {
   const s = SKILL[subject];
@@ -78,7 +66,7 @@ function recordResult(subject, correct) {
     s.totalCorrect++;
     s.streak = Math.max(0, s.streak) + 1;
     if (s.streak >= 3) {
-      const maxBand = subject === 'math' ? 10 : 6;
+      const maxBand = 10;
       if (s.band < maxBand) {
         s.band++;
         s.streak = 0;
@@ -268,162 +256,6 @@ function makeChoices(answer) {
   return choices;
 }
 
-// ─── PHONICS CHALLENGE GENERATION (ADAPTIVE) ─────────────
-
-const CVC_WORDS = [
-  { word: 'cat', sounds: ['c', 'a', 't'] },
-  { word: 'dog', sounds: ['d', 'o', 'g'] },
-  { word: 'sun', sounds: ['s', 'u', 'n'] },
-  { word: 'big', sounds: ['b', 'i', 'g'] },
-  { word: 'red', sounds: ['r', 'e', 'd'] },
-  { word: 'hop', sounds: ['h', 'o', 'p'] },
-  { word: 'bug', sounds: ['b', 'u', 'g'] },
-  { word: 'map', sounds: ['m', 'a', 'p'] },
-  { word: 'pen', sounds: ['p', 'e', 'n'] },
-  { word: 'run', sounds: ['r', 'u', 'n'] },
-  { word: 'hat', sounds: ['h', 'a', 't'] },
-  { word: 'jam', sounds: ['j', 'a', 'm'] },
-  { word: 'kit', sounds: ['k', 'i', 't'] },
-  { word: 'log', sounds: ['l', 'o', 'g'] },
-  { word: 'net', sounds: ['n', 'e', 't'] },
-  { word: 'pig', sounds: ['p', 'i', 'g'] },
-  { word: 'van', sounds: ['v', 'a', 'n'] },
-  { word: 'web', sounds: ['w', 'e', 'b'] },
-  { word: 'yak', sounds: ['y', 'a', 'k'] },
-  { word: 'zip', sounds: ['z', 'i', 'p'] },
-  { word: 'fox', sounds: ['f', 'o', 'x'] },
-  { word: 'gum', sounds: ['g', 'u', 'm'] },
-];
-
-// CCVC / CVCC words (blends: band 4)
-const BLEND_WORDS = [
-  'stop', 'plan', 'trip', 'clap', 'grab', 'swim', 'drop', 'flag',
-  'snap', 'frog', 'grin', 'slip', 'drum', 'step', 'crop', 'spot',
-  'stamp', 'blend', 'drift', 'trust', 'frost', 'crisp', 'spend', 'plant',
-];
-
-// Digraph words (band 5): sh, ch, th, wh, ck, etc.
-const DIGRAPH_WORDS = [
-  'ship', 'chin', 'thin', 'when', 'duck', 'fish', 'much', 'them',
-  'shop', 'chop', 'that', 'whip', 'kick', 'rush', 'rich', 'bath',
-  'shell', 'check', 'think', 'wheel', 'stuck', 'brush', 'chest', 'thick',
-];
-
-// Longer / multi-syllable words (band 6)
-const LONG_WORDS = [
-  'rabbit', 'sunset', 'basket', 'napkin', 'kitten', 'rocket', 'insect', 'public',
-  'picnic', 'puppet', 'goblin', 'muffin', 'magnet', 'pencil', 'velvet', 'fabric',
-];
-
-const LETTER_SOUNDS = {
-  a: 'ah', b: 'buh', c: 'kuh', d: 'duh', e: 'eh', f: 'fff',
-  g: 'guh', h: 'huh', i: 'ih', j: 'juh', k: 'kuh', l: 'lll',
-  m: 'mmm', n: 'nnn', o: 'oh', p: 'puh', q: 'kwuh', r: 'rrr',
-  s: 'sss', t: 'tuh', u: 'uh', v: 'vvv', w: 'wuh', x: 'ks',
-  y: 'yuh', z: 'zzz',
-};
-
-function generatePhonicsChallenge() {
-  const band = SKILL.phonics.band;
-
-  switch (band) {
-    case 1: { // What sound does this letter make?
-      const letter = 'abcdefghijklmnoprstuvwyz'[Math.floor(Math.random() * 23)];
-      const correctSound = LETTER_SOUNDS[letter];
-      const question = `What sound does "${letter.toUpperCase()}" make?`;
-      const choices = [{ text: correctSound, correct: true }];
-      const allSounds = Object.values(LETTER_SOUNDS);
-      const wrongs = new Set();
-      while (wrongs.size < 2) {
-        const s = allSounds[Math.floor(Math.random() * allSounds.length)];
-        if (s !== correctSound && !wrongs.has(s)) {
-          wrongs.add(s);
-          choices.push({ text: s, correct: false });
-        }
-      }
-      shuffle(choices);
-      return { type: 'phonics', question, correctAnswer: correctSound, choices, teachingData: { letter, sound: correctSound, phonicsBand: 1 } };
-    }
-    case 2: { // Which letter makes this sound?
-      const letter = 'abcdefghijklmnoprstuvwyz'[Math.floor(Math.random() * 23)];
-      const sound = LETTER_SOUNDS[letter];
-      const question = `Which letter makes the "${sound}" sound?`;
-      const choices = [{ text: letter.toUpperCase(), correct: true }];
-      const allLetters = 'abcdefghijklmnoprstuvwyz';
-      const wrongs = new Set();
-      while (wrongs.size < 2) {
-        const l = allLetters[Math.floor(Math.random() * allLetters.length)];
-        if (l !== letter && !wrongs.has(l)) {
-          wrongs.add(l);
-          choices.push({ text: l.toUpperCase(), correct: false });
-        }
-      }
-      shuffle(choices);
-      return { type: 'phonics', question, correctAnswer: letter.toUpperCase(), choices, teachingData: { letter, sound, phonicsBand: 2 } };
-    }
-    case 3: { // Blend CVC word
-      const entry = CVC_WORDS[Math.floor(Math.random() * CVC_WORDS.length)];
-      const sounded = entry.sounds.map(s => LETTER_SOUNDS[s]).join(' ... ');
-      const question = `Blend the sounds:\n${sounded}`;
-      const choices = [{ text: entry.word.toUpperCase(), correct: true }];
-      const wrongs = new Set();
-      while (wrongs.size < 2) {
-        const w = CVC_WORDS[Math.floor(Math.random() * CVC_WORDS.length)];
-        if (w.word !== entry.word && !wrongs.has(w.word)) {
-          wrongs.add(w.word);
-          choices.push({ text: w.word.toUpperCase(), correct: false });
-        }
-      }
-      shuffle(choices);
-      return { type: 'phonics', question, correctAnswer: entry.word.toUpperCase(), choices, teachingData: { word: entry.word, sounds: entry.sounds, phonicsBand: 3 } };
-    }
-    case 4: { // Read blend words (CCVC/CVCC)
-      const word = BLEND_WORDS[Math.floor(Math.random() * BLEND_WORDS.length)];
-      const question = `Can you read this word?\n${word.toUpperCase()}`;
-      const choices = [{ text: word.toUpperCase(), correct: true }];
-      const wrongs = new Set();
-      while (wrongs.size < 2) {
-        const w = BLEND_WORDS[Math.floor(Math.random() * BLEND_WORDS.length)];
-        if (w !== word && !wrongs.has(w)) {
-          wrongs.add(w);
-          choices.push({ text: w.toUpperCase(), correct: false });
-        }
-      }
-      shuffle(choices);
-      return { type: 'phonics', question, correctAnswer: word.toUpperCase(), choices, teachingData: { word, sounds: word.split(''), phonicsBand: 4 } };
-    }
-    case 5: { // Read digraph words
-      const word = DIGRAPH_WORDS[Math.floor(Math.random() * DIGRAPH_WORDS.length)];
-      const question = `Can you read this word?\n${word.toUpperCase()}`;
-      const choices = [{ text: word.toUpperCase(), correct: true }];
-      const wrongs = new Set();
-      while (wrongs.size < 2) {
-        const w = DIGRAPH_WORDS[Math.floor(Math.random() * DIGRAPH_WORDS.length)];
-        if (w !== word && !wrongs.has(w)) {
-          wrongs.add(w);
-          choices.push({ text: w.toUpperCase(), correct: false });
-        }
-      }
-      shuffle(choices);
-      return { type: 'phonics', question, correctAnswer: word.toUpperCase(), choices, teachingData: { word, sounds: word.split(''), phonicsBand: 5 } };
-    }
-    case 6: default: { // Read longer words
-      const word = LONG_WORDS[Math.floor(Math.random() * LONG_WORDS.length)];
-      const question = `Can you read this word?\n${word.toUpperCase()}`;
-      const choices = [{ text: word.toUpperCase(), correct: true }];
-      const wrongs = new Set();
-      while (wrongs.size < 2) {
-        const w = LONG_WORDS[Math.floor(Math.random() * LONG_WORDS.length)];
-        if (w !== word && !wrongs.has(w)) {
-          wrongs.add(w);
-          choices.push({ text: w.toUpperCase(), correct: false });
-        }
-      }
-      shuffle(choices);
-      return { type: 'phonics', question, correctAnswer: word.toUpperCase(), choices, teachingData: { word, sounds: word.split(''), phonicsBand: 6 } };
-    }
-  }
-}
 
 function shuffle(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -451,7 +283,7 @@ RULES:
 - Keep responses to 2-4 short sentences total
 
 You will receive context about what's happening in the game. Respond in character as Sparky.
-Sometimes you'll be asked to introduce a math or phonics challenge — weave it into your dialogue naturally and end with the question.`;
+Sometimes you'll be asked to introduce a math challenge — weave it into your dialogue naturally and end with the question.`;
 
 async function fetchRobotDialogue(context) {
   if (!API_KEY) return null;
@@ -832,23 +664,20 @@ function renderChallenge(ctx, canvasW, canvasH, time) {
   roundRect(ctx, panelX, panelY, panelW, panelH, 16);
   ctx.fill();
 
-  const borderColor = CHALLENGE.type === 'math' ? '#FFD54F' : '#69F0AE';
-  ctx.strokeStyle = borderColor;
+  ctx.strokeStyle = '#FFD54F';
   ctx.lineWidth = 4;
   roundRect(ctx, panelX, panelY, panelW, panelH, 16);
   ctx.stroke();
 
   // Difficulty badge
-  const bandLabel = CHALLENGE.type === 'math'
-    ? (MATH_BAND_NAMES[SKILL.math.band] || '?')
-    : (PHONICS_BAND_NAMES[SKILL.phonics.band] || '?');
-  ctx.fillStyle = borderColor;
+  const bandLabel = MATH_BAND_NAMES[SKILL.math.band] || '?';
+  ctx.fillStyle = '#FFD54F';
   roundRect(ctx, panelX + panelW / 2 - 70, panelY - 16, 140, 32, 10);
   ctx.fill();
   ctx.fillStyle = '#1a1a2e';
   ctx.font = 'bold 16px "Segoe UI", system-ui, sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(`${CHALLENGE.type === 'math' ? '# ' : 'ABC '}${bandLabel}`, panelX + panelW / 2, panelY + 5);
+  ctx.fillText(`# ${bandLabel}`, panelX + panelW / 2, panelY + 5);
 
   // Question
   ctx.fillStyle = '#FFF';
@@ -1087,59 +916,6 @@ function renderTeaching(ctx, canvasW, canvasH, time) {
       ctx.font = 'bold 24px "Segoe UI", system-ui, sans-serif';
       ctx.fillText(`The answer is ${td.answer}!`, panelX + panelW / 2, panelY + 300);
     }
-  } else if (CHALLENGE.type === 'phonics' && CHALLENGE.teachingData) {
-    const td = CHALLENGE.teachingData;
-
-    if (td.phonicsBand === 1 || td.phonicsBand === 2) {
-      // Show the letter BIG with its sound
-      ctx.fillStyle = '#42A5F5';
-      ctx.font = 'bold 120px "Segoe UI", system-ui, sans-serif';
-      ctx.fillText(td.letter.toUpperCase(), panelX + panelW / 2, panelY + 180);
-
-      ctx.fillStyle = '#FFD54F';
-      ctx.font = 'bold 36px "Segoe UI", system-ui, sans-serif';
-      ctx.fillText(`says "${td.sound}"`, panelX + panelW / 2, panelY + 240);
-
-      ctx.fillStyle = '#AAA';
-      ctx.font = '20px "Segoe UI", system-ui, sans-serif';
-      ctx.fillText(`Like in "${td.letter}${td.letter === 'a' ? 'nt' : td.letter === 'b' ? 'all' : 'at'}"`, panelX + panelW / 2, panelY + 280);
-    } else if (td.phonicsBand === 3) {
-      // Show the word being sounded out
-      ctx.fillStyle = '#FFF';
-      ctx.font = 'bold 24px "Segoe UI", system-ui, sans-serif';
-      ctx.fillText('Sound it out:', panelX + panelW / 2, panelY + 70);
-
-      // Each letter with its sound
-      const letterW = 100;
-      const totalW = td.sounds.length * letterW;
-      const startX = panelX + (panelW - totalW) / 2;
-
-      td.sounds.forEach((s, i) => {
-        const lx = startX + i * letterW + letterW / 2;
-
-        // Letter
-        ctx.fillStyle = ['#42A5F5', '#FFD54F', '#69F0AE'][i % 3];
-        ctx.font = 'bold 72px "Segoe UI", system-ui, sans-serif';
-        ctx.fillText(s.toUpperCase(), lx, panelY + 170);
-
-        // Sound
-        ctx.fillStyle = '#AAA';
-        ctx.font = '22px "Segoe UI", system-ui, sans-serif';
-        ctx.fillText(LETTER_SOUNDS[s], lx, panelY + 210);
-
-        // Arrow between letters
-        if (i < td.sounds.length - 1) {
-          ctx.fillStyle = '#666';
-          ctx.font = '30px "Segoe UI", system-ui, sans-serif';
-          ctx.fillText('+', lx + letterW / 2, panelY + 165);
-        }
-      });
-
-      // Blended result
-      ctx.fillStyle = '#00E676';
-      ctx.font = 'bold 48px "Segoe UI", system-ui, sans-serif';
-      ctx.fillText(`= ${td.word.toUpperCase()}!`, panelX + panelW / 2, panelY + 290);
-    }
   }
 
   // Dismiss prompt
@@ -1197,22 +973,6 @@ function renderSkillBadges(ctx, canvasW) {
     ctx.fill();
   }
 
-  // Phonics level
-  ctx.fillStyle = 'rgba(20, 20, 40, 0.7)';
-  roundRect(ctx, 10, y + 28, 170, 24, 6);
-  ctx.fill();
-
-  ctx.fillStyle = '#69F0AE';
-  ctx.font = '13px "Segoe UI", system-ui, sans-serif';
-  ctx.textAlign = 'left';
-  ctx.fillText(`ABC ${PHONICS_BAND_NAMES[SKILL.phonics.band] || '?'}`, 18, y + 44);
-
-  for (let i = 0; i < 3; i++) {
-    ctx.fillStyle = i < Math.abs(SKILL.phonics.streak) ? (SKILL.phonics.streak > 0 ? '#4CAF50' : '#F44336') : '#333';
-    ctx.beginPath();
-    ctx.arc(streakX + i * 14, y + 40, 4, 0, Math.PI * 2);
-    ctx.fill();
-  }
 }
 
 // ─── INTERACTION ORCHESTRATOR ────────────────────────────
@@ -1238,17 +998,14 @@ async function triggerRobotChat(playerName, time) {
   const doChallenge = Math.random() < 0.5;
 
   if (doChallenge) {
-    const isMath = Math.random() < 0.5;
-    const challenge = isMath ? generateMathChallenge() : generatePhonicsChallenge();
+    const challenge = generateMathChallenge();
 
     let intro = getPreFetchedLine();
     if (!intro) {
-      const ctx = `${playerName} wants to talk. Introduce a ${isMath ? 'math' : 'phonics'} challenge. Be excited! The question will be: "${challenge.question}" — lead into it naturally but do NOT answer it.`;
+      const ctx = `${playerName} wants to talk. Introduce a math challenge. Be excited! The question will be: "${challenge.question}" — lead into it naturally but do NOT answer it.`;
       intro = await fetchRobotDialogue(ctx);
     }
-    if (!intro) intro = isMath
-      ? "BEEP BOOP! My math sensors are going CRAZY! Quick, help me solve this!"
-      : "Bzzt! My letter circuits need your help! Can you figure this out?";
+    if (!intro) intro = "BEEP BOOP! My math sensors are going CRAZY! Quick, help me solve this!";
 
     startDialogue([{ speaker: 'Sparky', text: intro }], () => {
       startChallenge(challenge, (correct) => {
@@ -1284,12 +1041,11 @@ async function triggerNPCChat(npc, playerName, time) {
   const doChallenge = Math.random() < 0.4;
 
   if (doChallenge) {
-    const isMath = npc.id === 'sage' || npc.id === 'sage_lab' ? true : Math.random() < 0.5;
-    const challenge = isMath ? generateMathChallenge() : generatePhonicsChallenge();
+    const challenge = generateMathChallenge();
 
     let intro = null;
     if (API_KEY) {
-      const ctx = `You are ${npc.name}. ${npc.dialogueContext} Talk to ${playerName} and introduce a ${isMath ? 'math' : 'phonics'} challenge. The question is: "${challenge.question}" — lead into it but do NOT answer it. Stay in character. 2-3 short sentences.`;
+      const ctx = `You are ${npc.name}. ${npc.dialogueContext} Talk to ${playerName} and introduce a math challenge. The question is: "${challenge.question}" — lead into it but do NOT answer it. Stay in character. 2-3 short sentences.`;
       intro = await fetchRobotDialogue(ctx);
     }
     if (!intro) intro = `Aha, ${playerName}! I have a challenge for you! Let's see how smart you are!`;
@@ -1322,7 +1078,7 @@ async function triggerNPCChat(npc, playerName, time) {
 }
 
 async function triggerChestInteraction(playerName, time) {
-  const challenge = Math.random() < 0.5 ? generateMathChallenge() : generatePhonicsChallenge();
+  const challenge = generateMathChallenge();
 
   startDialogue([{
     speaker: 'Sparky',
