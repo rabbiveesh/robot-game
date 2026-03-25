@@ -171,7 +171,7 @@ const PORTALS = [
   { fromMap: 'dream', fromX: 14, fromY: 14, toMap: 'overworld', toX: 15, toY: 14, dir: DIR.up },
 
   // Doghouse Land: back of home roof — walk into the roof tile at (5,5) from above
-  { fromMap: 'overworld', fromX: 5, fromY: 5, toMap: 'doghouse', toX: 7, toY: 9, dir: DIR.up },
+  { fromMap: 'overworld', fromX: 5, fromY: 5, toMap: 'doghouse', toX: 7, toY: 1, dir: DIR.down },
   // Doghouse exit: spit back out above the house
   { fromMap: 'doghouse', fromX: 7, fromY: 10, toMap: 'overworld', toX: 5, toY: 4, dir: DIR.down },
 
