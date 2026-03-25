@@ -483,12 +483,16 @@ function speakBrowser(speaker, clean) {
   window.speechSynthesis.speak(utterance);
 }
 
-async function speakElevenLabs(speaker, clean) {
-  // Stop any current audio
+function cleanupElevenLabsAudio() {
   if (_elevenLabsAudio) {
     _elevenLabsAudio.pause();
+    if (_elevenLabsAudio.src) URL.revokeObjectURL(_elevenLabsAudio.src);
     _elevenLabsAudio = null;
   }
+}
+
+async function speakElevenLabs(speaker, clean) {
+  cleanupElevenLabsAudio();
 
   const voiceId = ELEVENLABS_VOICES[speaker] || ELEVENLABS_VOICES.default;
   try {
@@ -523,10 +527,7 @@ async function speakElevenLabs(speaker, clean) {
 
 function stopSpeech() {
   if (window.speechSynthesis) window.speechSynthesis.cancel();
-  if (_elevenLabsAudio) {
-    _elevenLabsAudio.pause();
-    _elevenLabsAudio = null;
-  }
+  cleanupElevenLabsAudio();
 }
 
 // Pre-load voices (some browsers need this)
