@@ -756,11 +756,13 @@ function selectChallengeChoice(index, time) {
   } else {
     CHALLENGE.attempts++;
     if (CHALLENGE.attempts >= 2) {
-      // Show teaching mode — visual explanation
-      CHALLENGE.showTeaching = true;
-      CHALLENGE.answered = false;
+      // Hints/teaching disabled — current dot system doesn't scale past band 3.
+      // Will reintroduce with proper CRA-aware representations (tens bars,
+      // number lines, base-10 blocks) that actually help at higher bands.
+      // For now, just mark as answered-wrong and move on.
+      CHALLENGE.answered = true;
+      CHALLENGE.wasCorrect = false;
       recordResult(CHALLENGE.type, false);
-      speakLine('Sparky', "Let's figure it out together!");
     } else {
       // First wrong: encourage retry
       CHALLENGE.selectedIndex = -1;
