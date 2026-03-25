@@ -291,6 +291,7 @@ function gatherSaveData() {
     playerDir: PLAYER.dir,
     robotX: ROBOT.tileX,
     robotY: ROBOT.tileY,
+    gender: PLAYER_GENDER,
     dumDums: DUM_DUMS,
     skill: {
       math:    { band: SKILL.math.band,    streak: SKILL.math.streak,    totalCorrect: SKILL.math.totalCorrect,    totalAttempts: SKILL.math.totalAttempts },
@@ -336,6 +337,7 @@ function loadFromSlot(slotIndex) {
   ROBOT.moving = false;
 
   // Restore progress
+  PLAYER_GENDER = data.gender || 'boy';
   DUM_DUMS = data.dumDums || 0;
   if (data.skill) {
     Object.assign(SKILL.math, data.skill.math);
@@ -385,7 +387,7 @@ function startAutoSave(slotIndex) {
 
 // ─── INIT ────────────────────────────────────────────────
 
-function initGame(playerName, apiKey, slotIndex, isLoad) {
+function initGame(playerName, apiKey, slotIndex, isLoad, opts) {
   GAME.canvas = document.getElementById('gameCanvas');
   GAME.ctx = GAME.canvas.getContext('2d');
   GAME.canvas.width = GAME.canvasW;
@@ -393,12 +395,14 @@ function initGame(playerName, apiKey, slotIndex, isLoad) {
   GAME.ctx.imageSmoothingEnabled = false;
 
   if (isLoad) {
-    // Restore all state from save
     loadFromSlot(slotIndex);
   } else {
-    // New game
     GAME.playerName = playerName;
     API_KEY = apiKey || '';
+    PLAYER_GENDER = (opts && opts.gender) || 'boy';
+    // Set starting levels
+    if (opts && opts.mathBand) SKILL.math.band = opts.mathBand;
+    if (opts && opts.phonicsBand) SKILL.phonics.band = opts.phonicsBand;
     loadMap('overworld');
     NPC_DEFS = NPC_DEFS_BY_MAP.overworld;
     initNPCs();

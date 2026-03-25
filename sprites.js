@@ -376,7 +376,18 @@ function drawTile(ctx, tileId, px, py, time) {
 
 const DIR = { down: 0, left: 1, right: 2, up: 3 };
 
+// PLAYER_GENDER is set at game start: 'boy' or 'girl'
+let PLAYER_GENDER = 'boy';
+
 function drawPlayer(ctx, x, y, dir, frame, time) {
+  if (PLAYER_GENDER === 'girl') {
+    drawPlayerGirl(ctx, x, y, dir, frame, time);
+  } else {
+    drawPlayerBoy(ctx, x, y, dir, frame, time);
+  }
+}
+
+function drawPlayerBoy(ctx, x, y, dir, frame, time) {
   const cx = x + TILE_SIZE / 2;
   const cy = y + TILE_SIZE / 2 + 4;
   const walkBob = frame % 2 === 1 ? -2 : 0;
@@ -422,8 +433,99 @@ function drawPlayer(ctx, x, y, dir, frame, time) {
   } else {
     ctx.fillRect(cx - 5, cy - 10 + walkBob, 3, 3);
     ctx.fillRect(cx + 2, cy - 10 + walkBob, 3, 3);
-    // Smile
     ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy - 4 + walkBob, 4, 0.1 * Math.PI, 0.9 * Math.PI);
+    ctx.stroke();
+  }
+}
+
+function drawPlayerGirl(ctx, x, y, dir, frame, time) {
+  const cx = x + TILE_SIZE / 2;
+  const cy = y + TILE_SIZE / 2 + 4;
+  const walkBob = frame % 2 === 1 ? -2 : 0;
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.beginPath();
+  ctx.ellipse(cx, y + TILE_SIZE - 4, 12, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Dress
+  ctx.fillStyle = '#F48FB1'; // pink dress
+  ctx.beginPath();
+  ctx.moveTo(cx - 8, cy - 2 + walkBob);
+  ctx.lineTo(cx + 8, cy - 2 + walkBob);
+  ctx.lineTo(cx + 11, cy + 14 + walkBob);
+  ctx.lineTo(cx - 11, cy + 14 + walkBob);
+  ctx.fill();
+  // Dress stripe
+  ctx.fillStyle = '#EC407A';
+  ctx.fillRect(cx - 9, cy + 6 + walkBob, 18, 3);
+
+  // Legs
+  ctx.fillStyle = '#FFCC80';
+  const legOffset = frame % 2 === 1 ? 3 : 0;
+  ctx.fillRect(cx - 5, cy + 14 + walkBob, 4, 6 - legOffset);
+  ctx.fillRect(cx + 1, cy + 14 + walkBob, 4, 6 - (frame % 2 === 0 ? 3 : 0));
+
+  // Head
+  ctx.fillStyle = '#FFCC80';
+  ctx.beginPath();
+  ctx.arc(cx, cy - 8 + walkBob, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Hair (long, with pigtails)
+  ctx.fillStyle = '#6D4C41';
+  ctx.beginPath();
+  ctx.arc(cx, cy - 11 + walkBob, 11, Math.PI * 0.8, Math.PI * 2.2);
+  ctx.fill();
+  // Pigtails
+  ctx.fillRect(cx - 12, cy - 8 + walkBob, 5, 18);
+  ctx.fillRect(cx + 7, cy - 8 + walkBob, 5, 18);
+  // Pigtail ends (rounded)
+  ctx.beginPath();
+  ctx.arc(cx - 9.5, cy + 10 + walkBob, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + 9.5, cy + 10 + walkBob, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Hair bow
+  ctx.fillStyle = '#FF5252';
+  ctx.beginPath();
+  ctx.moveTo(cx + 2, cy - 18 + walkBob);
+  ctx.lineTo(cx + 10, cy - 22 + walkBob);
+  ctx.lineTo(cx + 4, cy - 16 + walkBob);
+  ctx.lineTo(cx + 10, cy - 12 + walkBob);
+  ctx.lineTo(cx + 2, cy - 16 + walkBob);
+  ctx.fill();
+
+  // Eyes (bigger, with lashes)
+  ctx.fillStyle = '#333';
+  if (dir === DIR.left) {
+    ctx.fillRect(cx - 6, cy - 10 + walkBob, 3, 4);
+    ctx.fillRect(cx - 1, cy - 10 + walkBob, 3, 4);
+  } else if (dir === DIR.right) {
+    ctx.fillRect(cx - 1, cy - 10 + walkBob, 3, 4);
+    ctx.fillRect(cx + 4, cy - 10 + walkBob, 3, 4);
+  } else if (dir === DIR.up) {
+    // Facing away
+  } else {
+    ctx.fillRect(cx - 5, cy - 10 + walkBob, 3, 4);
+    ctx.fillRect(cx + 2, cy - 10 + walkBob, 3, 4);
+    // Eyelashes
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx - 6, cy - 10 + walkBob);
+    ctx.lineTo(cx - 7, cy - 12 + walkBob);
+    ctx.moveTo(cx + 5, cy - 10 + walkBob);
+    ctx.lineTo(cx + 6, cy - 12 + walkBob);
+    ctx.stroke();
+    // Smile
+    ctx.strokeStyle = '#E91E63';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.arc(cx, cy - 4 + walkBob, 4, 0.1 * Math.PI, 0.9 * Math.PI);

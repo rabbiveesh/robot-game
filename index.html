@@ -272,6 +272,29 @@
       transform: scale(0.98);
     }
 
+    .gender-btn {
+      padding: 10px 28px;
+      font-size: 1rem;
+      font-weight: 600;
+      border: 3px solid #37474F;
+      border-radius: 12px;
+      background: #16213e;
+      color: #B0BEC5;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .gender-btn:hover {
+      border-color: #546E7A;
+    }
+
+    .gender-btn.selected {
+      border-color: #00E676;
+      color: #fff;
+      background: #1a3040;
+      box-shadow: 0 0 10px rgba(0, 230, 118, 0.2);
+    }
+
     .controls-hint {
       margin-top: 30px;
       color: #546E7A;
@@ -304,6 +327,52 @@
       <div class="input-group">
         <label for="nameInput">What's your name, hero?</label>
         <input type="text" id="nameInput" placeholder="Type your name..." maxlength="20">
+      </div>
+
+      <!-- GENDER PICKER -->
+      <div class="input-group" style="margin-bottom:16px;">
+        <label style="margin-bottom:8px; display:block; color:#B0BEC5;">Pick your character</label>
+        <div style="display:flex; gap:12px; justify-content:center;">
+          <button type="button" class="gender-btn selected" id="genderBoy" onclick="pickGender('boy')">
+            <span style="font-size:1.6rem;">Boy</span>
+          </button>
+          <button type="button" class="gender-btn" id="genderGirl" onclick="pickGender('girl')">
+            <span style="font-size:1.6rem;">Girl</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- STARTING LEVEL -->
+      <div class="input-group" style="margin-bottom:16px;">
+        <label style="margin-bottom:8px; display:block; color:#B0BEC5;">Starting level</label>
+        <div style="display:flex; gap:12px; justify-content:center; flex-wrap:wrap;">
+          <div style="text-align:left;">
+            <div style="color:#FFD54F; font-size:0.8rem; margin-bottom:4px;">Math</div>
+            <select id="mathLevel" style="padding:8px 12px; font-size:1rem; border-radius:8px; border:2px solid #37474F; background:#16213e; color:#fff; cursor:pointer;">
+              <option value="1">Add &lt;5</option>
+              <option value="2">+/- &lt;10</option>
+              <option value="3">+/- &lt;15</option>
+              <option value="4">+/- &lt;20</option>
+              <option value="5">Multiply x1 x2</option>
+              <option value="6">+/- &lt;50</option>
+              <option value="7">+/- &lt;100</option>
+              <option value="8">Multiply x1-5</option>
+              <option value="9">Multiply x1-12</option>
+              <option value="10">Division</option>
+            </select>
+          </div>
+          <div style="text-align:left;">
+            <div style="color:#69F0AE; font-size:0.8rem; margin-bottom:4px;">Reading</div>
+            <select id="phonicsLevel" style="padding:8px 12px; font-size:1rem; border-radius:8px; border:2px solid #37474F; background:#16213e; color:#fff; cursor:pointer;">
+              <option value="1">Letter Sounds</option>
+              <option value="2">Identify Letters</option>
+              <option value="3">CVC Words</option>
+              <option value="4">Blends</option>
+              <option value="5">Digraphs</option>
+              <option value="6">Long Words</option>
+            </select>
+          </div>
+        </div>
       </div>
 
       <div class="api-section">
@@ -340,6 +409,13 @@
 
   <script>
     let selectedSlot = -1;
+    let selectedGender = 'boy';
+
+    function pickGender(g) {
+      selectedGender = g;
+      document.getElementById('genderBoy').className = 'gender-btn' + (g === 'boy' ? ' selected' : '');
+      document.getElementById('genderGirl').className = 'gender-btn' + (g === 'girl' ? ' selected' : '');
+    }
 
     // Build save slot UI on load
     function renderSaveSlots() {
@@ -434,8 +510,13 @@
 
       const apiKey = document.getElementById('apiKeyInput')?.value.trim() || '';
       TTS_ENABLED = document.getElementById('ttsToggle')?.checked ?? true;
+      const opts = {
+        gender: selectedGender,
+        mathBand: parseInt(document.getElementById('mathLevel').value) || 1,
+        phonicsBand: parseInt(document.getElementById('phonicsLevel').value) || 1,
+      };
       launchCanvas();
-      initGame(name, apiKey, selectedSlot, false);
+      initGame(name, apiKey, selectedSlot, false, opts);
     }
 
     function launchCanvas() {
