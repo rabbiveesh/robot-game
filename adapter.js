@@ -33,11 +33,13 @@
   window.generateMathChallenge = function () {
     const challenge = generateChallenge(profileState, Math.random);
     // Convert to the legacy format expected by startChallenge
+    // Stash sampledBand on CHALLENGE for the event recorder
     return {
       type: 'math',
       question: challenge.question,
       correctAnswer: challenge.correctAnswer,
       choices: challenge.choices.map(c => ({ text: c.text, correct: c.correct })),
+      _sampledBand: challenge.sampledBand,
       teachingData: {
         a: challenge.numbers.a,
         b: challenge.numbers.b,
@@ -53,6 +55,8 @@
   window.startChallenge = function (challengeData, onComplete) {
     challengeShownAt = performance.now();
     _oldStartChallenge(challengeData, onComplete);
+    // Stash sampledBand on CHALLENGE so event recorder can use it
+    CHALLENGE._sampledBand = challengeData._sampledBand || profileState.mathBand;
   };
 
   const _oldSelectChoice = window.selectChallengeChoice;
@@ -66,11 +70,14 @@
 
     // Only record on final answer (correct, or when teaching triggers)
     if (wasCorrect || CHALLENGE.showTeaching || CHALLENGE.answered) {
+      // Use the sampledBand from the challenge if available, else fall back to profile band
+      const sampledBand = CHALLENGE._sampledBand || profileState.mathBand;
       const event = {
         type: 'PUZZLE_ATTEMPTED',
         correct: wasCorrect,
         operation,
-        band: profileState.mathBand,
+        band: sampledBand,
+        centerBand: profileState.mathBand,
         responseTimeMs,
         attemptNumber: CHALLENGE.attempts,
         timestamp: Date.now(),
@@ -225,7 +232,9 @@
       pace: profileState.pace,
       scaffolding: profileState.scaffolding,
       challengeFreq: profileState.challengeFreq,
-      streakToPromote: profileState.streakToPromote,
+      spreadWidth: profileState.spreadWidth,
+      promoteThreshold: profileState.promoteThreshold,
+      stretchThreshold: profileState.stretchThreshold,
       wrongsBeforeTeach: profileState.wrongsBeforeTeach,
       hintVisibility: profileState.hintVisibility,
       textSpeed: profileState.textSpeed,

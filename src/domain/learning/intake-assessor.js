@@ -52,10 +52,12 @@ export function processIntakeResults(answers, configuredBand = null) {
   else if (avgTime > 6000) scaffolding = 0.6;
   else if (avgTime < 3000) scaffolding = 0.3;
 
-  // Streak to promote: confident kids can promote faster
-  let streakToPromote = 3;
+  // Promotion thresholds: confident fast kids promote sooner (lower thresholds)
+  let promoteThreshold = 0.75;
+  let stretchThreshold = 0.60;
   if (avgTime < 3000 && answers.filter(a => a.correct).length >= 3) {
-    streakToPromote = 2;
+    promoteThreshold = 0.65;
+    stretchThreshold = 0.50;
   }
 
   // Text speed: check for text skipping
@@ -68,7 +70,8 @@ export function processIntakeResults(answers, configuredBand = null) {
     mathBand,
     pace,
     scaffolding,
-    streakToPromote,
+    promoteThreshold,
+    stretchThreshold,
     textSpeed,
   };
 }

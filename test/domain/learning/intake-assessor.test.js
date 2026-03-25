@@ -105,7 +105,7 @@ describe('processIntakeResults', () => {
     expect(result.textSpeed).toBeLessThan(0.035);
   });
 
-  it('confident fast kids get streakToPromote of 2', () => {
+  it('confident fast kids get lower promote thresholds', () => {
     const answers = [
       { band: 3, correct: true, responseTimeMs: 1500 },
       { band: 5, correct: true, responseTimeMs: 2000 },
@@ -113,7 +113,8 @@ describe('processIntakeResults', () => {
       { band: 9, correct: true, responseTimeMs: 2200 },
     ];
     const result = processIntakeResults(answers);
-    expect(result.streakToPromote).toBe(2);
+    expect(result.promoteThreshold).toBeLessThan(0.75);
+    expect(result.stretchThreshold).toBeLessThan(0.60);
   });
 
   it('clamps placement to configuredBand + 2 when parent set a low band', () => {

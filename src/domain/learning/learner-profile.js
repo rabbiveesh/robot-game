@@ -1,16 +1,18 @@
 // learner-profile.js — State shape and root reducer
 
-import { createWindow, pushEntry } from './rolling-window.js';
+import { createWindow, pushEntry, accuracyAtBand, accuracyAboveBand, accuracy } from './rolling-window.js';
 import { createOperationStats, recordOperation } from './operation-stats.js';
 
 export function createProfile(overrides = {}) {
   return Object.freeze({
     mathBand: 1,
-    streak: 0,
+    streak: 0,                // display only — Sparky celebrates streaks, no mechanical effect
     pace: 0.5,
     scaffolding: 0.5,
     challengeFreq: 0.5,
-    streakToPromote: 3,
+    spreadWidth: 0.5,         // distribution width (0 = tight, 1 = wide)
+    promoteThreshold: 0.75,   // accuracy at center band needed to promote
+    stretchThreshold: 0.60,   // accuracy at above-center needed to promote
     wrongsBeforeTeach: 2,
     hintVisibility: 0.5,
     textSpeed: 0.035,
@@ -38,10 +40,33 @@ function isBoredomWrong(window, entry) {
   if (entry.responseTimeMs == null || entry.responseTimeMs > 2000) return false;
   const entries = window.entries;
   if (entries.length < 2) return false;
-  // Last two entries were correct
   const prev1 = entries[entries.length - 1];
   const prev2 = entries[entries.length - 2];
   return prev1.correct && prev2.correct;
+}
+
+// Check if accuracy-based promotion should fire
+function shouldPromote(window, centerBand, promoteThreshold, stretchThreshold) {
+  const atCenter = accuracyAtBand(window, centerBand);
+  const aboveCenter = accuracyAboveBand(window, centerBand);
+
+  // Need at least 4 attempts at center band
+  if (atCenter.count < 4) return false;
+  if (atCenter.accuracy < promoteThreshold) return false;
+
+  // Need at least 2 attempts above center with decent accuracy
+  // If no above-center attempts exist yet (tight spread), skip this check
+  if (aboveCenter.count >= 2 && aboveCenter.accuracy < stretchThreshold) return false;
+
+  return true;
+}
+
+// Check if accuracy-based demotion should fire
+function shouldDemote(window, centerBand) {
+  const atCenter = accuracyAtBand(window, centerBand);
+  // Need at least 4 attempts at center band
+  if (atCenter.count < 4) return false;
+  return atCenter.accuracy < 0.5;
 }
 
 export function learnerReducer(state, event) {
@@ -53,6 +78,7 @@ export function learnerReducer(state, event) {
         correct: event.correct,
         operation: event.operation,
         band: event.band,
+        centerBand: event.centerBand ?? event.band,
         responseTimeMs: event.responseTimeMs,
         boredom,
         timestamp: event.timestamp,
@@ -60,24 +86,39 @@ export function learnerReducer(state, event) {
       const newWindow = pushEntry(state.rollingWindow, windowEntry);
       const newStats = recordOperation(state.operationStats, event.operation, event.correct);
 
+      // Streak is display-only — update it for UI but it doesn't drive promotion
       let newStreak = state.streak;
-      let newBand = state.mathBand;
-
       if (boredom) {
-        // Don't count boredom wrongs against the kid
-        // Reset streak to 0 rather than going negative
         newStreak = Math.max(0, state.streak);
       } else if (event.correct) {
         newStreak = Math.max(0, state.streak) + 1;
-        if (newStreak >= state.streakToPromote) {
-          newBand = Math.min(10, state.mathBand + 1);
-          newStreak = 0;
-        }
       } else {
         newStreak = Math.min(0, state.streak) - 1;
-        if (newStreak <= -2) {
+      }
+
+      // Accuracy-based promotion and demotion
+      let newBand = state.mathBand;
+      let newSpreadWidth = state.spreadWidth;
+
+      if (!boredom) {
+        if (shouldPromote(newWindow, state.mathBand, state.promoteThreshold, state.stretchThreshold)) {
+          newBand = Math.min(10, state.mathBand + 1);
+          newStreak = 0;
+          // Tighten spread briefly after promotion — let kid adjust to new center
+          newSpreadWidth = Math.max(0.2, state.spreadWidth - 0.1);
+        } else if (shouldDemote(newWindow, state.mathBand)) {
           newBand = Math.max(1, state.mathBand - 1);
           newStreak = 0;
+          // Tighten spread on demotion
+          newSpreadWidth = Math.max(0.1, state.spreadWidth - 0.15);
+        }
+      }
+
+      // Widen spread on sustained good performance
+      if (newBand === state.mathBand) { // no promotion/demotion this tick
+        const rollingAcc = accuracy(newWindow);
+        if (newWindow.entries.length >= 10 && rollingAcc > 0.75 && newSpreadWidth < 0.8) {
+          newSpreadWidth = Math.min(1.0, newSpreadWidth + 0.05);
         }
       }
 
@@ -85,6 +126,7 @@ export function learnerReducer(state, event) {
         ...state,
         streak: newStreak,
         mathBand: newBand,
+        spreadWidth: newSpreadWidth,
         rollingWindow: newWindow,
         operationStats: newStats,
       });
@@ -127,9 +169,9 @@ export function learnerReducer(state, event) {
           wrongsBeforeTeach: 1,
           pace: Math.max(0, state.pace - 0.2),
           streak: 0,
+          spreadWidth: Math.max(0.1, state.spreadWidth - 0.15),
         });
       }
-      // mild frustration — just encourage, no dial changes
       return state;
     }
 
@@ -139,7 +181,8 @@ export function learnerReducer(state, event) {
         mathBand: event.mathBand ?? state.mathBand,
         pace: event.pace ?? state.pace,
         scaffolding: event.scaffolding ?? state.scaffolding,
-        streakToPromote: event.streakToPromote ?? state.streakToPromote,
+        promoteThreshold: event.promoteThreshold ?? state.promoteThreshold,
+        stretchThreshold: event.stretchThreshold ?? state.stretchThreshold,
         textSpeed: event.textSpeed ?? state.textSpeed,
         intakeCompleted: true,
       });

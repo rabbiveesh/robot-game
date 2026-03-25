@@ -39,3 +39,17 @@ export function operationAccuracy(window, operation) {
   const correct = ops.filter(e => e.correct).length;
   return correct / ops.length;
 }
+
+export function accuracyAtBand(window, band) {
+  const at = window.entries.filter(e => e.band === band);
+  if (at.length === 0) return { accuracy: null, count: 0 };
+  const correct = at.filter(e => e.correct).length;
+  return { accuracy: correct / at.length, count: at.length };
+}
+
+export function accuracyAboveBand(window, band) {
+  const above = window.entries.filter(e => e.band > band);
+  if (above.length === 0) return { accuracy: null, count: 0 };
+  const correct = above.filter(e => e.correct).length;
+  return { accuracy: correct / above.length, count: above.length };
+}
