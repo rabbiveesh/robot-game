@@ -1,5 +1,62 @@
 // challenge-generator.js — Pure challenge generation from profile + rng
 
+// ─── BAND DISTRIBUTION ──────────────────────────────────
+
+// Produce a probability map { [band]: probability } for bands 1-10
+// spreadWidth: 0.0 = tight (90% at center), 1.0 = wide (30% at center)
+export function bandDistribution(centerBand, spreadWidth) {
+  const sw = Math.max(0, Math.min(1, spreadWidth));
+
+  // Interpolate center weight: 90% at sw=0, 50% at sw=0.5, 30% at sw=1.0
+  const centerWeight = 0.9 - 0.6 * sw;
+
+  // Build raw weights for offsets from center
+  const offsets = [
+    { d: 0, base: centerWeight },
+    { d: 1, base: 0.05 + 0.15 * sw },   // ±1
+    { d: 2, base: Math.max(0, 0.1 * sw - 0.005) },   // ±2
+    { d: 3, base: Math.max(0, 0.05 * (sw - 0.5) * 2) },  // ±3 only at wide
+  ];
+
+  const raw = {};
+  for (let band = 1; band <= 10; band++) raw[band] = 0;
+
+  for (const { d, base } of offsets) {
+    if (d === 0) {
+      raw[centerBand] += base;
+    } else {
+      const hi = centerBand + d;
+      const lo = centerBand - d;
+      const perSide = base / 2;
+      if (hi >= 1 && hi <= 10) raw[hi] += perSide;
+      else raw[Math.min(10, centerBand + Math.max(0, d - 1)) || centerBand] += perSide; // redistribute
+      if (lo >= 1 && lo <= 10) raw[lo] += perSide;
+      else raw[Math.max(1, centerBand - Math.max(0, d - 1)) || centerBand] += perSide; // redistribute
+    }
+  }
+
+  // Normalize to sum to 1.0
+  const total = Object.values(raw).reduce((s, v) => s + v, 0);
+  const dist = {};
+  for (let band = 1; band <= 10; band++) {
+    dist[band] = total > 0 ? raw[band] / total : (band === centerBand ? 1 : 0);
+  }
+  return dist;
+}
+
+// Sample a band from a probability distribution using the given rng
+export function sampleFromDistribution(dist, rng) {
+  const r = rng();
+  let cumulative = 0;
+  for (let band = 1; band <= 10; band++) {
+    cumulative += dist[band] || 0;
+    if (r < cumulative) return band;
+  }
+  return 10; // floating point safety
+}
+
+// ─── OPERATIONS ─────────────────────────────────────────
+
 // Map operations to their internal name
 const OPERATIONS = ['add', 'sub', 'multiply', 'divide', 'number_bond'];
 
@@ -17,8 +74,8 @@ const BAND_OPERATIONS = {
   10: ['divide'],
 };
 
-function pickOperation(profile, rng) {
-  const available = BAND_OPERATIONS[profile.mathBand] || ['add'];
+function pickOperation(profile, sampledBand, rng) {
+  const available = BAND_OPERATIONS[sampledBand] || ['add'];
   if (available.length === 1) return available[0];
 
   // 60% chance of strength (highest accuracy), 40% growth area (lowest accuracy)
@@ -128,8 +185,8 @@ function generateNumbers(band, operation, rng) {
     }
 
     case 6: {
-      const doSub = rng() < 0.45;
-      if (doSub) {
+      const doSub6 = operation === 'sub' || (operation !== 'add' && rng() < 0.45);
+      if (doSub6) {
         a = Math.floor(rng() * 30) + 20;
         b = Math.floor(rng() * (a - 5)) + 5;
         answer = a - b;
@@ -146,8 +203,8 @@ function generateNumbers(band, operation, rng) {
     }
 
     case 7: {
-      const doSub = rng() < 0.45;
-      if (doSub) {
+      const doSub7 = operation === 'sub' || (operation !== 'add' && rng() < 0.45);
+      if (doSub7) {
         a = Math.floor(rng() * 70) + 25;
         b = Math.floor(rng() * (a - 5)) + 5;
         answer = a - b;
@@ -223,8 +280,13 @@ function makeChoices(answer, rng) {
 }
 
 export function generateChallenge(profile, rng) {
-  const operation = pickOperation(profile, rng);
-  const { a, b, answer, question, op } = generateNumbers(profile.mathBand, operation, rng);
+  // Sample a band from the distribution around the center
+  const spreadWidth = profile.spreadWidth ?? 0.5;
+  const dist = bandDistribution(profile.mathBand, spreadWidth);
+  const sampledBand = sampleFromDistribution(dist, rng);
+
+  const operation = pickOperation(profile, sampledBand, rng);
+  const { a, b, answer, question, op } = generateNumbers(sampledBand, operation, rng);
   const choices = makeChoices(answer, rng);
 
   return Object.freeze({
@@ -232,7 +294,9 @@ export function generateChallenge(profile, rng) {
     correctAnswer: answer,
     choices: Object.freeze(choices.map(c => Object.freeze(c))),
     operation,
-    band: profile.mathBand,
+    centerBand: profile.mathBand,
+    sampledBand,
+    band: sampledBand, // backward compat — adapter and events use this
     numbers: Object.freeze({ a, b, op }),
   });
 }

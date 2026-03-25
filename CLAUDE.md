@@ -7,7 +7,7 @@ A math education RPG for kids (ages 4-10). Zelda-style top-down tile game where 
 - **`main` branch**: Working prototype. Playable at https://rabbiveesh.github.io/robot-game/
   - Vanilla JS, no build step, flat file structure (sprites.js, world.js, characters.js, dialogue.js, game.js, index.html)
   - Global mutable state everywhere — this is the prototype, not the target architecture
-  - Features: tile map, player movement, robot companion, NPC dialogue, math/phonics challenges, 3 save slots, TTS, secret areas
+  - Features: tile map, player movement, robot companion, NPC dialogue, math challenges, 3 save slots, TTS, secret areas
 
 - **`adaptive-learning-design` branch**: Design specs for the real architecture (docs/ only, no code)
   - `docs/adaptive-learning-spec.md` — learner profiles, intake quiz, frustration detection, CRA progression
@@ -62,6 +62,12 @@ docs/               # Design specs (not deployed)
 
 The legacy flat files (sprites.js, world.js, etc.) coexist during migration. The game works at every intermediate state.
 
+## Architecture Decision Records
+
+ADRs document key design decisions, their context, and consequences. Read these before proposing alternatives — the "why not" is usually in the Alternatives Considered section.
+
+- **[ADR-001: Band Blending](docs/adr/001-band-blending.md)** — Bands are distribution centers, not hard levels. Accuracy-based promotion replaces streaks. Spread width tightens on frustration, widens on confidence. Streak is display-only.
+
 ## Key Domain Concepts
 
 - **LearnerProfile**: Aggregate root. Dials (pace, scaffolding, etc.) + per-operation CRA stages + math band. Immutable, event-sourced.
@@ -78,11 +84,25 @@ npm run build         # Rollup bundle for production
 npm run dev           # Dev server with watch mode
 ```
 
+## Presentation Layer Debt
+
+The legacy flat files (dialogue.js, game.js, world.js, sprites.js, characters.js) are the original prototype. They work but accumulate debt with every feature. The domain layer is clean (`src/domain/`); the presentation layer is not.
+
+**DO NOT migrate the presentation layer as a standalone project.** Each feature triggers migration of the specific part it needs. See `docs/presentation-migration.md` for:
+- Which feature triggers which migration
+- Recommended migration order
+- What each legacy file splits into
+- When to delete each legacy file
+
+The adapter (`adapter.js`) is the bridge and is intentionally ugly. It dies when the presentation migration is complete.
+
 ## For Implementers
 
 Read these specs before writing code (on `adaptive-learning-design` branch):
 1. `docs/architecture-spec.md` — start here for domain model and project layout
 2. `docs/adaptive-learning-spec.md` — how the learning system works
 3. `docs/rpg-quest-spec.md` — how quests and story-embedded math work
+
+Before building any presentation feature, check `docs/presentation-migration.md` for whether it triggers a migration step.
 
 The current MVP task is in `docs/mvp-adaptive-engine.md`.

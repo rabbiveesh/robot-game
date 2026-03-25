@@ -33,11 +33,13 @@
   window.generateMathChallenge = function () {
     const challenge = generateChallenge(profileState, Math.random);
     // Convert to the legacy format expected by startChallenge
+    // Stash sampledBand on CHALLENGE for the event recorder
     return {
       type: 'math',
       question: challenge.question,
       correctAnswer: challenge.correctAnswer,
       choices: challenge.choices.map(c => ({ text: c.text, correct: c.correct })),
+      _sampledBand: challenge.sampledBand,
       teachingData: {
         a: challenge.numbers.a,
         b: challenge.numbers.b,
@@ -53,6 +55,8 @@
   window.startChallenge = function (challengeData, onComplete) {
     challengeShownAt = performance.now();
     _oldStartChallenge(challengeData, onComplete);
+    // Stash sampledBand on CHALLENGE so event recorder can use it
+    CHALLENGE._sampledBand = challengeData._sampledBand || profileState.mathBand;
   };
 
   const _oldSelectChoice = window.selectChallengeChoice;
@@ -66,11 +70,14 @@
 
     // Only record on final answer (correct, or when teaching triggers)
     if (wasCorrect || CHALLENGE.showTeaching || CHALLENGE.answered) {
+      // Use the sampledBand from the challenge if available, else fall back to profile band
+      const sampledBand = CHALLENGE._sampledBand || profileState.mathBand;
       const event = {
         type: 'PUZZLE_ATTEMPTED',
         correct: wasCorrect,
         operation,
-        band: profileState.mathBand,
+        band: sampledBand,
+        centerBand: profileState.mathBand,
         responseTimeMs,
         attemptNumber: CHALLENGE.attempts,
         timestamp: Date.now(),
@@ -146,15 +153,18 @@
 
   window.runIntakeQuiz = function (onComplete) {
     const INTAKE_QUESTIONS = 4;
-    const START_BAND = 3;
-    let currentBand = START_BAND;
+    // Use the parent's configured band as an anchor for intake
+    const configuredBand = profileState.mathBand;
+    const startBand = Math.min(configuredBand + 1, 3); // start near configured, cap at 3
+    const ceiling = configuredBand + 2; // don't wildly exceed what parent expects
+    let currentBand = startBand;
     let questionIndex = 0;
     const answers = [];
 
     function askNext() {
       if (questionIndex >= INTAKE_QUESTIONS) {
-        // Process results
-        const results = processIntakeResults(answers);
+        // Process results — pass configured band so placement is anchored
+        const results = processIntakeResults(answers, configuredBand);
         profileState = learnerReducer(profileState, {
           type: 'INTAKE_COMPLETED',
           ...results,
@@ -193,7 +203,7 @@
           responseTimeMs,
           skippedText: false,
         });
-        currentBand = nextIntakeBand(currentBand, wasCorrect);
+        currentBand = nextIntakeBand(currentBand, wasCorrect, ceiling);
         questionIndex++;
         // Small delay then next question
         setTimeout(askNext, 300);
@@ -222,7 +232,9 @@
       pace: profileState.pace,
       scaffolding: profileState.scaffolding,
       challengeFreq: profileState.challengeFreq,
-      streakToPromote: profileState.streakToPromote,
+      spreadWidth: profileState.spreadWidth,
+      promoteThreshold: profileState.promoteThreshold,
+      stretchThreshold: profileState.stretchThreshold,
       wrongsBeforeTeach: profileState.wrongsBeforeTeach,
       hintVisibility: profileState.hintVisibility,
       textSpeed: profileState.textSpeed,

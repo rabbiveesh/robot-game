@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   createWindow, pushEntry, accuracy, avgResponseTime,
-  consecutiveWrong, operationAccuracy,
+  consecutiveWrong, operationAccuracy, accuracyAtBand, accuracyAboveBand,
 } from '../../../src/domain/learning/rolling-window.js';
 
 describe('rolling-window', () => {
@@ -97,5 +97,43 @@ describe('rolling-window', () => {
   it('operationAccuracy returns null for unknown operation', () => {
     const w = createWindow([{ correct: true, operation: 'add' }]);
     expect(operationAccuracy(w, 'divide')).toBeNull();
+  });
+
+  it('accuracyAtBand returns accuracy and count for matching band', () => {
+    const w = createWindow([
+      { correct: true, band: 5 },
+      { correct: false, band: 5 },
+      { correct: true, band: 5 },
+      { correct: true, band: 6 },
+    ]);
+    const result = accuracyAtBand(w, 5);
+    expect(result.accuracy).toBeCloseTo(2 / 3);
+    expect(result.count).toBe(3);
+  });
+
+  it('accuracyAtBand returns null accuracy and 0 count for no matches', () => {
+    const w = createWindow([{ correct: true, band: 5 }]);
+    const result = accuracyAtBand(w, 3);
+    expect(result.accuracy).toBeNull();
+    expect(result.count).toBe(0);
+  });
+
+  it('accuracyAboveBand returns accuracy for entries above the band', () => {
+    const w = createWindow([
+      { correct: true, band: 5 },
+      { correct: true, band: 6 },
+      { correct: false, band: 7 },
+      { correct: true, band: 8 },
+    ]);
+    const result = accuracyAboveBand(w, 5);
+    expect(result.accuracy).toBeCloseTo(2 / 3);
+    expect(result.count).toBe(3);
+  });
+
+  it('accuracyAboveBand returns null for no entries above', () => {
+    const w = createWindow([{ correct: true, band: 5 }]);
+    const result = accuracyAboveBand(w, 5);
+    expect(result.accuracy).toBeNull();
+    expect(result.count).toBe(0);
   });
 });

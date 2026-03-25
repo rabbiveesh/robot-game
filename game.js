@@ -54,6 +54,14 @@ function initInput() {
       }
     }
 
+    // Toggle TTS at runtime
+    if (e.key === 't' || e.key === 'T') {
+      if (GAME.state !== 'TITLE') {
+        TTS_ENABLED = !TTS_ENABLED;
+        if (!TTS_ENABLED) stopSpeech();
+      }
+    }
+
     // Number keys for challenge choices
     if (GAME.state === 'CHALLENGE' && !CHALLENGE.answered && !CHALLENGE.showTeaching) {
       const num = parseInt(e.key);
@@ -249,7 +257,7 @@ function renderTitle(ctx, w, h) {
   // Subtitle
   ctx.fillStyle = '#90CAF9';
   ctx.font = '18px "Segoe UI", system-ui, sans-serif';
-  ctx.fillText('A Math & Phonics RPG', w / 2, 300);
+  ctx.fillText('A Math RPG', w / 2, 300);
 }
 
 function renderAreaName(ctx, canvasW) {
@@ -294,8 +302,7 @@ function gatherSaveData() {
     gender: PLAYER_GENDER,
     dumDums: DUM_DUMS,
     skill: {
-      math:    { band: SKILL.math.band,    streak: SKILL.math.streak,    totalCorrect: SKILL.math.totalCorrect,    totalAttempts: SKILL.math.totalAttempts },
-      phonics: { band: SKILL.phonics.band,  streak: SKILL.phonics.streak, totalCorrect: SKILL.phonics.totalCorrect, totalAttempts: SKILL.phonics.totalAttempts },
+      math: { band: SKILL.math.band, streak: SKILL.math.streak, totalCorrect: SKILL.math.totalCorrect, totalAttempts: SKILL.math.totalAttempts },
     },
     playTime: GAME.time,
   };
@@ -339,10 +346,10 @@ function loadFromSlot(slotIndex) {
   // Restore progress
   PLAYER_GENDER = data.gender || 'boy';
   DUM_DUMS = data.dumDums || 0;
-  if (data.skill) {
+  if (data.skill && data.skill.math) {
     Object.assign(SKILL.math, data.skill.math);
-    Object.assign(SKILL.phonics, data.skill.phonics);
   }
+  // Old saves may have data.skill.phonics — safely ignored
   GAME.time = data.playTime || 0;
 
   return true;
@@ -402,7 +409,6 @@ function initGame(playerName, apiKey, slotIndex, isLoad, opts) {
     PLAYER_GENDER = (opts && opts.gender) || 'boy';
     // Set starting levels
     if (opts && opts.mathBand) SKILL.math.band = opts.mathBand;
-    if (opts && opts.phonicsBand) SKILL.phonics.band = opts.phonicsBand;
     loadMap('overworld');
     NPC_DEFS = NPC_DEFS_BY_MAP.overworld;
     initNPCs();
