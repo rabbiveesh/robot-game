@@ -360,8 +360,15 @@ The MVP is done when:
 6. Existing game features still work — movement, NPCs, save/load, TTS, secret areas
 7. Save data includes the new profile (backward compatible — old saves still load with default profile)
 
+## Planned Evolution: Signal Interpreter
+
+After playtesting, we'll insert a Signal Interpreter between raw UI input and the reducer. This layer adjusts for confounders (mouse skill, misclicks, distraction, parent help). For now, the adapter constructs events directly from UI state — **keep all event construction in the adapter, in one place**, so inserting the interpreter later is a clean cut.
+
+See `docs/architecture-spec.md` for full Signal Interpreter design.
+
 ## Non-Goals for This MVP
 
+- Signal Interpreter / confounder adjustment (next iteration — need playtesting data first)
 - Quest system rewrite (future)
 - Story-embedded puzzles (future)
 - CRA visual representations in teaching mode (future — current dot system stays)
