@@ -37,8 +37,8 @@ let DUM_DUM_FLASH = 0;
 
 const SKILL = {
   math: {
-    band: 1,         // 1-5
-    streak: 0,        // positive = correct streak, negative = wrong streak
+    band: 1,         // 1-10
+    streak: 0,
     totalCorrect: 0,
     totalAttempts: 0,
   },
@@ -51,16 +51,25 @@ const SKILL = {
 };
 
 // Math bands:
-// 1: addition within 5          (1+1 to 2+3)
-// 2: addition/subtraction to 10 (comfortable zone)
-// 3: addition/subtraction to 15 (stretch)
-// 4: addition/subtraction to 20 (challenge)
-// 5: multiplication by 1 and 2  (advanced)
+//  1: addition within 5
+//  2: add/sub within 10
+//  3: add/sub within 15 + number bonds
+//  4: add/sub within 20 + number bonds
+//  5: multiply by 1 and 2
+//  6: add/sub within 50 (carrying)
+//  7: add/sub within 100 (carrying)
+//  8: multiply 1-5
+//  9: multiply 1-12
+// 10: division (inverse of ×1-12)
 
 // Phonics bands:
-// 1: letter sounds (what sound does B make?)
+// 1: letter sounds
 // 2: identify letter by sound
 // 3: blend CVC words
+
+const MATH_BAND_NAMES = ['', 'Add <5', '+/- <10', '+/- <15', '+/- <20', 'x1 x2',
+  '+/- <50', '+/- <100', 'x1-5', 'x1-12', 'Divide'];
+const PHONICS_BAND_NAMES = ['', 'Sounds', 'Letters', 'CVC', 'Blends', 'Digraphs', 'Long Words'];
 
 function recordResult(subject, correct) {
   const s = SKILL[subject];
@@ -68,9 +77,8 @@ function recordResult(subject, correct) {
   if (correct) {
     s.totalCorrect++;
     s.streak = Math.max(0, s.streak) + 1;
-    // Promote after 3 correct in a row
     if (s.streak >= 3) {
-      const maxBand = subject === 'math' ? 5 : 3;
+      const maxBand = subject === 'math' ? 10 : 6;
       if (s.band < maxBand) {
         s.band++;
         s.streak = 0;
@@ -78,7 +86,6 @@ function recordResult(subject, correct) {
     }
   } else {
     s.streak = Math.min(0, s.streak) - 1;
-    // Demote after 2 wrong in a row
     if (s.streak <= -2) {
       if (s.band > 1) {
         s.band--;
@@ -179,6 +186,65 @@ function generateMathChallenge() {
       question = `What is ${a} × ${b}?`;
       break;
     }
+    case 6: { // Add/sub within 50 (carrying)
+      const doSub = Math.random() < 0.45;
+      if (doSub) {
+        a = Math.floor(Math.random() * 30) + 20; // 20-49
+        b = Math.floor(Math.random() * (a - 5)) + 5;
+        answer = a - b;
+        op = '-';
+        question = `What is ${a} - ${b}?`;
+      } else {
+        a = Math.floor(Math.random() * 35) + 5;
+        b = Math.floor(Math.random() * (50 - a - 1)) + 1;
+        answer = a + b;
+        op = '+';
+        question = `What is ${a} + ${b}?`;
+      }
+      break;
+    }
+    case 7: { // Add/sub within 100 (carrying)
+      const doSub = Math.random() < 0.45;
+      if (doSub) {
+        a = Math.floor(Math.random() * 70) + 25; // 25-94
+        b = Math.floor(Math.random() * (a - 5)) + 5;
+        answer = a - b;
+        op = '-';
+        question = `What is ${a} - ${b}?`;
+      } else {
+        a = Math.floor(Math.random() * 80) + 5;
+        b = Math.floor(Math.random() * (100 - a - 1)) + 1;
+        answer = a + b;
+        op = '+';
+        question = `What is ${a} + ${b}?`;
+      }
+      break;
+    }
+    case 8: { // Multiply 1-5
+      a = Math.floor(Math.random() * 5) + 1;
+      b = Math.floor(Math.random() * 10) + 1;
+      answer = a * b;
+      op = '×';
+      question = `What is ${a} × ${b}?`;
+      break;
+    }
+    case 9: { // Multiply 1-12
+      a = Math.floor(Math.random() * 12) + 1;
+      b = Math.floor(Math.random() * 12) + 1;
+      answer = a * b;
+      op = '×';
+      question = `What is ${a} × ${b}?`;
+      break;
+    }
+    case 10: { // Division (inverse of ×1-12)
+      const divisor = Math.floor(Math.random() * 11) + 2; // 2-12
+      answer = Math.floor(Math.random() * 12) + 1;        // 1-12
+      a = divisor * answer;
+      b = divisor;
+      op = '÷';
+      question = `What is ${a} ÷ ${b}?`;
+      break;
+    }
   }
 
   const choices = makeChoices(answer);
@@ -188,10 +254,11 @@ function generateMathChallenge() {
 function makeChoices(answer) {
   const choices = [{ text: String(answer), correct: true }];
   const wrongs = new Set();
+  // Scale the spread of wrong answers based on answer magnitude
+  const spread = answer <= 20 ? 3 : answer <= 50 ? 5 : answer <= 100 ? 10 : 15;
   while (wrongs.size < 2) {
-    // Close wrong answers (±1 to ±3) to make it a real test of understanding
-    let wrong = answer + (Math.floor(Math.random() * 3) + 1) * (Math.random() < 0.5 ? 1 : -1);
-    if (wrong < 0) wrong = answer + Math.floor(Math.random() * 3) + 1;
+    let wrong = answer + (Math.floor(Math.random() * spread) + 1) * (Math.random() < 0.5 ? 1 : -1);
+    if (wrong < 0) wrong = answer + Math.floor(Math.random() * spread) + 1;
     if (wrong !== answer && !wrongs.has(wrong)) {
       wrongs.add(wrong);
       choices.push({ text: String(wrong), correct: false });
@@ -226,6 +293,26 @@ const CVC_WORDS = [
   { word: 'zip', sounds: ['z', 'i', 'p'] },
   { word: 'fox', sounds: ['f', 'o', 'x'] },
   { word: 'gum', sounds: ['g', 'u', 'm'] },
+];
+
+// CCVC / CVCC words (blends: band 4)
+const BLEND_WORDS = [
+  'stop', 'plan', 'trip', 'clap', 'grab', 'swim', 'drop', 'flag',
+  'snap', 'frog', 'grin', 'slip', 'drum', 'step', 'crop', 'spot',
+  'stamp', 'blend', 'drift', 'trust', 'frost', 'crisp', 'spend', 'plant',
+];
+
+// Digraph words (band 5): sh, ch, th, wh, ck, etc.
+const DIGRAPH_WORDS = [
+  'ship', 'chin', 'thin', 'when', 'duck', 'fish', 'much', 'them',
+  'shop', 'chop', 'that', 'whip', 'kick', 'rush', 'rich', 'bath',
+  'shell', 'check', 'think', 'wheel', 'stuck', 'brush', 'chest', 'thick',
+];
+
+// Longer / multi-syllable words (band 6)
+const LONG_WORDS = [
+  'rabbit', 'sunset', 'basket', 'napkin', 'kitten', 'rocket', 'insect', 'public',
+  'picnic', 'puppet', 'goblin', 'muffin', 'magnet', 'pencil', 'velvet', 'fabric',
 ];
 
 const LETTER_SOUNDS = {
@@ -289,6 +376,51 @@ function generatePhonicsChallenge() {
       }
       shuffle(choices);
       return { type: 'phonics', question, correctAnswer: entry.word.toUpperCase(), choices, teachingData: { word: entry.word, sounds: entry.sounds, phonicsBand: 3 } };
+    }
+    case 4: { // Read blend words (CCVC/CVCC)
+      const word = BLEND_WORDS[Math.floor(Math.random() * BLEND_WORDS.length)];
+      const question = `Can you read this word?\n${word.toUpperCase()}`;
+      const choices = [{ text: word.toUpperCase(), correct: true }];
+      const wrongs = new Set();
+      while (wrongs.size < 2) {
+        const w = BLEND_WORDS[Math.floor(Math.random() * BLEND_WORDS.length)];
+        if (w !== word && !wrongs.has(w)) {
+          wrongs.add(w);
+          choices.push({ text: w.toUpperCase(), correct: false });
+        }
+      }
+      shuffle(choices);
+      return { type: 'phonics', question, correctAnswer: word.toUpperCase(), choices, teachingData: { word, sounds: word.split(''), phonicsBand: 4 } };
+    }
+    case 5: { // Read digraph words
+      const word = DIGRAPH_WORDS[Math.floor(Math.random() * DIGRAPH_WORDS.length)];
+      const question = `Can you read this word?\n${word.toUpperCase()}`;
+      const choices = [{ text: word.toUpperCase(), correct: true }];
+      const wrongs = new Set();
+      while (wrongs.size < 2) {
+        const w = DIGRAPH_WORDS[Math.floor(Math.random() * DIGRAPH_WORDS.length)];
+        if (w !== word && !wrongs.has(w)) {
+          wrongs.add(w);
+          choices.push({ text: w.toUpperCase(), correct: false });
+        }
+      }
+      shuffle(choices);
+      return { type: 'phonics', question, correctAnswer: word.toUpperCase(), choices, teachingData: { word, sounds: word.split(''), phonicsBand: 5 } };
+    }
+    case 6: default: { // Read longer words
+      const word = LONG_WORDS[Math.floor(Math.random() * LONG_WORDS.length)];
+      const question = `Can you read this word?\n${word.toUpperCase()}`;
+      const choices = [{ text: word.toUpperCase(), correct: true }];
+      const wrongs = new Set();
+      while (wrongs.size < 2) {
+        const w = LONG_WORDS[Math.floor(Math.random() * LONG_WORDS.length)];
+        if (w !== word && !wrongs.has(w)) {
+          wrongs.add(w);
+          choices.push({ text: w.toUpperCase(), correct: false });
+        }
+      }
+      shuffle(choices);
+      return { type: 'phonics', question, correctAnswer: word.toUpperCase(), choices, teachingData: { word, sounds: word.split(''), phonicsBand: 6 } };
     }
   }
 }
@@ -706,8 +838,8 @@ function renderChallenge(ctx, canvasW, canvasH, time) {
 
   // Difficulty badge
   const bandLabel = CHALLENGE.type === 'math'
-    ? ['', 'Easy', 'Medium', 'Tricky', 'Hard', 'Super'][SKILL.math.band]
-    : ['', 'Sounds', 'Letters', 'Words'][SKILL.phonics.band];
+    ? (MATH_BAND_NAMES[SKILL.math.band] || '?')
+    : (PHONICS_BAND_NAMES[SKILL.phonics.band] || '?');
   ctx.fillStyle = borderColor;
   roundRect(ctx, panelX + panelW / 2 - 70, panelY - 16, 140, 32, 10);
   ctx.fill();
@@ -1051,10 +1183,8 @@ function renderSkillBadges(ctx, canvasW) {
 
   ctx.font = '13px "Segoe UI", system-ui, sans-serif';
   ctx.textAlign = 'left';
-  const mathBands = ['', 'Add <5', 'Add/Sub <10', '+/- <15', '+/- <20', 'Multiply'];
-  const phonBands = ['', 'Sounds', 'Letters', 'Words'];
   ctx.fillStyle = '#FFD54F';
-  ctx.fillText(`# ${mathBands[SKILL.math.band]}`, 18, y + 16);
+  ctx.fillText(`# ${MATH_BAND_NAMES[SKILL.math.band] || '?'}`, 18, y + 16);
 
   // Streak dots
   const streakX = 110;
