@@ -45,7 +45,11 @@ function isBoredomWrong(window, entry) {
   return prev1.correct && prev2.correct;
 }
 
-// Check if accuracy-based promotion should fire
+// Check if accuracy-based promotion should fire.
+// NOTE: accuracyAtBand filters by e.band (the sampledBand), not e.centerBand.
+// After a promotion, the new center band will have very few entries because
+// most prior entries were sampled at the OLD center. This is intentional —
+// the kid must accumulate fresh evidence at the new band before promoting again.
 function shouldPromote(window, centerBand, promoteThreshold, stretchThreshold) {
   const atCenter = accuracyAtBand(window, centerBand);
   const aboveCenter = accuracyAboveBand(window, centerBand);
