@@ -62,6 +62,12 @@ docs/               # Design specs (not deployed)
 
 The legacy flat files (sprites.js, world.js, etc.) coexist during migration. The game works at every intermediate state.
 
+## Architecture Decision Records
+
+ADRs document key design decisions, their context, and consequences. Read these before proposing alternatives — the "why not" is usually in the Alternatives Considered section.
+
+- **[ADR-001: Band Blending](docs/adr/001-band-blending.md)** — Bands are distribution centers, not hard levels. Accuracy-based promotion replaces streaks. Spread width tightens on frustration, widens on confidence. Streak is display-only.
+
 ## Key Domain Concepts
 
 - **LearnerProfile**: Aggregate root. Dials (pace, scaffolding, etc.) + per-operation CRA stages + math band. Immutable, event-sourced.
