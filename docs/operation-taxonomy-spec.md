@@ -316,6 +316,206 @@ test/domain/learning/
 adapter.js                 — pass subSkill through events, classify legacy challenges
 ```
 
+## Feature Vectors (ship now, analyze later)
+
+Every generated problem includes a feature vector stored in the event. This is cheap to compute and enables dynamic sub-skill discovery in the future without schema changes.
+
+### Feature Extraction
+
+```js
+function extractFeatures(a, b, operation, answer) {
+  const onesA = a % 10;
+  const onesB = b % 10;
+  const tensA = Math.floor(a / 10);
+  const tensB = Math.floor(b / 10);
+
+  return Object.freeze({
+    // ─── Number properties ───
+    carries: operation === 'add' && onesA + onesB >= 10,
+    carriesTens: operation === 'add' && tensA + tensB + (onesA + onesB >= 10 ? 1 : 0) >= 10,
+    borrows: operation === 'sub' && onesA < onesB,
+    borrowsTens: operation === 'sub' && tensA - (onesA < onesB ? 1 : 0) < tensB,
+    crossesTenBoundary: Math.floor(a / 10) !== Math.floor(answer / 10),
+    maxDigit: Math.max(onesA, onesB, a > 9 ? tensA : 0, b > 9 ? tensB : 0),
+    maxDigitGte7: Math.max(onesA, onesB) >= 7,
+    hasRoundNumber: onesA === 0 || onesB === 0,
+    nearDoubles: Math.abs(a - b) <= 2 && operation === 'add',
+    answerSize: answer,
+    answerGte10: answer >= 10,
+    answerGte20: answer >= 20,
+    answerGte50: answer >= 50,
+    operandSize: Math.max(a, b),
+
+    // ─── Multiplication/Division specific ───
+    isSquare: operation === 'multiply' && a === b,
+    hasFactorFive: (operation === 'multiply' || operation === 'divide') && (a % 5 === 0 || b % 5 === 0),
+    bothFactorsGt5: operation === 'multiply' && Math.min(a, b) > 5,
+
+    // ─── Ones digit pairs (for discovering digit-specific struggles) ───
+    onesPair: `${Math.min(onesA, onesB)}_${Math.max(onesA, onesB)}`,
+  });
+}
+```
+
+### Event Schema
+
+The feature vector is included in every `PUZZLE_ATTEMPTED` event:
+
+```js
+{
+  type: 'PUZZLE_ATTEMPTED',
+  correct: true,
+  operation: 'add',
+  subSkill: 'add_carry',
+  band: 6,
+  centerBand: 6,
+  responseTimeMs: 3200,
+  features: {                    // NEW
+    carries: true,
+    carriesTens: false,
+    crossesTenBoundary: true,
+    maxDigitGte7: true,
+    hasRoundNumber: false,
+    nearDoubles: false,
+    onesPair: '5_8',
+    // ... all features
+  },
+  // Presentation context (filled by adapter/UI)
+  craLevelShown: 'abstract',    // NEW — which CRA was shown
+  answerMode: 'choice_tight',   // NEW — how they answered
+  hintUsed: false,              // NEW — did they press show-me
+}
+```
+
+The features are computed by the challenge generator (pure function, no browser deps) and passed through to the event. The CRA/answer mode fields are filled by the presentation layer (adapter for now).
+
+### Why Ship Features Now
+
+1. **Zero cost to collect.** Feature extraction is a pure function on the numbers we already have. No API calls, no extra state, ~50 bytes per event.
+2. **Can't backfill.** If we add features later, we lose all historical data. A kid who's played for a month has a rich event log — but without features, we can't analyze it.
+3. **Analysis is decoupled.** The feature discovery algorithm reads the event log. It can be built, changed, or replaced without touching the generator or reducer.
+
+### Dynamic Sub-Skill Discovery (future, not for this PR)
+
+After collecting features, a simple analysis discovers per-kid sub-skills the static taxonomy missed:
+
+```js
+function discoverSubSkills(events, minSampleSize = 5, gapThreshold = 0.25) {
+  const boolFeatures = [
+    'carries', 'carriesTens', 'borrows', 'borrowsTens',
+    'crossesTenBoundary', 'maxDigitGte7', 'hasRoundNumber',
+    'nearDoubles', 'answerGte20', 'bothFactorsGt5', 'isSquare',
+  ];
+
+  const discoveries = [];
+
+  for (const feature of boolFeatures) {
+    const withFeature    = events.filter(e => e.features?.[feature]);
+    const withoutFeature = events.filter(e => e.features && !e.features[feature]);
+
+    if (withFeature.length < minSampleSize || withoutFeature.length < minSampleSize) continue;
+
+    const accWith    = withFeature.filter(e => e.correct).length / withFeature.length;
+    const accWithout = withoutFeature.filter(e => e.correct).length / withoutFeature.length;
+    const gap = accWithout - accWith;
+
+    if (gap > gapThreshold) {
+      discoveries.push({ feature, gap, accWith, accWithout,
+                         sampleWith: withFeature.length, sampleWithout: withoutFeature.length });
+    }
+  }
+
+  return discoveries.sort((a, b) => b.gap - a.gap);
+}
+```
+
+This discovers things like:
+- "This kid struggles when maxDigitGte7 regardless of carrying" (digit-specific)
+- "This kid is fine with carrying but fails when crossesTenBoundary" (boundary-specific)
+- "This kid nails everything with hasRoundNumber but struggles without" (anchor-dependent)
+
+**Cross with presentation features** for richer discovery:
+
+```js
+// Combine math features with presentation context
+const compositeEvents = events.map(e => ({
+  correct: e.correct,
+  features: {
+    ...e.features,
+    // Composite features
+    carries_at_abstract: e.features?.carries && e.craLevelShown === 'abstract',
+    carries_at_concrete: e.features?.carries && e.craLevelShown === 'concrete',
+    borrow_with_hint: e.features?.borrows && e.hintUsed,
+    hard_digits_free_input: e.features?.maxDigitGte7 && e.answerMode === 'free_input',
+  },
+}));
+```
+
+This might discover: "carries_at_abstract has 30% accuracy but carries_at_concrete has 85%" — the kid can carry, they just need tens blocks to see it. The fix isn't easier problems, it's a different representation.
+
+**Ones digit pair analysis** for multiplication table gaps:
+
+```js
+// Which specific digit pairs does this kid struggle with?
+function findHardPairs(events) {
+  const pairStats = {};
+  for (const e of events.filter(e => e.operation === 'multiply')) {
+    const pair = e.features?.onesPair;
+    if (!pair) continue;
+    if (!pairStats[pair]) pairStats[pair] = { correct: 0, attempts: 0 };
+    pairStats[pair].attempts++;
+    if (e.correct) pairStats[pair].correct++;
+  }
+  return Object.entries(pairStats)
+    .map(([pair, s]) => ({ pair, accuracy: s.correct / s.attempts, attempts: s.attempts }))
+    .filter(s => s.attempts >= 3)
+    .sort((a, b) => a.accuracy - b.accuracy);
+}
+// → [{ pair: '7_8', accuracy: 0.20, attempts: 5 }, { pair: '6_9', accuracy: 0.33, attempts: 6 }, ...]
+```
+
+**Parent dashboard output:**
+
+```
+Discovered patterns for this kid:
+
+  Carrying:          35% accuracy (vs 90% without)    ← known sub-skill, confirmed
+  Digits ≥ 7:        45% accuracy (vs 82% without)    ← DISCOVERED — not in static taxonomy
+  Crossing tens:     40% accuracy (vs 85% without)    ← DISCOVERED
+  Carry at abstract: 30% (vs 75% at concrete)         ← DISCOVERED — representation mismatch
+
+  Hardest multiplication pairs: 7×8, 6×9, 8×9
+  Easiest multiplication pairs: 2×5, 5×5, 3×4
+```
+
+**ML future (if we get uptake):** with enough users, the feature vectors + outcomes become a training dataset. A simple model (logistic regression, small decision tree) could predict "probability this specific kid gets this specific problem right" from the features. This replaces the 60/40 heuristic with a per-kid difficulty estimate. But the simple accuracy-split discovery is the 80/20 — most of the value, none of the complexity.
+
+## Implementation Note for Feature Vectors
+
+**This is the only part of this spec that MUST ship with the initial taxonomy PR.** Everything else in this section (discovery analysis, composite features, pair analysis, parent dashboard, ML) is future work. But the feature vectors in the events must be there from day one because we can't backfill historical events.
+
+The implementer should:
+1. Add `extractFeatures()` to the challenge generator
+2. Include the features object in the returned challenge
+3. Pass features through to the `PUZZLE_ATTEMPTED` event in the adapter
+4. Add presentation context fields (`craLevelShown`, `answerMode`, `hintUsed`) as nulls for now — they'll be populated when the interaction model ships
+
+## Tests for Feature Extraction
+
+```
+extractFeatures:
+  - '28 + 15: carries=true, carriesTens=false, crossesTenBoundary=true'
+  - '23 + 14: carries=false, crossesTenBoundary=true'
+  - '42 - 17: borrows=true, borrowsTens=false'
+  - '103 - 47: borrows=true, borrowsTens=true'
+  - '7 × 8: bothFactorsGt5=true, maxDigitGte7=true, isSquare=false'
+  - '5 × 5: isSquare=true, hasFactorFive=true'
+  - '30 + 14: hasRoundNumber=true'
+  - '6 + 7: nearDoubles=true'
+  - '3 + 2: maxDigitGte7=false, answerGte10=false'
+  - 'features object is frozen'
+```
+
 ## Migration
 
-Backward compatible. Old saves without fine-grained stats get zeros for all sub-skills (they'll populate on first play). Old events without `subSkill` field are treated as unclassified — the coarse `operation` field is still recorded as before.
+Backward compatible. Old saves without fine-grained stats get zeros for all sub-skills (they'll populate on first play). Old events without `subSkill` or `features` fields are treated as unclassified — the coarse `operation` field is still recorded as before. Discovery analysis gracefully handles events without features (filters them out).
