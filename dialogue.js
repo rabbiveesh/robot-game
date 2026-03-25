@@ -1203,7 +1203,7 @@ function renderSkillBadges(ctx, canvasW) {
   ctx.fillStyle = '#69F0AE';
   ctx.font = '13px "Segoe UI", system-ui, sans-serif';
   ctx.textAlign = 'left';
-  ctx.fillText(`ABC ${phonBands[SKILL.phonics.band]}`, 18, y + 44);
+  ctx.fillText(`ABC ${PHONICS_BAND_NAMES[SKILL.phonics.band] || '?'}`, 18, y + 44);
 
   for (let i = 0; i < 3; i++) {
     ctx.fillStyle = i < Math.abs(SKILL.phonics.streak) ? (SKILL.phonics.streak > 0 ? '#4CAF50' : '#F44336') : '#333';
