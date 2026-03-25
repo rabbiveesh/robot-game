@@ -600,8 +600,63 @@ On load: restore from snapshot. No replay needed. Total ceiling: ~30KB in localS
 
 Session logs older than 5 sessions are collapsed into the snapshot and discarded. Unbounded growth is not possible.
 
+## Evolution Points
+
+### Event Bus (planned, not yet)
+
+**Current**: Direct calls. GameSession explicitly routes events to consumers (quest service, renderer, speech, save). Simple, traceable, ~4-5 consumers.
+
+**Trigger to evolve**: when GameSession starts growing `if` branches for every new feature (parent dashboard, achievements, analytics, sound effects). The symptom is: "every new feature requires editing GameSession."
+
+**Migration**: ~2 hours. Move consumer calls into `bus.on()` subscribers. Domain layer and tests don't change — only application layer plumbing.
+
+**When we do it, ordering constraints matter.** The bus should support priority tiers to avoid invisible execution order bugs:
+
+```js
+// Tier 1: State mutations (reducers) — always first
+// Tier 2: Derived state (frustration detection, quest advancement)
+// Tier 3: Side effects (save, speech, animation, analytics)
+
+bus.on('PUZZLE_ATTEMPTED', handler, { priority: 1 });  // state first
+bus.on('PUZZLE_ATTEMPTED', handler, { priority: 3 });  // render after
+```
+
+And a hard rule: **subscribers never emit events synchronously.** If a subscriber needs to emit, it queues it for the next tick. This prevents circular emission cascades.
+
+```js
+// BAD: circular emission
+bus.on('BAND_CHANGED', () => bus.emit('ACHIEVEMENT_CHECK'));
+
+// GOOD: queued emission
+bus.on('BAND_CHANGED', () => bus.queue('ACHIEVEMENT_CHECK'));
+// bus processes queued events after all current subscribers finish
+```
+
+We'll spec the full bus design when we need it. For now, direct calls.
+
+### The State Problem
+
+Games are hard because **everything is state** — player position, animation frame, dialogue progress, camera, quest step, inventory, profile dials, frustration level, NPC mood. And it all interacts.
+
+Our architecture handles this by being explicit about state ownership:
+
+| State | Owner | Mutation | Persistence |
+|-------|-------|----------|-------------|
+| Learner profile | Learning domain (reducer) | Events only. Immutable. | Snapshot + event log |
+| Quest progress | Quest domain | QuestState entity methods | Snapshot in save data |
+| Player position | Character domain | Direct mutation (game loop) | Snapshot in save data |
+| Animation/VFX | Presentation layer | Direct mutation (frame tick) | Never saved |
+| Dialogue progress | Presentation layer | State machine | Never saved |
+| Camera | Presentation layer | Follows player | Never saved |
+| Inventory | Character domain | Direct mutation | Snapshot in save data |
+| NPC state | World domain | Direct mutation | Snapshot in save data |
+
+The key split: **domain state** (learner profile, quests, inventory) is the stuff we care about getting right. It's immutable, event-sourced, tested. **Presentation state** (animation, camera, dialogue typewriter) is ephemeral — mutable, frame-driven, not tested. These two categories have fundamentally different lifecycles and we don't try to unify them.
+
+The reducer pattern is specifically for the *domain state that matters educationally*. Making animation frames immutable would be insane overhead for zero value. The architecture is honest about what deserves rigor and what doesn't.
+
 ## Open Questions
 
-- **How much of the presentation layer do we test?** Probably just Playwright smoke tests (loads, can enter name, can move, can complete a puzzle). Domain unit tests are the priority.
-- **Do we need a formal event bus / pub-sub?** Or is the reducer + direct calls sufficient? Leaning toward direct calls — event bus adds indirection we don't need at this scale.
 - **Should the event log be exportable?** (JSON dump for researchers / parents who want to analyze their kid's learning data.) Probably yes, trivially — it's already JSON.
+- **How much of the presentation layer do we test?** Probably just Playwright smoke tests (loads, can enter name, can move, can complete a puzzle). Domain unit tests are the priority.
+- **Do we want hot-reloading during development?** Rollup watch mode + a dev server would let us iterate on presentation without restarting. Low priority but nice DX.
