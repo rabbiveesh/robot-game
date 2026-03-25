@@ -6,6 +6,100 @@ Math isn't a pop quiz that interrupts gameplay. Math IS the gameplay. Every puzz
 
 The current system (walk → NPC → flash card → reward) is a classroom with a Zelda skin. The target system is: **quest gives you a goal → math is the obstacle → solving it advances the story.**
 
+## The Broccoli Test
+
+Every feature we build must pass this test: **Is the math the mechanic, or is it chocolate on broccoli?**
+
+- **Broccoli**: "Solve 3×4 to shoot the laser." The math is an obstacle BETWEEN the kid and the fun. The kid wishes the math wasn't there.
+- **Not broccoli**: "You need to tile a 3×4 floor. How many tiles?" The math IS the fun. Removing the math removes the game.
+
+If a kid would have more fun with the math removed, we've failed. If the math is what makes the puzzle satisfying to solve, we've succeeded.
+
+## Scientific Frameworks
+
+These aren't just theory — they're concrete design constraints we can test against.
+
+### MDA (Mechanics, Dynamics, Aesthetics)
+
+The learning must live in the **Mechanics** — the core rules of the game. Not in a side panel. Not in a quiz that interrupts play.
+
+| Layer | What it means for us |
+|-------|---------------------|
+| **Mechanics** | Math operations are the verbs of the game. You add to combine inventory. You divide to share loot. You multiply to calculate costs. These aren't mini-games — they're how the world works. |
+| **Dynamics** | The emergent gameplay that arises: kids develop strategies (stockpile cheap items, plan efficient routes, budget for big purchases). The math creates the strategy space. |
+| **Aesthetics** | The feelings: pride when you figure out a hard trade, surprise when a clever calculation opens a shortcut, satisfaction when you have exactly enough resources. |
+
+**Design test**: For every puzzle, ask "What would this interaction be if the kid already knew the answer?" If it would be boring (just press a button), the math is broccoli. If it would still be interesting (strategic choice, resource tradeoff), the math is a mechanic.
+
+### Flow Theory
+
+The game must keep kids in the flow channel — challenged but not overwhelmed.
+
+```
+                Anxiety
+               /
+              /   ← FLOW CHANNEL →
+             /                      \
+  Challenge /                        \ Boredom
+           /                          \
+          ─────────────────────────────
+                   Skill →
+```
+
+This is exactly what the adaptive learning system's dials do. But the quest system adds a crucial dimension: **the kid controls difficulty by choosing quests.** A kid who's bored can take on the harder quest. A kid who's anxious can do a micro-quest to build confidence. Autonomy in difficulty selection is more effective than pure algorithmic adjustment.
+
+The adaptive system sets the RANGE. The kid's choices within that range provide flow.
+
+### Self-Determination Theory (SDT)
+
+Three needs that drive intrinsic motivation:
+
+| Need | How our game satisfies it |
+|------|--------------------------|
+| **Autonomy** | Choose which quests to do. Choose your path through puzzles. Choose to confront or sneak. The kid is the boss (literally — Sparky works for them). |
+| **Competence** | Problems are in the sweet spot (adaptive system). Success is celebrated. Failure has natural consequences, not punishment. The kid sees themselves leveling up. |
+| **Relatedness** | Sparky is a companion who cares. Mommy is proud. NPCs remember what you did for them. The kid belongs to Robot Village. |
+
+**Design test**: Does the kid feel like they're making real choices? Or just following instructions? Every quest should have at least one meaningful decision.
+
+### Cognitive Load Theory
+
+Introduce one concept at a time. Let the kid master it through play before layering complexity.
+
+| Principle | Application |
+|-----------|------------|
+| **One variable at a time** | New quest introduces ONE new math concept. Don't mix new addition strategies with a new game mechanic simultaneously. |
+| **Worked examples first** | When introducing a new puzzle type, Sparky can "try it first" and get it wrong in a funny way — showing the kid the structure of the problem before they attempt it. |
+| **Progressive complexity** | First shop quest: one item, one price. Second: two items. Third: two items + "do you have enough?" Fourth: comparison shopping. Each builds on the last. |
+| **Offload to the environment** | Show the numbers IN the game world (price tags on items, weight numbers on bridges, battery meter on Sparky) so the kid doesn't have to hold everything in working memory. |
+
+### Stealth Assessment
+
+**Every interaction is data. No interaction is a "test."**
+
+The current system has a visible challenge screen that pops up — this is a test, and kids know it. The quest system replaces this with puzzles that ARE the gameplay:
+
+| Old (test) | New (stealth) |
+|-----------|--------------|
+| Pop-up: "What is 12 ÷ 3?" with multiple choice buttons | NPC: "Split these 12 gems into 3 bags for me!" — kid drags gems into bags, or types/clicks the number per bag |
+| Correct/wrong celebration screen | The bags fill up and the NPC says thanks (or "hmm, that doesn't look even...") |
+| Visible streak counter | Hidden — the adaptive system tracks everything silently |
+| Difficulty badge ("Band 5: Multiply") | Gone — the kid just knows "the quests in Crystal Caves are harder" |
+
+**The kid should never feel tested.** They should feel like they're solving problems in a world that responds to their solutions.
+
+**Failure is normalized.** In school, wrong = bad grade. In the game, wrong = Sparky says something funny, the bridge wobbles, the merchant scratches his head. It's feedback, not judgment. Try again.
+
+### Implications for Atypical Thinkers
+
+These frameworks together create a space that works for kids traditional school fails:
+
+- **No speed pressure.** Flow theory says challenge matters, not time. No timers, ever.
+- **No handwriting penalty.** Clicks, drags, and number selection. The interface never penalizes motor skills.
+- **Top-down exploration.** The game world IS the big picture. Kids who need to see the whole before the parts can wander the map, see the quests, understand what math is FOR, and then choose to engage.
+- **Asynchronous development is fine.** A kid who reasons at a high level but processes slowly will naturally be in higher bands but with a low `pace` dial. The system handles this without contradiction.
+- **Failure as iteration.** Every wrong answer leads to a game-world response, not a red X. The kid learns that wrong answers are information, not identity.
+
 ## Design Pillars
 
 1. **The math must feel like a puzzle, not a test.** "The door code is 7 + ? = 15" is a puzzle. "What is 7 + 8?" is a test. Same math, completely different experience.
@@ -15,6 +109,8 @@ The current system (walk → NPC → flash card → reward) is a classroom with 
 3. **Story context gives math meaning.** "What is 24 ÷ 4?" is abstract. "Split 24 Dum Dums equally between 4 friends" is fairness — a schema kids deeply understand. The RPG provides endless natural contexts.
 
 4. **Multiple solution paths.** A locked door might accept the exact answer OR let you try a different route that's harder. This prevents hard blocks while rewarding mathematical thinking.
+
+5. **Numbers live in the world.** Price tags on shop items. Weight numbers painted on bridges. Battery meter on Sparky's chest. The math is visible in the environment, not just in UI pop-ups. This offloads working memory and makes the world feel alive with math.
 
 ## Architecture
 
