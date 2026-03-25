@@ -322,10 +322,13 @@ async function fetchAnthropicDialogue(context) {
 
 async function fetchGeminiDialogue(context) {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${API_KEY}`,
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent',
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': API_KEY,
+      },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: ROBOT_SYSTEM_PROMPT }] },
         contents: [{ parts: [{ text: context }] }],
