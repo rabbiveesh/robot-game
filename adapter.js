@@ -107,6 +107,56 @@
     }
   };
 
+  // Voice answer submission — called by handleVoiceInput in dialogue.js
+  // This is the proper path through the reducer, unlike the legacy recordResult
+  window._submitVoiceAnswer = function (number, correct, time) {
+    const operation = mapOpToOperation(CHALLENGE.teachingData?.op);
+    const sampledBand = CHALLENGE._sampledBand || profileState.mathBand;
+    const voiceResult = CHALLENGE._lastVoiceResult || {};
+
+    // Update legacy state (same as selectChallengeChoice path)
+    if (correct) {
+      CHALLENGE.answered = true;
+      CHALLENGE.wasCorrect = true;
+      CHALLENGE.celebrationStart = time;
+    } else {
+      CHALLENGE.attempts++;
+      if (CHALLENGE.attempts >= 2) {
+        CHALLENGE.showTeaching = true;
+        CHALLENGE.answered = false;
+      }
+    }
+
+    const event = {
+      type: 'PUZZLE_ATTEMPTED',
+      correct,
+      operation,
+      subSkill: CHALLENGE._subSkill || null,
+      band: sampledBand,
+      centerBand: profileState.mathBand,
+      responseTimeMs: voiceResult.totalMs || (performance.now() - challengeShownAt),
+      attemptNumber: CHALLENGE.attempts,
+      timestamp: Date.now(),
+      features: CHALLENGE._features || null,
+      craLevelShown: null,
+      answerMode: 'voice',
+      hintUsed: false,
+      voiceConfidence: voiceResult.confidence ?? null,
+      voiceHesitationMs: voiceResult.hesitationMs ?? null,
+      voiceSelfCorrected: voiceResult.selfCorrected ?? null,
+      voiceHadFillers: voiceResult.hadFillerWords ?? null,
+      voiceRetries: voiceResult.retries ?? 0,
+    };
+
+    profileState = learnerReducer(profileState, event);
+    eventLog.push(event);
+
+    SKILL.math.band = profileState.mathBand;
+    SKILL.math.streak = profileState.streak;
+
+    checkFrustration();
+  };
+
   function mapOpToOperation(op) {
     if (!op) return 'add';
     if (op === '+') return 'add';
