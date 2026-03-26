@@ -717,12 +717,141 @@ function handleChallengeClick(mx, my, time) {
 
   if (CHALLENGE.answered) return;
 
+  // Check voice confirmation buttons
+  if (CHALLENGE._voiceConfirming) {
+    if (CHALLENGE._confirmYesBounds) {
+      const yb = CHALLENGE._confirmYesBounds;
+      if (mx >= yb.x && mx <= yb.x + yb.w && my >= yb.y && my <= yb.y + yb.h) {
+        confirmVoiceAnswer(true, time);
+        return;
+      }
+    }
+    if (CHALLENGE._confirmNoBounds) {
+      const nb = CHALLENGE._confirmNoBounds;
+      if (mx >= nb.x && mx <= nb.x + nb.w && my >= nb.y && my <= nb.y + nb.h) {
+        confirmVoiceAnswer(false, time);
+        return;
+      }
+    }
+    return; // Block other clicks while confirming
+  }
+
+  // Check mic button click
+  if (CHALLENGE._micBounds) {
+    const mb = CHALLENGE._micBounds;
+    if (mx >= mb.x && mx <= mb.x + mb.w && my >= mb.y && my <= mb.y + mb.h) {
+      handleVoiceInput(time);
+      return;
+    }
+  }
+
   for (let i = 0; i < CHALLENGE.choices.length; i++) {
     const b = CHALLENGE.choices[i]._bounds;
     if (b && mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
       selectChallengeChoice(i, time);
       return;
     }
+  }
+}
+
+// ─── VOICE INPUT ─────────────────────────────────────────
+
+async function handleVoiceInput(time) {
+  if (CHALLENGE._voiceListening || CHALLENGE._voiceConfirming || CHALLENGE.answered) return;
+  if (typeof listenForNumber !== 'function') return;
+
+  CHALLENGE._voiceListening = true;
+  CHALLENGE._voiceText = '';
+  CHALLENGE._voiceRetries = (CHALLENGE._voiceRetries || 0);
+
+  try {
+    const result = await listenForNumber({ timeoutMs: 10000 });
+
+    CHALLENGE._voiceListening = false;
+
+    if (result.number === null || result.confidence < 0.5) {
+      CHALLENGE._voiceText = "Didn't catch that! Tap mic to try again.";
+      CHALLENGE._voiceRetries++;
+      return;
+    }
+
+    // Store voice metadata for event recording
+    CHALLENGE._lastVoiceResult = {
+      confidence: result.confidence,
+      hesitationMs: result.hesitationMs,
+      totalMs: result.totalMs,
+      selfCorrected: result.selfCorrected,
+      hadFillerWords: result.hadFillerWords,
+      retries: CHALLENGE._voiceRetries,
+      number: result.number,
+    };
+
+    if (result.confidence >= 0.8) {
+      // High confidence — auto-submit
+      submitVoiceAnswer(result.number, time);
+    } else {
+      // Medium confidence (0.5-0.8) — confirm first
+      CHALLENGE._voiceConfirming = true;
+      CHALLENGE._voiceConfirmNumber = result.number;
+      CHALLENGE._voiceText = `Did you say ${result.number}?`;
+      // Confirmation buttons are rendered by renderChallenge and handled by handleChallengeClick
+    }
+  } catch (e) {
+    CHALLENGE._voiceListening = false;
+    if (e.message === 'timeout' || e.message === 'no-speech') {
+      CHALLENGE._voiceText = "Didn't hear anything. Tap mic to try again!";
+    } else if (e.message === 'not-allowed') {
+      CHALLENGE._voiceText = 'Mic not allowed. Use buttons instead!';
+      CHALLENGE._micBounds = null;
+    } else {
+      CHALLENGE._voiceText = 'Something went wrong. Use buttons!';
+    }
+  }
+}
+
+function submitVoiceAnswer(number, time) {
+  CHALLENGE._voiceConfirming = false;
+  const correct = number === CHALLENGE.correctAnswer;
+
+  // Delegate to adapter if available, otherwise fall back to legacy
+  if (typeof window._submitVoiceAnswer === 'function') {
+    window._submitVoiceAnswer(number, correct, time);
+  } else {
+    // Fallback: legacy path
+    if (correct) {
+      CHALLENGE.answered = true;
+      CHALLENGE.wasCorrect = true;
+      CHALLENGE.celebrationStart = time;
+      recordResult('math', true);
+    } else {
+      CHALLENGE.attempts++;
+      if (CHALLENGE.attempts >= 2) {
+        CHALLENGE.showTeaching = true;
+        recordResult('math', false);
+      }
+    }
+  }
+
+  // Visual/audio feedback
+  if (correct) {
+    CHALLENGE._voiceText = '';
+    speakLine('Sparky', 'Amazing! You got it!');
+  } else if (CHALLENGE.showTeaching) {
+    CHALLENGE._voiceText = '';
+    speakLine('Sparky', "Let's figure it out together!");
+  } else {
+    CHALLENGE._voiceText = `${number}? Hmm, not quite! Try again!`;
+    speakLine('Sparky', 'Hmm, not quite! Try again!');
+  }
+}
+
+function confirmVoiceAnswer(confirmed, time) {
+  CHALLENGE._voiceConfirming = false;
+  if (confirmed) {
+    submitVoiceAnswer(CHALLENGE._voiceConfirmNumber, time);
+  } else {
+    CHALLENGE._voiceText = 'Okay! Tap mic to try again.';
+    CHALLENGE._voiceRetries++;
   }
 }
 
@@ -818,6 +947,67 @@ function renderChallenge(ctx, canvasW, canvasH, time) {
 
     choice._bounds = { x: bx, y: by, w: btnW, h: btnH };
   });
+
+  // Mic button (if voice available)
+  if (!CHALLENGE.answered && typeof isVoiceAvailable === 'function' && isVoiceAvailable()) {
+    const micBtnW = 60;
+    const micBtnH = 40;
+    const micBtnX = panelX + panelW / 2 - micBtnW / 2;
+    const micBtnY = btnY + btnH + 15;
+    const listening = CHALLENGE._voiceListening;
+
+    ctx.fillStyle = listening ? '#F44336' : '#7E57C2';
+    roundRect(ctx, micBtnX, micBtnY, micBtnW, micBtnH, 10);
+    ctx.fill();
+
+    // Pulse animation when listening
+    if (listening) {
+      const pulse = Math.sin(time * 6) * 0.3 + 0.7;
+      ctx.strokeStyle = `rgba(244, 67, 54, ${pulse})`;
+      ctx.lineWidth = 3;
+      roundRect(ctx, micBtnX - 4, micBtnY - 4, micBtnW + 8, micBtnH + 8, 12);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = '#FFF';
+    ctx.font = '20px "Segoe UI", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(listening ? '...' : 'Say it', micBtnX + micBtnW / 2, micBtnY + micBtnH / 2 + 7);
+
+    CHALLENGE._micBounds = { x: micBtnX, y: micBtnY, w: micBtnW, h: micBtnH };
+
+    // Show voice feedback text
+    if (CHALLENGE._voiceText) {
+      ctx.font = '18px "Segoe UI", system-ui, sans-serif';
+      ctx.fillStyle = '#90CAF9';
+      ctx.fillText(CHALLENGE._voiceText, panelX + panelW / 2, micBtnY + micBtnH + 25);
+    }
+
+    // Confirmation buttons (Did you say X?)
+    if (CHALLENGE._voiceConfirming) {
+      const confY = micBtnY + micBtnH + 40;
+      const confBtnW = 80;
+      const confBtnH = 36;
+      const confGap = 20;
+      const yesX = panelX + panelW / 2 - confBtnW - confGap / 2;
+      const noX = panelX + panelW / 2 + confGap / 2;
+
+      ctx.fillStyle = '#4CAF50';
+      roundRect(ctx, yesX, confY, confBtnW, confBtnH, 8);
+      ctx.fill();
+      ctx.fillStyle = '#FFF';
+      ctx.font = 'bold 18px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText('Yes!', yesX + confBtnW / 2, confY + confBtnH / 2 + 6);
+      CHALLENGE._confirmYesBounds = { x: yesX, y: confY, w: confBtnW, h: confBtnH };
+
+      ctx.fillStyle = '#F44336';
+      roundRect(ctx, noX, confY, confBtnW, confBtnH, 8);
+      ctx.fill();
+      ctx.fillStyle = '#FFF';
+      ctx.fillText('No', noX + confBtnW / 2, confY + confBtnH / 2 + 6);
+      CHALLENGE._confirmNoBounds = { x: noX, y: confY, w: confBtnW, h: confBtnH };
+    }
+  }
 
   // Result / feedback
   if (CHALLENGE.answered && CHALLENGE.wasCorrect) {
