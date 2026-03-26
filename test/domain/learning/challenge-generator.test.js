@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { generateChallenge, bandDistribution, sampleFromDistribution } from '../../../src/domain/learning/challenge-generator.js';
+import {
+  generateChallenge, bandDistribution, sampleFromDistribution,
+  classifyAddition, classifySubtraction, classifyMultiplication,
+  classifyDivision, classifyBond, extractFeatures,
+} from '../../../src/domain/learning/challenge-generator.js';
 import { createProfile } from '../../../src/domain/learning/learner-profile.js';
 
 // Seeded PRNG for deterministic tests
@@ -244,5 +248,105 @@ describe('sampleFromDistribution', () => {
       expect(b).toBeGreaterThanOrEqual(1);
       expect(b).toBeLessThanOrEqual(10);
     }
+  });
+});
+
+describe('classifyAddition', () => {
+  it('3 + 4 → add_single', () => expect(classifyAddition(3, 4)).toBe('add_single'));
+  it('23 + 14 → add_no_carry', () => expect(classifyAddition(23, 14)).toBe('add_no_carry'));
+  it('28 + 15 → add_carry', () => expect(classifyAddition(28, 15)).toBe('add_carry'));
+  it('85 + 47 → add_carry_tens', () => expect(classifyAddition(85, 47)).toBe('add_carry_tens'));
+});
+
+describe('classifySubtraction', () => {
+  it('8 - 3 → sub_single', () => expect(classifySubtraction(8, 3)).toBe('sub_single'));
+  it('47 - 23 → sub_no_borrow', () => expect(classifySubtraction(47, 23)).toBe('sub_no_borrow'));
+  it('42 - 17 → sub_borrow', () => expect(classifySubtraction(42, 17)).toBe('sub_borrow'));
+  it('103 - 47 → sub_borrow_tens', () => expect(classifySubtraction(103, 47)).toBe('sub_borrow_tens'));
+});
+
+describe('classifyMultiplication', () => {
+  it('1 × 7 → mul_trivial', () => expect(classifyMultiplication(1, 7)).toBe('mul_trivial'));
+  it('2 × 5 → mul_trivial', () => expect(classifyMultiplication(2, 5)).toBe('mul_trivial'));
+  it('3 × 4 → mul_easy', () => expect(classifyMultiplication(3, 4)).toBe('mul_easy'));
+  it('7 × 8 → mul_hard', () => expect(classifyMultiplication(7, 8)).toBe('mul_hard'));
+});
+
+describe('classifyDivision', () => {
+  it('12 ÷ 3 → div_easy', () => expect(classifyDivision(12, 3)).toBe('div_easy'));
+  it('56 ÷ 7 → div_hard', () => expect(classifyDivision(56, 7)).toBe('div_hard'));
+  it('20 ÷ 5 → div_easy', () => expect(classifyDivision(20, 5)).toBe('div_easy'));
+});
+
+describe('classifyBond', () => {
+  it('? + 3 = 7 → bond_small', () => expect(classifyBond(7, 3)).toBe('bond_small'));
+  it('? + 8 = 15 → bond_large', () => expect(classifyBond(15, 8)).toBe('bond_large'));
+});
+
+describe('extractFeatures', () => {
+  it('28 + 15: carries=true, carriesTens=false, crossesTenBoundary=true', () => {
+    const f = extractFeatures(28, 15, 'add', 43);
+    expect(f.carries).toBe(true);
+    expect(f.carriesTens).toBe(false);
+    expect(f.crossesTenBoundary).toBe(true);
+  });
+
+  it('23 + 14: carries=false, crossesTenBoundary=true', () => {
+    const f = extractFeatures(23, 14, 'add', 37);
+    expect(f.carries).toBe(false);
+    expect(f.crossesTenBoundary).toBe(true);
+  });
+
+  it('42 - 17: borrows=true, borrowsTens=false', () => {
+    const f = extractFeatures(42, 17, 'sub', 25);
+    expect(f.borrows).toBe(true);
+    expect(f.borrowsTens).toBe(false);
+  });
+
+  it('103 - 47: borrows=true, borrowsTens=true', () => {
+    const f = extractFeatures(103, 47, 'sub', 56);
+    expect(f.borrows).toBe(true);
+    expect(f.borrowsTens).toBe(true);
+  });
+
+  it('7 × 8: bothFactorsGt5=true, maxDigitGte7=true, isSquare=false', () => {
+    const f = extractFeatures(7, 8, 'multiply', 56);
+    expect(f.bothFactorsGt5).toBe(true);
+    expect(f.maxDigitGte7).toBe(true);
+    expect(f.isSquare).toBe(false);
+  });
+
+  it('5 × 5: isSquare=true, hasFactorFive=true', () => {
+    const f = extractFeatures(5, 5, 'multiply', 25);
+    expect(f.isSquare).toBe(true);
+    expect(f.hasFactorFive).toBe(true);
+  });
+
+  it('30 + 14: hasRoundNumber=true', () => {
+    expect(extractFeatures(30, 14, 'add', 44).hasRoundNumber).toBe(true);
+  });
+
+  it('6 + 7: nearDoubles=true', () => {
+    expect(extractFeatures(6, 7, 'add', 13).nearDoubles).toBe(true);
+  });
+
+  it('3 + 2: maxDigitGte7=false, answerGte10=false', () => {
+    const f = extractFeatures(3, 2, 'add', 5);
+    expect(f.maxDigitGte7).toBe(false);
+    expect(f.answerGte10).toBe(false);
+  });
+
+  it('features object is frozen', () => {
+    expect(Object.isFrozen(extractFeatures(3, 2, 'add', 5))).toBe(true);
+  });
+});
+
+describe('generateChallenge includes subSkill and features', () => {
+  it('returns subSkill and features in challenge', () => {
+    const profile = createProfile({ mathBand: 6, spreadWidth: 0 });
+    const c = generateChallenge(profile, seededRng());
+    expect(c.subSkill).toBeTruthy();
+    expect(c.features).toBeTruthy();
+    expect(Object.isFrozen(c.features)).toBe(true);
   });
 });

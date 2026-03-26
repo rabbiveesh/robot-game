@@ -81,6 +81,14 @@ describe('learnerReducer — PUZZLE_ATTEMPTED (streak display)', () => {
     expect(state.rollingWindow.entries[0].band).toBe(6);
     expect(state.rollingWindow.entries[0].centerBand).toBe(5);
   });
+
+  it('records subSkill in window entry and operation stats', () => {
+    let state = createProfile();
+    state = learnerReducer(state, makeAttempt(true, { operation: 'add', subSkill: 'add_carry' }));
+    expect(state.rollingWindow.entries[0].subSkill).toBe('add_carry');
+    expect(state.operationStats.add.correct).toBe(1);
+    expect(state.operationStats.add_carry.correct).toBe(1);
+  });
 });
 
 describe('learnerReducer — accuracy-based promotion', () => {

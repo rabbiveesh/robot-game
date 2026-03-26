@@ -40,6 +40,8 @@
       correctAnswer: challenge.correctAnswer,
       choices: challenge.choices.map(c => ({ text: c.text, correct: c.correct })),
       _sampledBand: challenge.sampledBand,
+      _subSkill: challenge.subSkill,
+      _features: challenge.features,
       teachingData: {
         a: challenge.numbers.a,
         b: challenge.numbers.b,
@@ -55,8 +57,10 @@
   window.startChallenge = function (challengeData, onComplete) {
     challengeShownAt = performance.now();
     _oldStartChallenge(challengeData, onComplete);
-    // Stash sampledBand on CHALLENGE so event recorder can use it
+    // Stash metadata on CHALLENGE so event recorder can use it
     CHALLENGE._sampledBand = challengeData._sampledBand || profileState.mathBand;
+    CHALLENGE._subSkill = challengeData._subSkill || null;
+    CHALLENGE._features = challengeData._features || null;
   };
 
   const _oldSelectChoice = window.selectChallengeChoice;
@@ -70,17 +74,21 @@
 
     // Only record on final answer (correct, or when teaching triggers)
     if (wasCorrect || CHALLENGE.showTeaching || CHALLENGE.answered) {
-      // Use the sampledBand from the challenge if available, else fall back to profile band
       const sampledBand = CHALLENGE._sampledBand || profileState.mathBand;
       const event = {
         type: 'PUZZLE_ATTEMPTED',
         correct: wasCorrect,
         operation,
+        subSkill: CHALLENGE._subSkill || null,
         band: sampledBand,
         centerBand: profileState.mathBand,
         responseTimeMs,
         attemptNumber: CHALLENGE.attempts,
         timestamp: Date.now(),
+        features: CHALLENGE._features || null,
+        craLevelShown: null,  // populated when interaction model ships
+        answerMode: null,     // populated when interaction model ships
+        hintUsed: false,
       };
       profileState = learnerReducer(profileState, event);
       eventLog.push(event);
