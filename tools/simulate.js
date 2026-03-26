@@ -280,11 +280,13 @@ function run() {
       type: 'PUZZLE_ATTEMPTED',
       correct: sim.correct,
       operation: challenge.operation,
+      subSkill: challenge.subSkill,
       band: sampledBand,
       centerBand,
       responseTimeMs: sim.responseTimeMs,
       attemptNumber: 1,
       timestamp: Date.now(),
+      features: challenge.features,
     };
 
     const prevBand = profile.mathBand;
@@ -307,7 +309,7 @@ function run() {
     // Format output line
     const mark = sim.correct ? `${C.green}✓${C.reset}` : `${C.red}✗${C.reset}`;
     const timeStr = `${(sim.responseTimeMs / 1000).toFixed(1)}s`.padStart(5);
-    const opStr = challenge.operation.padEnd(6);
+    const skillStr = (challenge.subSkill || challenge.operation).padEnd(14);
     const qStr = challenge.question.replace(/\n/g, ' ');
     const num = `#${q}`.padStart(4);
     const bandStr = sampledBand !== centerBand
@@ -331,7 +333,7 @@ function run() {
       }
     }
 
-    console.log(`  ${num}  ${opStr} ${bandStr.padEnd(12)} ${qStr.padEnd(22)} ${mark}  ${timeStr}  ${spreadStr}${bandTag}${boredomTag}${frustTag}`);
+    console.log(`  ${num}  ${skillStr} ${bandStr.padEnd(12)} ${qStr.padEnd(22)} ${mark}  ${timeStr}  ${spreadStr}${bandTag}${boredomTag}${frustTag}`);
   }
 
   // ─── FINAL PROFILE ───────────────────────────────────
@@ -351,20 +353,28 @@ function run() {
   console.log(`  Rolling window accuracy: ${(finalAcc * 100).toFixed(0)}% (${finalCorrectInWindow}/${win.entries.length})`);
   console.log();
 
-  // Operation breakdown
-  console.log(`  ${C.bold}Operation breakdown:${C.reset}`);
-  const ops = ['add', 'sub', 'multiply', 'divide', 'number_bond'];
-  const opLabels = { add: 'add', sub: 'sub', multiply: 'mult', divide: 'div', number_bond: 'bond' };
-  for (const op of ops) {
-    const s = profile.operationStats[op];
-    if (s.attempts === 0) {
-      console.log(`    ${(opLabels[op] + ':').padEnd(7)} ${C.dim}--${C.reset}`);
-    } else {
+  // Sub-skill breakdown
+  console.log(`  ${C.bold}Sub-skill breakdown:${C.reset}`);
+  const subSkillGroups = [
+    { header: 'Addition', skills: ['add_single', 'add_no_carry', 'add_carry', 'add_carry_tens'] },
+    { header: 'Subtraction', skills: ['sub_single', 'sub_no_borrow', 'sub_borrow', 'sub_borrow_tens'] },
+    { header: 'Multiplication', skills: ['mul_trivial', 'mul_easy', 'mul_hard'] },
+    { header: 'Division', skills: ['div_easy', 'div_hard'] },
+    { header: 'Number bonds', skills: ['bond_small', 'bond_large'] },
+  ];
+  for (const group of subSkillGroups) {
+    const hasAny = group.skills.some(sk => profile.operationStats[sk]?.attempts > 0);
+    if (!hasAny) continue;
+    console.log(`    ${C.bold}${group.header}:${C.reset}`);
+    for (const sk of group.skills) {
+      const s = profile.operationStats[sk];
+      if (!s || s.attempts === 0) continue;
       const pct = ((s.correct / s.attempts) * 100).toFixed(0);
       const tag = s.correct / s.attempts >= 0.75 ? `${C.green}strength${C.reset}` :
         s.correct / s.attempts < 0.5 ? `${C.red}growth area${C.reset}` :
           `${C.yellow}developing${C.reset}`;
-      console.log(`    ${(opLabels[op] + ':').padEnd(7)} ${pct.padStart(3)}% (${s.correct}/${s.attempts})   ${tag}`);
+      const label = sk.replace(/_/g, ' ');
+      console.log(`      ${label.padEnd(16)} ${pct.padStart(3)}% (${s.correct}/${s.attempts})   ${tag}`);
     }
   }
   console.log();
