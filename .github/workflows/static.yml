@@ -48,8 +48,9 @@ jobs:
           # Copy only the game files that the browser needs
           cp index.html _site/
           cp *.js _site/ 2>/dev/null || true
-          # Copy the built learning domain bundle
+          # Copy the built bundles
           cp dist/learning-domain.js _site/dist/
+          cp dist/speech-recognition.js _site/dist/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
