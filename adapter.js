@@ -86,9 +86,14 @@
         attemptNumber: CHALLENGE.attempts,
         timestamp: Date.now(),
         features: CHALLENGE._features || null,
-        craLevelShown: null,  // populated when interaction model ships
-        answerMode: null,     // populated when interaction model ships
+        craLevelShown: null,
+        answerMode: CHALLENGE._lastVoiceResult ? 'voice' : 'choice',
         hintUsed: false,
+        voiceConfidence: CHALLENGE._lastVoiceResult?.confidence ?? null,
+        voiceHesitationMs: CHALLENGE._lastVoiceResult?.hesitationMs ?? null,
+        voiceSelfCorrected: CHALLENGE._lastVoiceResult?.selfCorrected ?? null,
+        voiceHadFillers: CHALLENGE._lastVoiceResult?.hadFillerWords ?? null,
+        voiceRetries: CHALLENGE._lastVoiceResult?.retries ?? 0,
       };
       profileState = learnerReducer(profileState, event);
       eventLog.push(event);

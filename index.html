@@ -415,6 +415,16 @@
   <script src="game.js"></script>
   <!-- Adaptive learning engine -->
   <script src="dist/learning-domain.js"></script>
+  <script src="dist/speech-recognition.js"></script>
+  <script>
+    // Expose voice functions as globals for legacy dialogue.js
+    if (window.SpeechRecognitionModule) {
+      window.isVoiceAvailable = SpeechRecognitionModule.isVoiceAvailable;
+      window.listenForNumber = SpeechRecognitionModule.listenForNumber;
+      window.stopListening = SpeechRecognitionModule.stopListening;
+      window.parseSpokenNumber = SpeechRecognitionModule.parseSpokenNumber;
+    }
+  </script>
   <script src="adapter.js"></script>
 
   <script>
