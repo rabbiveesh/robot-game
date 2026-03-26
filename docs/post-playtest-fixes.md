@@ -45,12 +45,45 @@ console.log('[Voice]', {
 - `dialogue.js` — add `CHALLENGE._voiceDebug` object that accumulates state during listening. Render it when both `P` and `V` debug flags are active.
 - `game.js` — add `V` key handler (only toggles when `debugOverlayVisible` is already true)
 
+### Pre-flight check
+
+The first time the mic button is tapped, before starting recognition, run a diagnostic and show results in the debug panel:
+
+```js
+// Check 1: Is the API available?
+const hasAPI = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+// Check 2: Is the page on HTTPS or localhost? (file:// won't work)
+const isSecureContext = window.isSecureContext;
+
+// Check 3: Is mic permission already granted/denied?
+const permState = await navigator.permissions.query({ name: 'microphone' });
+// permState.state = 'granted' | 'denied' | 'prompt'
+```
+
+Show in debug panel:
+```
+── Voice Pre-flight ─────────────
+API available: YES
+Secure context: NO (file://) ← THIS IS YOUR PROBLEM
+Mic permission: prompt
+─────────────────────────────────
+```
+
+If `isSecureContext` is false, show a visible warning on the mic button itself: "Mic needs HTTPS" — so even without the debug panel, the parent knows why it's not working.
+
+If `permState === 'denied'`, show: "Mic blocked — check browser settings"
+
 ### Acceptance
 
 - V key toggles voice debug panel (only when P overlay is visible)
+- Pre-flight diagnostic runs on first mic tap, shows API/HTTPS/permission status
+- If not secure context, mic button shows "Needs HTTPS" instead of "Say it"
+- If permission denied, mic button shows "Mic blocked"
 - Panel shows interim results updating live as the kid speaks
 - Panel shows final result, confidence, parsed number, expected answer, match
 - Console logs full voice event on every recognition result
+- Console logs pre-flight diagnostic on first mic tap
 - Panel clears when mic stops listening
 
 ## 2. Session Export
