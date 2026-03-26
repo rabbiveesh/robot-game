@@ -717,11 +717,94 @@ function handleChallengeClick(mx, my, time) {
 
   if (CHALLENGE.answered) return;
 
+  // Check mic button click
+  if (CHALLENGE._micBounds) {
+    const mb = CHALLENGE._micBounds;
+    if (mx >= mb.x && mx <= mb.x + mb.w && my >= mb.y && my <= mb.y + mb.h) {
+      handleVoiceInput(time);
+      return;
+    }
+  }
+
   for (let i = 0; i < CHALLENGE.choices.length; i++) {
     const b = CHALLENGE.choices[i]._bounds;
     if (b && mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
       selectChallengeChoice(i, time);
       return;
+    }
+  }
+}
+
+// ─── VOICE INPUT ─────────────────────────────────────────
+
+async function handleVoiceInput(time) {
+  if (CHALLENGE._voiceListening || CHALLENGE.answered) return;
+  if (typeof listenForNumber !== 'function') return;
+
+  CHALLENGE._voiceListening = true;
+  CHALLENGE._voiceText = '';
+  CHALLENGE._voiceRetries = (CHALLENGE._voiceRetries || 0);
+
+  try {
+    const result = await listenForNumber({ timeoutMs: 10000 });
+
+    CHALLENGE._voiceListening = false;
+
+    if (result.number === null) {
+      CHALLENGE._voiceText = "Didn't catch that! Tap to try again.";
+      CHALLENGE._voiceRetries++;
+      return;
+    }
+
+    if (result.confidence < 0.5) {
+      CHALLENGE._voiceText = "Didn't catch that! Tap to try again.";
+      CHALLENGE._voiceRetries++;
+      return;
+    }
+
+    // Show what we heard
+    CHALLENGE._voiceText = `You said: ${result.number}!`;
+
+    // Submit the answer
+    const correct = result.number === CHALLENGE.correctAnswer;
+
+    if (correct) {
+      CHALLENGE.answered = true;
+      CHALLENGE.wasCorrect = true;
+      CHALLENGE.celebrationStart = time;
+      recordResult('math', true);
+      speakLine('Sparky', 'Amazing! You got it!');
+    } else {
+      CHALLENGE.attempts++;
+      if (CHALLENGE.attempts >= 2) {
+        CHALLENGE.showTeaching = true;
+        CHALLENGE.answered = false;
+        recordResult('math', false);
+        speakLine('Sparky', "Let's figure it out together!");
+      } else {
+        CHALLENGE._voiceText = `${result.number}? Hmm, not quite! Try again!`;
+        speakLine('Sparky', 'Hmm, not quite! Try again!');
+      }
+    }
+
+    // Store voice metadata for adapter to pick up
+    CHALLENGE._lastVoiceResult = {
+      confidence: result.confidence,
+      hesitationMs: result.hesitationMs,
+      totalMs: result.totalMs,
+      selfCorrected: result.selfCorrected,
+      hadFillerWords: result.hadFillerWords,
+      retries: CHALLENGE._voiceRetries,
+    };
+  } catch (e) {
+    CHALLENGE._voiceListening = false;
+    if (e.message === 'timeout' || e.message === 'no-speech') {
+      CHALLENGE._voiceText = "Didn't hear anything. Tap to try again!";
+    } else if (e.message === 'not-allowed') {
+      CHALLENGE._voiceText = 'Mic not allowed. Use buttons instead!';
+      CHALLENGE._micBounds = null; // hide mic button
+    } else {
+      CHALLENGE._voiceText = 'Something went wrong. Use buttons!';
     }
   }
 }
@@ -818,6 +901,42 @@ function renderChallenge(ctx, canvasW, canvasH, time) {
 
     choice._bounds = { x: bx, y: by, w: btnW, h: btnH };
   });
+
+  // Mic button (if voice available)
+  if (!CHALLENGE.answered && typeof isVoiceAvailable === 'function' && isVoiceAvailable()) {
+    const micBtnW = 60;
+    const micBtnH = 40;
+    const micBtnX = panelX + panelW / 2 - micBtnW / 2;
+    const micBtnY = btnY + btnH + 15;
+    const listening = CHALLENGE._voiceListening;
+
+    ctx.fillStyle = listening ? '#F44336' : '#7E57C2';
+    roundRect(ctx, micBtnX, micBtnY, micBtnW, micBtnH, 10);
+    ctx.fill();
+
+    // Pulse animation when listening
+    if (listening) {
+      const pulse = Math.sin(time * 6) * 0.3 + 0.7;
+      ctx.strokeStyle = `rgba(244, 67, 54, ${pulse})`;
+      ctx.lineWidth = 3;
+      roundRect(ctx, micBtnX - 4, micBtnY - 4, micBtnW + 8, micBtnH + 8, 12);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = '#FFF';
+    ctx.font = '20px "Segoe UI", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(listening ? '...' : 'Say it', micBtnX + micBtnW / 2, micBtnY + micBtnH / 2 + 7);
+
+    CHALLENGE._micBounds = { x: micBtnX, y: micBtnY, w: micBtnW, h: micBtnH };
+
+    // Show voice feedback text
+    if (CHALLENGE._voiceText) {
+      ctx.font = '18px "Segoe UI", system-ui, sans-serif';
+      ctx.fillStyle = '#90CAF9';
+      ctx.fillText(CHALLENGE._voiceText, panelX + panelW / 2, micBtnY + micBtnH + 25);
+    }
+  }
 
   // Result / feedback
   if (CHALLENGE.answered && CHALLENGE.wasCorrect) {
