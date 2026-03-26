@@ -756,20 +756,97 @@ function handleChallengeClick(mx, my, time) {
 
 // ─── VOICE INPUT ─────────────────────────────────────────
 
+let _voicePreflightDone = false;
+let _voicePreflightResult = null;
+
+async function runVoicePreflight() {
+  if (_voicePreflightDone) return _voicePreflightResult;
+  _voicePreflightDone = true;
+
+  const hasAPI = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  const isSecure = window.isSecureContext;
+  let micPermission = 'unknown';
+  try {
+    const perm = await navigator.permissions.query({ name: 'microphone' });
+    micPermission = perm.state; // 'granted' | 'denied' | 'prompt'
+  } catch (e) { /* permissions API not available */ }
+
+  _voicePreflightResult = { hasAPI, isSecure, micPermission };
+  console.log('[Voice Preflight]', _voicePreflightResult);
+
+  // Update debug state
+  if (window._voiceDebug) {
+    Object.assign(window._voiceDebug, {
+      preflight: _voicePreflightResult,
+      status: 'preflight done',
+    });
+  }
+  return _voicePreflightResult;
+}
+
 async function handleVoiceInput(time) {
   if (CHALLENGE._voiceListening || CHALLENGE._voiceConfirming || CHALLENGE.answered) return;
   if (typeof listenForNumber !== 'function') return;
 
+  // Run pre-flight on first tap
+  const preflight = await runVoicePreflight();
+  if (!preflight.isSecure) {
+    CHALLENGE._voiceText = 'Needs HTTPS';
+    CHALLENGE._micLabel = 'Needs HTTPS';
+    return;
+  }
+  if (preflight.micPermission === 'denied') {
+    CHALLENGE._voiceText = 'Mic blocked — check browser settings';
+    CHALLENGE._micLabel = 'Mic blocked';
+    return;
+  }
+
   CHALLENGE._voiceListening = true;
   CHALLENGE._voiceText = '';
   CHALLENGE._voiceRetries = (CHALLENGE._voiceRetries || 0);
+
+  // Update debug state
+  const vd = window._voiceDebug || {};
+  vd.status = 'listening';
+  vd.interim = '';
+  vd.final = '';
+  vd.confidence = null;
+  vd.parsed = null;
+  vd.expected = CHALLENGE.correctAnswer;
+  vd.match = null;
+  vd.hesitationMs = null;
+  vd.fillers = null;
+  vd.selfCorrected = null;
 
   try {
     const result = await listenForNumber({ timeoutMs: 10000 });
 
     CHALLENGE._voiceListening = false;
 
+    // Update debug state
+    vd.status = 'result';
+    vd.final = result.transcript || '';
+    vd.confidence = result.confidence;
+    vd.parsed = result.number;
+    vd.match = result.number === CHALLENGE.correctAnswer;
+    vd.hesitationMs = result.hesitationMs;
+    vd.fillers = result.hadFillerWords ? 'yes' : 'no';
+    vd.selfCorrected = result.selfCorrected ? 'yes' : 'no';
+
+    // Console log full detail
+    console.log('[Voice]', {
+      transcript: result.transcript,
+      confidence: result.confidence,
+      parsed: result.number,
+      expected: CHALLENGE.correctAnswer,
+      hesitationMs: result.hesitationMs,
+      selfCorrected: result.selfCorrected,
+      hadFillerWords: result.hadFillerWords,
+      alternatives: result.alternatives,
+    });
+
     if (result.number === null || result.confidence < 0.5) {
+      vd.status = 'retry (low confidence)';
       CHALLENGE._voiceText = "Didn't catch that! Tap mic to try again.";
       CHALLENGE._voiceRetries++;
       return;
@@ -787,21 +864,22 @@ async function handleVoiceInput(time) {
     };
 
     if (result.confidence >= 0.8) {
-      // High confidence — auto-submit
+      vd.status = 'auto-submit';
       submitVoiceAnswer(result.number, time);
     } else {
-      // Medium confidence (0.5-0.8) — confirm first
+      vd.status = 'confirming';
       CHALLENGE._voiceConfirming = true;
       CHALLENGE._voiceConfirmNumber = result.number;
       CHALLENGE._voiceText = `Did you say ${result.number}?`;
-      // Confirmation buttons are rendered by renderChallenge and handled by handleChallengeClick
     }
   } catch (e) {
     CHALLENGE._voiceListening = false;
+    vd.status = `error: ${e.message}`;
     if (e.message === 'timeout' || e.message === 'no-speech') {
       CHALLENGE._voiceText = "Didn't hear anything. Tap mic to try again!";
     } else if (e.message === 'not-allowed') {
-      CHALLENGE._voiceText = 'Mic not allowed. Use buttons instead!';
+      CHALLENGE._voiceText = 'Mic blocked — check browser settings';
+      CHALLENGE._micLabel = 'Mic blocked';
       CHALLENGE._micBounds = null;
     } else {
       CHALLENGE._voiceText = 'Something went wrong. Use buttons!';
@@ -912,10 +990,21 @@ function renderChallenge(ctx, canvasW, canvasH, time) {
     renderDotVisual(ctx, panelX + panelW / 2, panelY + 80 + qLines.length * 38, td.a, td.b, td.op, td.answer, time);
   }
 
+  // Wrong-answer feedback (above buttons, not overlapping mic area)
+  let feedbackOffset = 0;
+  if (!CHALLENGE.answered && CHALLENGE.attempts > 0 && !CHALLENGE.showTeaching) {
+    feedbackOffset = 35;
+    ctx.font = 'bold 22px "Segoe UI", system-ui, sans-serif';
+    ctx.fillStyle = '#FF8A65';
+    ctx.textAlign = 'center';
+    const feedbackText = CHALLENGE._retryWithHint ? 'Try again! Count the dots!' : 'Hmm, not quite! Try again!';
+    ctx.fillText(feedbackText, panelX + panelW / 2, panelY + 120 + (qLines.length - 1) * 38 + hintOffset);
+  }
+
   // Choice buttons
   const btnW = Math.min(160, (panelW - 80) / 3);
   const btnH = 70;
-  const btnY = panelY + 130 + (qLines.length - 1) * 38 + hintOffset;
+  const btnY = panelY + 130 + (qLines.length - 1) * 38 + hintOffset + feedbackOffset;
   const totalBtnW = btnW * 3 + 20 * 2;
   const btnStartX = panelX + (panelW - totalBtnW) / 2;
 
@@ -950,7 +1039,7 @@ function renderChallenge(ctx, canvasW, canvasH, time) {
 
   // Mic button (if voice available)
   if (!CHALLENGE.answered && typeof isVoiceAvailable === 'function' && isVoiceAvailable()) {
-    const micBtnW = 60;
+    const micBtnW = CHALLENGE._micLabel ? 110 : 60;
     const micBtnH = 40;
     const micBtnX = panelX + panelW / 2 - micBtnW / 2;
     const micBtnY = btnY + btnH + 15;
@@ -972,7 +1061,8 @@ function renderChallenge(ctx, canvasW, canvasH, time) {
     ctx.fillStyle = '#FFF';
     ctx.font = '20px "Segoe UI", system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(listening ? '...' : 'Say it', micBtnX + micBtnW / 2, micBtnY + micBtnH / 2 + 7);
+    const micLabel = CHALLENGE._micLabel || (listening ? '...' : 'Say it');
+    ctx.fillText(micLabel, micBtnX + micBtnW / 2, micBtnY + micBtnH / 2 + 7);
 
     CHALLENGE._micBounds = { x: micBtnX, y: micBtnY, w: micBtnW, h: micBtnH };
 
@@ -1023,15 +1113,6 @@ function renderChallenge(ctx, canvasW, canvasH, time) {
     ctx.font = '16px "Segoe UI", system-ui, sans-serif';
     ctx.fillStyle = '#AAA';
     ctx.fillText('Press SPACE to continue', panelX + panelW / 2, btnY + btnH + 75);
-  } else if (CHALLENGE.attempts > 0 && !CHALLENGE.showTeaching) {
-    ctx.font = 'bold 24px "Segoe UI", system-ui, sans-serif';
-    ctx.fillStyle = '#FF8A65';
-    ctx.textAlign = 'center';
-    if (CHALLENGE._retryWithHint) {
-      ctx.fillText('Try again! Count the dots!', panelX + panelW / 2, btnY + btnH + 45);
-    } else {
-      ctx.fillText('Hmm, not quite! Try again!', panelX + panelW / 2, btnY + btnH + 45);
-    }
   }
 }
 
