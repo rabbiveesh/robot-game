@@ -232,6 +232,26 @@ const NPC_DEFS_BY_MAP = {
       spriteFn: 'mommy',
       dialogueContext: 'Mommy is at home. She loves the player and says encouraging things. She might ask a gentle math question or just give a hug.',
     },
+    {
+      id: 'kid_1',
+      name: 'Tali',
+      tileX: 6,
+      tileY: 5,
+      spriteFn: 'kid1',
+      canReceiveGifts: true,
+      neverChallenge: true,
+      dialogueContext: 'A playful kid who loves games and gets excited about everything.',
+    },
+    {
+      id: 'kid_2',
+      name: 'Noa',
+      tileX: 8,
+      tileY: 5,
+      spriteFn: 'kid2',
+      canReceiveGifts: true,
+      neverChallenge: true,
+      dialogueContext: 'A shy but curious kid who asks lots of questions.',
+    },
   ],
   lab: [
     {

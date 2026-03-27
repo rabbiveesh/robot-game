@@ -23,7 +23,9 @@ function initInput() {
 
     if (e.key === ' ' || e.key === 'Enter') {
       e.preventDefault();
-      if (GAME.state === 'PLAYING') {
+      if (GAME.state === 'INTERACTION_MENU') {
+        dismissMenu();
+      } else if (GAME.state === 'PLAYING') {
         handleInteract();
       } else if (GAME.state === 'CHALLENGE') {
         if (CHALLENGE.showTeaching) {
@@ -62,13 +64,18 @@ function initInput() {
       }
     }
 
-    // ESC toggles in-game settings
+    // Number keys for interaction menu
+    if (GAME.state === 'INTERACTION_MENU') {
+      const num = parseInt(e.key);
+      if (num >= 1 && num <= 3) {
+        selectMenuOption(num - 1);
+      }
+    }
+
+    // ESC dismisses interaction menu (settings handled by index.html overlay)
     if (e.key === 'Escape') {
-      if (GAME.state === 'SETTINGS') {
-        GAME.state = GAME._stateBeforeSettings || 'PLAYING';
-      } else if (GAME.state === 'PLAYING') {
-        GAME._stateBeforeSettings = GAME.state;
-        GAME.state = 'SETTINGS';
+      if (GAME.state === 'INTERACTION_MENU') {
+        dismissMenu();
       }
     }
 
@@ -85,14 +92,30 @@ function initInput() {
     GAME.keys[e.key] = false;
   });
 
-  // Mouse/touch for challenge buttons
+  // Mouse/touch for challenge buttons and interaction menu
   function handlePointer(e) {
-    if (GAME.state !== 'CHALLENGE') return;
     const rect = GAME.canvas.getBoundingClientRect();
     const scaleX = GAME.canvasW / rect.width;
     const scaleY = GAME.canvasH / rect.height;
-    const mx = (e.clientX - rect.left) * scaleX;
-    const my = (e.clientY - rect.top) * scaleY;
+    const px = (e.clientX - rect.left) * scaleX;
+    const py = (e.clientY - rect.top) * scaleY;
+
+    // Interaction menu clicks
+    if (GAME.state === 'INTERACTION_MENU' && INTERACTION_MENU.active) {
+      for (let i = 0; i < INTERACTION_MENU.options.length; i++) {
+        const b = INTERACTION_MENU.options[i]._bounds;
+        if (b && px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h) {
+          selectMenuOption(i);
+          return;
+        }
+      }
+      dismissMenu();
+      return;
+    }
+
+    if (GAME.state !== 'CHALLENGE') return;
+    const mx = px;
+    const my = py;
 
     if (CHALLENGE.showTeaching) {
       dismissTeaching(GAME.time);
@@ -227,6 +250,10 @@ function render() {
 
   if (CHALLENGE.active) {
     renderChallenge(ctx, w, h, GAME.time);
+  }
+
+  if (INTERACTION_MENU.active) {
+    renderInteractionMenu(ctx, w, h);
   }
 }
 

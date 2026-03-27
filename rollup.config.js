@@ -11,6 +11,15 @@ export default [
     plugins: [resolve()],
   },
   {
+    input: 'src/domain/economy/index.js',
+    output: {
+      file: 'dist/economy-domain.js',
+      format: 'iife',
+      name: 'EconomyDomain',
+    },
+    plugins: [resolve()],
+  },
+  {
     input: 'src/infrastructure/speech-recognition.js',
     output: {
       file: 'dist/speech-recognition.js',

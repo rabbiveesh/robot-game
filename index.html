@@ -443,8 +443,9 @@
   <script src="characters.js"></script>
   <script src="dialogue.js"></script>
   <script src="game.js"></script>
-  <!-- Adaptive learning engine -->
+  <!-- Adaptive learning engine + economy -->
   <script src="dist/learning-domain.js"></script>
+  <script src="dist/economy-domain.js"></script>
   <script src="dist/speech-recognition.js"></script>
   <script>
     // Expose voice functions as globals for legacy dialogue.js
@@ -624,6 +625,8 @@
     function openSettings() {
       const overlay = document.getElementById('settingsOverlay');
       overlay.style.display = 'flex';
+      GAME._stateBeforeSettings = GAME.state;
+      GAME.state = 'SETTINGS';
       // Populate with current values
       document.getElementById('settingsAiProvider').value = window.AI_PROVIDER || 'none';
       document.getElementById('settingsApiKey').value = API_KEY || '';
@@ -650,7 +653,7 @@
         saveToSlot(activeSlot);
       }
     }
-    // ESC handler for settings (in addition to game.js handler)
+    // ESC handler for settings (owns the SETTINGS state — game.js only handles INTERACTION_MENU)
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && document.getElementById('settingsOverlay').style.display === 'flex') {
         closeSettings();

@@ -679,6 +679,76 @@ function drawMommy(ctx, x, y, dir, frame, time) {
   drawHeart(ctx, cx, cy - 24 + heartBob, 5, '#E91E63');
 }
 
+// ─── KID NPCs ─────────────────────────────────────────
+
+function drawKid(ctx, x, y, dir, frame, time, hairColor, shirtColor, hairStyle) {
+  const cx = x + TILE_SIZE / 2;
+  const cy = y + TILE_SIZE / 2 + 6; // shorter — lower center
+
+  // Shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.beginPath();
+  ctx.ellipse(cx, y + TILE_SIZE - 3, 9, 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Body / shirt (shorter than adults)
+  ctx.fillStyle = shirtColor;
+  ctx.fillRect(cx - 7, cy - 1, 14, 12);
+
+  // Head (bigger relative to body)
+  ctx.fillStyle = '#FFCC80';
+  ctx.beginPath();
+  ctx.arc(cx, cy - 7, 9, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Hair
+  ctx.fillStyle = hairColor;
+  if (hairStyle === 'pigtails') {
+    ctx.beginPath();
+    ctx.arc(cx, cy - 9, 10, Math.PI * 0.85, Math.PI * 2.15);
+    ctx.fill();
+    // Pigtails
+    ctx.beginPath();
+    ctx.arc(cx - 11, cy - 5, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx + 11, cy - 5, 4, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // Short hair
+    ctx.beginPath();
+    ctx.arc(cx, cy - 9, 10, Math.PI * 0.7, Math.PI * 2.3);
+    ctx.fill();
+  }
+
+  // Eyes
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.arc(cx - 3, cy - 6, 1.5, 0, Math.PI * 2);
+  ctx.arc(cx + 3, cy - 6, 1.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Smile
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy - 3, 3, 0.1, Math.PI - 0.1);
+  ctx.stroke();
+
+  // Idle bob
+  const bob = Math.sin(time * 3) * 1;
+  ctx.fillStyle = shirtColor;
+  ctx.fillRect(cx - 7, cy - 1 + bob, 14, 12);
+}
+
+function drawKidNPC1(ctx, x, y, dir, frame, time) {
+  drawKid(ctx, x, y, dir, frame, time, '#FF7043', '#FDD835', 'pigtails'); // orange pigtails, yellow shirt
+}
+
+function drawKidNPC2(ctx, x, y, dir, frame, time) {
+  drawKid(ctx, x, y, dir, frame, time, '#6D4C41', '#66BB6A', 'short'); // brown short hair, green shirt
+}
+
 function drawHeart(ctx, x, y, size, color) {
   ctx.fillStyle = color;
   ctx.beginPath();

@@ -187,6 +187,8 @@ const SPRITE_FNS = {
   mommy: drawMommy,
   sage: drawSage,
   dog: drawDog,
+  kid1: drawKidNPC1,
+  kid2: drawKidNPC2,
 };
 
 let NPCS = [];
