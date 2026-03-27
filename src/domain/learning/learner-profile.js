@@ -213,15 +213,6 @@ export function learnerReducer(state, event) {
       });
     }
 
-    case 'TEACHING_RETRY': {
-      // Superseded by CRA tracking in PUZZLE_ATTEMPTED via hintUsed/toldMe/craLevelShown.
-      // TODO: Track which CRA representation (concrete/representational/abstract)
-      // was shown and whether the retry succeeded. This is how we advance CRA
-      // stages per operation — e.g., if concrete dots consistently lead to correct
-      // retries for addition, promote add to 'representational'. This is the
-      // core feedback loop for CRA progression and the whole point of the dial.
-      return state;
-    }
 
     case 'BEHAVIOR': {
       switch (event.signal) {

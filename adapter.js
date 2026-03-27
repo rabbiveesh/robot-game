@@ -137,7 +137,6 @@
       attemptNumber: challengeState.attempts,
       timestamp: Date.now(),
       features: ch.features || null,
-      craLevelShown: challengeState.renderHint?.craStage || null,
       answerMode: answerMode || 'choice',
       hintUsed: challengeState.hintUsed,
       toldMe: challengeState.toldMe,

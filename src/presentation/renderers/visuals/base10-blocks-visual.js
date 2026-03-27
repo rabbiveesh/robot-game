@@ -80,16 +80,14 @@ function renderBase10Blocks(ctx, a, b, op, answer, cx, cy, time) {
 
     drawNumber(startX, cy, a, rodColor1, cubeColor1);
 
-    // Show subtraction annotation
+    // Show B blocks to remove (in red, to the right)
     ctx.fillStyle = '#F44336';
     ctx.font = 'bold 18px "Segoe UI", system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`take away ${b}`, cx, cy + rodH + cubeSize + 25);
+    ctx.fillText(`take away`, cx, cy + rodH + cubeSize + 25);
 
-    // Draw the answer below
-    ctx.fillStyle = ansColor;
-    ctx.font = 'bold 18px "Segoe UI", system-ui, sans-serif';
-    ctx.fillText(`= ${answer}`, cx, cy + rodH + cubeSize + 45);
+    const bWidth = Math.max(Math.floor(b / 10) * (rodW + gap), 30);
+    drawNumber(cx - bWidth / 2, cy + rodH + cubeSize + 32, b, '#EF5350', '#EF9A9A');
 
   } else if (op === '\u00d7' || op === '*') {
     // Show a × b as 'a groups of b'
