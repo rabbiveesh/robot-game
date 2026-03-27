@@ -1,12 +1,12 @@
-# Shosh Session Analysis — Bugs & Fixes
+# Playtest Session Analysis — Bugs & Fixes
 
-**Player:** Shosh (7yo)
+**Player:** 7yo playtester
 **Session:** 2026-03-26, ~23 minutes, 21 problems across 2 sessions
 **Result:** Band 10, 94% division accuracy, system has nothing left for her
 
 ## What Happened
 
-Shosh aced the intake, promoted quickly to band 10, and spent the rest of her time doing division problems. She's 94% on division (including div_hard) but the system never tested her on the things she actually needs practice on — multiplication tables (only 1 attempt) and carrying/borrowing (zero attempts). She's at the ceiling doing the same operation on repeat.
+The playtester aced the intake, promoted quickly to band 10, and spent the rest of her time doing division problems. She's 94% on division (including div_hard) but the system never tested her on the things she actually needs practice on — multiplication tables (only 1 attempt) and carrying/borrowing (zero attempts). She's at the ceiling doing the same operation on repeat.
 
 The adaptive system correctly identified she's strong. It incorrectly concluded she's done learning.
 
@@ -52,7 +52,7 @@ profileState = createProfile({
 
 ### Problem
 
-First 4 events have response times of 94-148 seconds. Shosh wasn't thinking for 2 minutes — she walked around, explored, came back. `challengeShownAt` is set when the challenge UI opens and never resets. Any analysis that uses response time (pace adaptation, frustration detection based on slow responses, intake speed assessment) is corrupted by these outliers.
+First 4 events have response times of 94-148 seconds. The playtester wasn't thinking for 2 minutes — she walked around, explored, came back. `challengeShownAt` is set when the challenge UI opens and never resets. Any analysis that uses response time (pace adaptation, frustration detection based on slow responses, intake speed assessment) is corrupted by these outliers.
 
 ### Fix
 
@@ -84,7 +84,7 @@ Reset `challengeShownAt` when a challenge is dismissed without answering (kid wa
 
 ### Problem
 
-Shosh's scaffolding is 0.7 (high) and pace is 0.9 — set by intake and never updated. She's 94% accurate at band 10 but the system still thinks she needs heavy scaffolding because her intake response times were moderate.
+The playtester's scaffolding is 0.7 (high) and pace is 0.9 — set by intake and never updated. She's 94% accurate at band 10 but the system still thinks she needs heavy scaffolding because her intake response times were moderate.
 
 The `PUZZLE_ATTEMPTED` case in the reducer adjusts `spreadWidth` on sustained good performance but never touches `scaffolding` or `pace` (except via `BEHAVIOR` events like text_skipped and `FRUSTRATION_DETECTED`).
 
@@ -132,7 +132,7 @@ Small nudges (0.02-0.05) so it takes 10-20 problems to shift meaningfully. The i
 
 ### Problem
 
-`BAND_OPERATIONS[10] = ['divide']`. A kid at band 10 gets only division. Shosh did 17 division problems across 2 sessions. With spread 0.25, she occasionally gets band 9 multiplication, but the spread is tight because it was tightened after promotion and hasn't widened enough.
+`BAND_OPERATIONS[10] = ['divide']`. A kid at band 10 gets only division. The playtester did 17 division problems across 2 sessions. With spread 0.25, she occasionally gets band 9 multiplication, but the spread is tight because it was tightened after promotion and hasn't widened enough.
 
 She's 94% on division but has 0 attempts at carrying, borrowing, number bonds at high numbers, or multi-step problems. The system never tested whether she can do 78-39 (sub_borrow) or 47+28 (add_carry) because the band structure sends her straight to division and keeps her there.
 
@@ -173,7 +173,7 @@ if (newBand === 10 && newBand === state.mathBand) {
 }
 ```
 
-### What This Means for Shosh
+### What This Means for The playtester
 
 With these changes, at band 10 she'd get:
 - Division (her strength — still ~25% of problems for maintenance)
@@ -229,7 +229,7 @@ maxDigit: Math.max(...String(a).split('').map(Number), ...String(b).split('').ma
 
 1. **Rolling window persistence** — bug, immediate, data loss on every save/load
 2. **Response time cap** — bug, immediate, corrupts all time-based analysis
-3. **Band 9/10 multi-operation** — Shosh is stuck, she needs this now
+3. **Band 9/10 multi-operation** — The playtester is stuck, she needs this now
 4. **Scaffolding/pace adaptation** — dials are stale after intake
 5. **Faster spread widening at ceiling** — quality of life at top band
 6. **maxDigit fix** — feature data accuracy, low urgency
