@@ -1467,6 +1467,8 @@ function dismissMenu() {
 
 async function executeInteractionOption(optionType, target, playerName, time) {
   if (optionType === 'talk') {
+    const npcId = target.type === 'npc' ? target.npc?.id : target.type;
+    if (typeof window._onNpcTalked === 'function') window._onNpcTalked(npcId);
     GAME.state = 'DIALOGUE';
     if (target.type === 'robot') {
       await triggerRobotChat(playerName, time);

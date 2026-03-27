@@ -104,47 +104,47 @@
       speakLine(challengeState.context.npcName || 'Sparky', challengeState.feedback.speech);
     }
 
-    // On complete (correct or teaching), record to learning domain
-    if (challengeState.phase === 'complete' || challengeState.phase === 'teaching') {
-      const responseTimeMs = capResponseTime(performance.now() - challengeShownAt);
-      const ch = challengeState.challenge;
-      const voiceResult = challengeState.voice.lastResult;
+    // Record EVERY answer to the learning domain — first-attempt wrongs are
+    // critical signal ("this sub-skill is hard for this kid")
+    const responseTimeMs = capResponseTime(performance.now() - challengeShownAt);
+    const ch = challengeState.challenge;
+    const voiceResult = challengeState.voice.lastResult;
+    const correct = action.answer === ch.correctAnswer;
 
-      const event = {
-        type: 'PUZZLE_ATTEMPTED',
-        correct: challengeState.correct ?? false,
-        operation: ch.operation,
-        subSkill: ch.subSkill || null,
-        band: ch.sampledBand || ch.band,
-        centerBand: profileState.mathBand,
-        responseTimeMs,
-        attemptNumber: challengeState.attempts,
-        timestamp: Date.now(),
-        features: ch.features || null,
-        craLevelShown: challengeState.renderHint?.craStage || null,
-        answerMode: answerMode || 'choice',
-        hintUsed: challengeState.hintUsed,
-        voiceConfidence: voiceResult?.confidence ?? null,
-        voiceHesitationMs: voiceResult?.hesitationMs ?? null,
-        voiceSelfCorrected: voiceResult?.selfCorrected ?? null,
-        voiceHadFillers: voiceResult?.hadFillerWords ?? null,
-        voiceRetries: challengeState.voice.retries,
-      };
+    const event = {
+      type: 'PUZZLE_ATTEMPTED',
+      correct,
+      operation: ch.operation,
+      subSkill: ch.subSkill || null,
+      band: ch.sampledBand || ch.band,
+      centerBand: profileState.mathBand,
+      responseTimeMs,
+      attemptNumber: challengeState.attempts,
+      timestamp: Date.now(),
+      features: ch.features || null,
+      craLevelShown: challengeState.renderHint?.craStage || null,
+      answerMode: answerMode || 'choice',
+      hintUsed: challengeState.hintUsed,
+      voiceConfidence: voiceResult?.confidence ?? null,
+      voiceHesitationMs: voiceResult?.hesitationMs ?? null,
+      voiceSelfCorrected: voiceResult?.selfCorrected ?? null,
+      voiceHadFillers: voiceResult?.hadFillerWords ?? null,
+      voiceRetries: challengeState.voice.retries,
+    };
 
-      profileState = learnerReducer(profileState, event);
-      eventLog.push(event);
+    profileState = learnerReducer(profileState, event);
+    eventLog.push(event);
 
-      SKILL.math.band = profileState.mathBand;
-      SKILL.math.streak = profileState.streak;
+    SKILL.math.band = profileState.mathBand;
+    SKILL.math.streak = profileState.streak;
 
-      // Apply reward
-      if (challengeState.reward) {
-        DUM_DUMS += challengeState.reward.amount;
-        DUM_DUM_FLASH = time;
-      }
-
-      checkFrustration();
+    // Apply reward on completion
+    if (challengeState.reward) {
+      DUM_DUMS += challengeState.reward.amount;
+      DUM_DUM_FLASH = time;
     }
+
+    checkFrustration();
 
     // Auto-dismiss after brief visual feedback
     if (challengeState.phase === 'complete' || challengeState.phase === 'teaching') {
@@ -266,6 +266,16 @@
       SKILL.math.streak = profileState.streak;
     }
   }
+
+  // ─── EXPLORATION EVENTS ────────────────────────────────
+
+  window._onAreaEntered = function (mapId) {
+    eventLog.push({ type: 'AREA_ENTERED', mapId, timestamp: Date.now() });
+  };
+
+  window._onNpcTalked = function (npcId) {
+    eventLog.push({ type: 'NPC_TALKED', npcId, timestamp: Date.now() });
+  };
 
   // ─── BEHAVIOR TRACKING ─────────────────────────────────
 

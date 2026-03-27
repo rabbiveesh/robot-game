@@ -350,6 +350,10 @@ function executePortal(portal) {
   NPC_DEFS = NPC_DEFS_BY_MAP[portal.toMap] || [];
   initNPCs();
 
+  if (typeof window._onAreaEntered === 'function') {
+    window._onAreaEntered(portal.toMap);
+  }
+
   PLAYER.tileX = portal.toX;
   PLAYER.tileY = portal.toY;
   PLAYER.pixelX = portal.toX * TILE_SIZE;
