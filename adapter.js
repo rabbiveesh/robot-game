@@ -301,10 +301,10 @@
       }
 
       const challenge = generateIntakeQuestion(currentBand, questionIndex, Math.random);
-      challenge._context = { source: 'intake', npcName: 'Sparky' };
+      const intakeCtx = { source: 'intake', npcName: 'Sparky' };
 
       const shownAt = performance.now();
-      startChallenge(challenge, function (wasCorrect) {
+      startChallenge(challenge, intakeCtx, function (wasCorrect) {
         const responseTimeMs = performance.now() - shownAt;
         answers.push({
           band: currentBand,

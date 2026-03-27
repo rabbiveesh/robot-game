@@ -714,13 +714,13 @@ function renderDialogue(ctx, canvasW, canvasH, time) {
 
 // ─── CHALLENGE SYSTEM ────────────────────────────────────
 
-function startChallenge(challengeData, onComplete) {
+function startChallenge(challengeData, context, onComplete) {
   CHALLENGE.onComplete = onComplete || null;
+  const ctx = context || { source: 'unknown', npcName: 'Sparky' };
 
-  // All challenges go through the state machine
   if (typeof window._startChallengeFromDomain === 'function') {
-    window._startChallengeFromDomain(challengeData, challengeData._context || { source: 'unknown', npcName: 'Sparky' });
-    speakLine('Sparky', challengeData.displayText, challengeData.speechText);
+    window._startChallengeFromDomain(challengeData, ctx);
+    speakLine(ctx.npcName || 'Sparky', challengeData.displayText, challengeData.speechText);
   }
 }
 
@@ -1563,7 +1563,7 @@ async function triggerRobotChat(playerName, time) {
 
   if (doChallenge) {
     const challenge = generateMathChallenge();
-    challenge._context = { source: 'robot', npcName: 'Sparky' };
+    const challengeCtx = { source: 'robot', npcName: 'Sparky' };
 
     let intro = getPreFetchedLine();
     if (!intro) {
@@ -1573,8 +1573,8 @@ async function triggerRobotChat(playerName, time) {
     if (!intro) intro = "BEEP BOOP! My math sensors are going CRAZY! Quick, help me solve this!";
 
     startDialogue([{ speaker: 'Sparky', text: intro }], () => {
-      startChallenge(challenge, (correct) => {
-        // Reward is handled by the state machine — no awardDumDum call needed
+      startChallenge(challenge, challengeCtx, (correct) => {
+        // Reward handled by the state machine
         if (correct) {
           startDialogue([{
             speaker: 'Sparky',
@@ -1607,7 +1607,7 @@ async function triggerNPCChat(npc, playerName, time) {
 
   if (doChallenge) {
     const challenge = generateMathChallenge();
-    challenge._context = { source: 'npc', npcName: npc.name };
+    const npcCtx = { source: 'npc', npcName: npc.name };
 
     let intro = null;
     if (API_KEY) {
@@ -1617,7 +1617,7 @@ async function triggerNPCChat(npc, playerName, time) {
     if (!intro) intro = `Aha, ${playerName}! I have a challenge for you! Let's see how smart you are!`;
 
     startDialogue([{ speaker: npc.name, text: intro }], () => {
-      startChallenge(challenge, (correct) => {
+      startChallenge(challenge, npcCtx, (correct) => {
         if (correct) {
           startDialogue([{
             speaker: npc.name,
@@ -1644,13 +1644,13 @@ async function triggerNPCChat(npc, playerName, time) {
 
 async function triggerChestInteraction(playerName, time) {
   const challenge = generateMathChallenge();
-  challenge._context = { source: 'chest', npcName: 'Sparky' };
+  const chestCtx = { source: 'chest', npcName: 'Sparky' };
 
   startDialogue([{
     speaker: 'Sparky',
     text: `OOOOH a treasure chest! But it has a LOCK! We need to solve the puzzle to open it!`,
   }], () => {
-    startChallenge(challenge, (correct) => {
+    startChallenge(challenge, chestCtx, (correct) => {
       if (correct) {
         startDialogue([
           { speaker: 'Sparky', text: `YOU OPENED IT! There's a Dum Dum inside! For ME?! You're the BEST BOSS EVER!!!` },
