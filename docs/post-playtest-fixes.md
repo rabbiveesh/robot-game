@@ -1,6 +1,6 @@
 # Post-Playtest Fixes — Implementation Spec
 
-Three issues from the first real-kid playtest session.
+Issues from real-kid playtesting sessions.
 
 ## 1. Voice Input Debug Mode
 
@@ -205,3 +205,124 @@ Layout should be:
 - Wrong answer feedback ("Hmm, not quite!") appears between question and choices, not overlapping the mic
 - Mic button, voice feedback, and confirmation buttons have clear space below the choices
 - Works for all three states: first wrong, second wrong, voice wrong
+
+## 4. In-Game Settings Access
+
+### Problem
+
+If you start a game without an API key (or want to change TTS/AI provider settings), you have to delete your save and start over. There's no way to edit settings from inside the game.
+
+### Fix
+
+Add a settings button to the pause/menu state. Press `ESC` or a gear icon to open an overlay with the same settings that appear on the new game screen:
+- AI provider picker (Anthropic / Gemini)
+- API key input
+- Voice provider (Browser TTS / ElevenLabs)
+- ElevenLabs API key
+- TTS toggle
+
+The overlay pauses the game (`GAME.state = 'SETTINGS'`). Settings save to the current save slot immediately. Closing returns to `PLAYING`.
+
+### Files to change
+
+- `index.html` — extract settings form HTML into a reusable template or render in canvas
+- `game.js` — add `SETTINGS` state, ESC key handler, settings overlay rendering
+- `dialogue.js` or `adapter.js` — apply changed settings live (swap API key, toggle TTS)
+
+### Acceptance
+
+- ESC opens settings overlay during gameplay
+- Can change API key, AI provider, voice provider, TTS toggle
+- Changes apply immediately (no restart needed)
+- Settings persist to save slot
+- ESC or close button returns to game
+
+## 5. Start Screen Scrolling
+
+### Problem
+
+The new game form (name, gender, level pickers, settings accordion) is taller than the viewport on smaller screens. No scroll, so the bottom is cut off — can't reach the start button.
+
+### Fix
+
+Make the title screen container scrollable. Add `overflow-y: auto; max-height: 100vh;` to the `#titleScreen` div. The canvas area should not scroll — only the title screen form.
+
+### Files to change
+
+- `index.html` — add CSS for scrollable title screen container
+
+### Acceptance
+
+- Title screen scrolls on small viewports
+- Start button is always reachable
+- Canvas game area does not scroll during gameplay
+
+## 6. "Hmm, not quite!" Persists Between Challenges
+
+### Problem
+
+The wrong-answer feedback text ("Hmm, not quite! Try again!") from one challenge is still visible when the next challenge appears. The `CHALLENGE.attempts` counter or feedback state isn't being reset when a new challenge starts.
+
+### Fix
+
+In `startChallenge()`, explicitly reset all feedback state:
+
+```js
+CHALLENGE.attempts = 0;
+CHALLENGE._voiceText = '';
+CHALLENGE._voiceRetries = 0;
+CHALLENGE._voiceListening = false;
+CHALLENGE._voiceConfirming = false;
+CHALLENGE._lastVoiceResult = null;
+CHALLENGE._micLabel = null;
+```
+
+### Files to change
+
+- `dialogue.js` — in `startChallenge()`, reset all challenge feedback state
+
+### Acceptance
+
+- New challenge always starts clean with no leftover feedback text
+- No leftover voice state from previous challenge
+- Works across NPC → NPC transitions and chest → NPC transitions
+
+## 7. TTS Should Sync With Typewriter, Not After
+
+### Problem
+
+TTS currently speaks the line AFTER the typewriter finishes displaying the full text. This was intentional (to avoid spoiling the text before the kid reads it). But this isn't a reading game — a 4-year-old can't read. The text and speech should arrive simultaneously so the kid hears Sparky "talking" while the text appears, like subtitles.
+
+### Fix
+
+Revert the TTS timing to speak at the START of each dialogue line (when the typewriter begins), not at the end. The typewriter becomes a visual accompaniment to the speech, not the primary content delivery.
+
+In `startDialogue()`:
+```js
+// Speak the first line immediately
+if (lines.length > 0) {
+  speakLine(lines[0].speaker, lines[0].text);
+}
+```
+
+In `advanceDialogue()` (moving to next line):
+```js
+// Speak the new line immediately
+const line = DIALOGUE.lines[DIALOGUE.currentLine];
+speakLine(line.speaker, line.text);
+```
+
+Remove the `speakLine` call from `updateDialogue()` (the typewriter completion handler) and from the space-to-skip path in `advanceDialogue()`.
+
+When the user skips the typewriter (space), the text jumps to full but speech continues playing — don't restart it.
+
+### Files to change
+
+- `dialogue.js` — move `speakLine` calls to line start, not line end
+
+### Acceptance
+
+- TTS begins speaking when the typewriter starts, not when it finishes
+- Skipping the typewriter (space) shows full text but doesn't restart speech
+- Advancing to the next line cancels current speech and starts the new line's speech
+- Works for all speakers (Sparky, Mommy, Gizmo, etc.)
