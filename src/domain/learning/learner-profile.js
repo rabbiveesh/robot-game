@@ -3,6 +3,25 @@
 import { createWindow, pushEntry, accuracyAtBand, accuracyAboveBand, accuracy } from './rolling-window.js';
 import { createOperationStats, recordOperation } from './operation-stats.js';
 
+const CRA_ORDER = { concrete: 0, representational: 1, abstract: 2 };
+const CRA_NEXT = { concrete: 'representational', representational: 'abstract', abstract: 'abstract' };
+
+function countConsecutiveNoHintCorrect(window, operation, craStage) {
+  let count = 0;
+  for (let i = window.entries.length - 1; i >= 0; i--) {
+    const e = window.entries[i];
+    if (e.operation !== operation) continue;
+    if (!e.correct || e.hintUsed || e.toldMe) break;
+    if (e.craLevelShown && e.craLevelShown !== craStage) break;
+    count++;
+  }
+  return count;
+}
+
+function countRecentTellMe(window, operation) {
+  return window.entries.filter(e => e.operation === operation && e.toldMe).length;
+}
+
 export function createProfile(overrides = {}) {
   return Object.freeze({
     mathBand: 1,
@@ -85,6 +104,9 @@ export function learnerReducer(state, event) {
         band: event.band,
         centerBand: event.centerBand ?? event.band,
         responseTimeMs: event.responseTimeMs,
+        hintUsed: event.hintUsed || false,
+        toldMe: event.toldMe || false,
+        craLevelShown: event.craLevelShown || null,
         boredom,
         timestamp: event.timestamp,
       });
@@ -149,6 +171,35 @@ export function learnerReducer(state, event) {
         }
       }
 
+      // CRA stage progression per operation
+      let newCraStages = state.craStages;
+      const op = event.operation;
+
+      if (op && state.craStages[op]) {
+        if (event.correct && !event.hintUsed && !event.toldMe) {
+          // Correct without help — count consecutive no-hint successes
+          const noHintSuccesses = countConsecutiveNoHintCorrect(newWindow, op, state.craStages[op]);
+          if (noHintSuccesses >= 3 && state.craStages[op] !== 'abstract') {
+            newCraStages = Object.freeze({ ...state.craStages, [op]: CRA_NEXT[state.craStages[op]] });
+          }
+        }
+
+        if (event.hintUsed && event.correct && event.craLevelShown) {
+          // Correct but needed a hint — demote to the level that worked
+          if (CRA_ORDER[event.craLevelShown] < CRA_ORDER[state.craStages[op]]) {
+            newCraStages = Object.freeze({ ...state.craStages, [op]: event.craLevelShown });
+          }
+        }
+
+        if (event.toldMe) {
+          // Repeated tell-me → demote to concrete
+          const tellMeCount = countRecentTellMe(newWindow, op);
+          if (tellMeCount >= 2 && state.craStages[op] !== 'concrete') {
+            newCraStages = Object.freeze({ ...state.craStages, [op]: 'concrete' });
+          }
+        }
+      }
+
       return Object.freeze({
         ...state,
         streak: newStreak,
@@ -156,13 +207,14 @@ export function learnerReducer(state, event) {
         spreadWidth: newSpreadWidth,
         scaffolding: newScaffolding,
         pace: newPace,
+        craStages: newCraStages,
         rollingWindow: newWindow,
         operationStats: newStats,
       });
     }
 
     case 'TEACHING_RETRY': {
-      // After teaching mode, the kid retries — don't double-penalize.
+      // Superseded by CRA tracking in PUZZLE_ATTEMPTED via hintUsed/toldMe/craLevelShown.
       // TODO: Track which CRA representation (concrete/representational/abstract)
       // was shown and whether the retry succeeded. This is how we advance CRA
       // stages per operation — e.g., if concrete dots consistently lead to correct

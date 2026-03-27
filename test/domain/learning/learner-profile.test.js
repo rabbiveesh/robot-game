@@ -388,6 +388,93 @@ describe('learnerReducer — INTAKE_COMPLETED', () => {
   });
 });
 
+describe('learnerReducer — CRA progression', () => {
+  it('promotes CRA from concrete to representational after 3 no-hint correct', () => {
+    let state = createProfile({ craStages: Object.freeze({ add: 'concrete', sub: 'concrete', multiply: 'concrete', divide: 'concrete', number_bond: 'concrete' }) });
+    for (let i = 0; i < 3; i++) {
+      state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: false, toldMe: false }));
+    }
+    expect(state.craStages.add).toBe('representational');
+    expect(state.craStages.sub).toBe('concrete'); // unchanged
+  });
+
+  it('promotes CRA from representational to abstract after 3 no-hint correct', () => {
+    let state = createProfile({ craStages: Object.freeze({ add: 'representational', sub: 'concrete', multiply: 'concrete', divide: 'concrete', number_bond: 'concrete' }) });
+    for (let i = 0; i < 3; i++) {
+      state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: false }));
+    }
+    expect(state.craStages.add).toBe('abstract');
+  });
+
+  it('does not promote CRA above abstract', () => {
+    let state = createProfile({ craStages: Object.freeze({ add: 'abstract', sub: 'concrete', multiply: 'concrete', divide: 'concrete', number_bond: 'concrete' }) });
+    for (let i = 0; i < 5; i++) {
+      state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: false }));
+    }
+    expect(state.craStages.add).toBe('abstract');
+  });
+
+  it('demotes CRA when hint was needed and succeeded at lower level', () => {
+    let state = createProfile({ craStages: Object.freeze({ add: 'abstract', sub: 'concrete', multiply: 'concrete', divide: 'concrete', number_bond: 'concrete' }) });
+    state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: true, craLevelShown: 'representational' }));
+    expect(state.craStages.add).toBe('representational');
+  });
+
+  it('demotes CRA to concrete after 2 tell-me events for same operation', () => {
+    let state = createProfile({ craStages: Object.freeze({ add: 'abstract', sub: 'concrete', multiply: 'concrete', divide: 'concrete', number_bond: 'concrete' }) });
+    state = learnerReducer(state, makeAttempt(false, { operation: 'add', toldMe: true }));
+    expect(state.craStages.add).toBe('abstract'); // 1 tell-me: no change
+    state = learnerReducer(state, makeAttempt(false, { operation: 'add', toldMe: true }));
+    expect(state.craStages.add).toBe('concrete'); // 2 tell-me: demote
+  });
+
+  it('CRA stages are tracked per-operation independently', () => {
+    let state = createProfile({ craStages: Object.freeze({ add: 'concrete', sub: 'concrete', multiply: 'concrete', divide: 'concrete', number_bond: 'concrete' }) });
+    for (let i = 0; i < 3; i++) {
+      state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: false }));
+    }
+    for (let i = 0; i < 3; i++) {
+      state = learnerReducer(state, makeAttempt(true, { operation: 'sub', hintUsed: false }));
+    }
+    expect(state.craStages.add).toBe('representational');
+    expect(state.craStages.sub).toBe('representational');
+    expect(state.craStages.multiply).toBe('concrete'); // untouched
+  });
+
+  it('hint-assisted correct at same CRA level does not demote', () => {
+    let state = createProfile({ craStages: Object.freeze({ add: 'representational', sub: 'concrete', multiply: 'concrete', divide: 'concrete', number_bond: 'concrete' }) });
+    state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: true, craLevelShown: 'representational' }));
+    expect(state.craStages.add).toBe('representational'); // same level, no demote
+  });
+
+  it('no-hint streak resets on a wrong answer', () => {
+    let state = createProfile({ craStages: Object.freeze({ add: 'concrete', sub: 'concrete', multiply: 'concrete', divide: 'concrete', number_bond: 'concrete' }) });
+    state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: false }));
+    state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: false }));
+    state = learnerReducer(state, makeAttempt(false, { operation: 'add' })); // breaks streak
+    state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: false }));
+    expect(state.craStages.add).toBe('concrete'); // only 1 after the break, not 3
+  });
+
+  it('no-hint streak resets on a hint-used answer', () => {
+    let state = createProfile({ craStages: Object.freeze({ add: 'concrete', sub: 'concrete', multiply: 'concrete', divide: 'concrete', number_bond: 'concrete' }) });
+    state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: false }));
+    state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: false }));
+    state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: true, craLevelShown: 'concrete' })); // breaks streak
+    state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: false }));
+    expect(state.craStages.add).toBe('concrete'); // streak broken by hint use
+  });
+
+  it('window entries include hintUsed, toldMe, craLevelShown', () => {
+    let state = createProfile();
+    state = learnerReducer(state, makeAttempt(true, { operation: 'add', hintUsed: true, toldMe: false, craLevelShown: 'representational' }));
+    const entry = state.rollingWindow.entries[0];
+    expect(entry.hintUsed).toBe(true);
+    expect(entry.toldMe).toBe(false);
+    expect(entry.craLevelShown).toBe('representational');
+  });
+});
+
 describe('learnerReducer — unknown event', () => {
   it('returns state unchanged', () => {
     const s0 = createProfile();
