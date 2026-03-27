@@ -56,9 +56,19 @@ function initInput() {
 
     // Toggle TTS at runtime
     if (e.key === 't' || e.key === 'T') {
-      if (GAME.state !== 'TITLE') {
+      if (GAME.state !== 'TITLE' && GAME.state !== 'SETTINGS') {
         TTS_ENABLED = !TTS_ENABLED;
         if (!TTS_ENABLED) stopSpeech();
+      }
+    }
+
+    // ESC toggles in-game settings
+    if (e.key === 'Escape') {
+      if (GAME.state === 'SETTINGS') {
+        GAME.state = GAME._stateBeforeSettings || 'PLAYING';
+      } else if (GAME.state === 'PLAYING') {
+        GAME._stateBeforeSettings = GAME.state;
+        GAME.state = 'SETTINGS';
       }
     }
 
