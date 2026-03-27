@@ -301,22 +301,10 @@
       }
 
       const challenge = generateIntakeQuestion(currentBand, questionIndex, Math.random);
-      const challengeData = {
-        type: 'math',
-        question: challenge.question,
-        correctAnswer: challenge.correctAnswer,
-        choices: challenge.choices.map(c => ({ text: c.text, correct: c.correct })),
-        teachingData: {
-          a: challenge.numbers.a,
-          b: challenge.numbers.b,
-          op: challenge.numbers.op,
-          answer: challenge.correctAnswer,
-        },
-      };
+      challenge._context = { source: 'intake', npcName: 'Sparky' };
 
       const shownAt = performance.now();
-      // Use the legacy startChallenge but with our own onComplete
-      _oldStartChallenge(challengeData, function (wasCorrect) {
+      startChallenge(challenge, function (wasCorrect) {
         const responseTimeMs = performance.now() - shownAt;
         answers.push({
           band: currentBand,

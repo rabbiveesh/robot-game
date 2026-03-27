@@ -717,72 +717,17 @@ function renderDialogue(ctx, canvasW, canvasH, time) {
 function startChallenge(challengeData, onComplete) {
   CHALLENGE.onComplete = onComplete || null;
 
-  // If this is a domain challenge object (has displayText), use the state machine
-  if (challengeData.displayText && typeof window._startChallengeFromDomain === 'function') {
+  // All challenges go through the state machine
+  if (typeof window._startChallengeFromDomain === 'function') {
     window._startChallengeFromDomain(challengeData, challengeData._context || { source: 'unknown', npcName: 'Sparky' });
     speakLine('Sparky', challengeData.displayText, challengeData.speechText);
-    return;
   }
-
-  // Legacy path (intake quiz, old-format challenges)
-  CHALLENGE.active = true;
-  CHALLENGE.type = challengeData.type || 'math';
-  CHALLENGE.question = challengeData.question || challengeData.displayText;
-  CHALLENGE.correctAnswer = challengeData.correctAnswer;
-  CHALLENGE.choices = challengeData.choices;
-  CHALLENGE.selectedIndex = -1;
-  CHALLENGE.answered = false;
-  CHALLENGE.wasCorrect = false;
-  CHALLENGE.attempts = 0;
-  CHALLENGE.celebrationStart = 0;
-  CHALLENGE.showTeaching = false;
-  CHALLENGE.teachingData = challengeData.teachingData || null;
-  CHALLENGE._voiceText = '';
-  CHALLENGE._voiceRetries = 0;
-  CHALLENGE._voiceListening = false;
-  CHALLENGE._voiceConfirming = false;
-  CHALLENGE._lastVoiceResult = null;
-  CHALLENGE._micLabel = null;
-
-  speakLine('Sparky', (challengeData.question || '').replace('\n', '. '));
 }
 
 function selectChallengeChoice(index, time) {
   if (CHALLENGE.answered) return;
-
-  // If challenge state machine is active, dispatch through it
-  if (window._challengeState && typeof window._onChallengeAnswer === 'function') {
-    const answer = Number(CHALLENGE.choices[index]?.text);
-    window._onChallengeAnswer(answer, time, 'choice');
-    return;
-  }
-
-  // Legacy path (intake quiz)
-  CHALLENGE.selectedIndex = index;
-  const choice = CHALLENGE.choices[index];
-
-  if (choice.correct) {
-    CHALLENGE.answered = true;
-    CHALLENGE.wasCorrect = true;
-    CHALLENGE.celebrationStart = time;
-    recordResult(CHALLENGE.type, true);
-    speakLine('Sparky', 'Amazing! You got it!');
-  } else {
-    CHALLENGE.attempts++;
-    if (CHALLENGE.attempts >= 2) {
-      // Hints/teaching disabled — current dot system doesn't scale past band 3.
-      // Will reintroduce with proper CRA-aware representations (tens bars,
-      // number lines, base-10 blocks) that actually help at higher bands.
-      // For now, just mark as answered-wrong and move on.
-      CHALLENGE.answered = true;
-      CHALLENGE.wasCorrect = false;
-      recordResult(CHALLENGE.type, false);
-    } else {
-      // First wrong: encourage retry
-      CHALLENGE.selectedIndex = -1;
-      speakLine('Sparky', 'Hmm, not quite! Try again!');
-    }
-  }
+  const answer = Number(CHALLENGE.choices[index]?.text);
+  window._onChallengeAnswer(answer, time, 'choice');
 }
 
 function dismissTeaching(time) {
