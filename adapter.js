@@ -10,6 +10,10 @@
     accuracy, operationAccuracy, avgResponseTime, createWindow,
   } = window.LearningDomain;
 
+  const {
+    createChallengeState, challengeReducer,
+  } = window.ChallengeDomain;
+
   // ─── ADAPTIVE STATE ─────────────────────────────────────
 
   let profileState = createProfile();
@@ -60,135 +64,181 @@
   // Expose voice debug state for dialogue.js to write into
   window._voiceDebug = voiceDebugState;
 
-  // ─── MONKEY-PATCH: CHALLENGE GENERATION ─────────────────
+  // ─── CHALLENGE STATE MACHINE ────────────────────────────
+  // Single source of truth for the challenge lifecycle.
+  // Replaces all monkey-patches. Both click and voice go through here.
 
+  let challengeState = null;
+  window._challengeState = null; // exposed for renderChallenge to read
+
+  // Generate a challenge and create the lifecycle state
   const _oldGenerateMath = window.generateMathChallenge;
   window.generateMathChallenge = function () {
     const challenge = generateChallenge(profileState, Math.random);
-    // Convert to the legacy format expected by startChallenge
-    // Stash sampledBand on CHALLENGE for the event recorder
-    return {
-      type: 'math',
-      question: challenge.question,
-      correctAnswer: challenge.correctAnswer,
-      choices: challenge.choices.map(c => ({ text: c.text, correct: c.correct })),
-      _sampledBand: challenge.sampledBand,
-      _subSkill: challenge.subSkill,
-      _features: challenge.features,
-      teachingData: {
-        a: challenge.numbers.a,
-        b: challenge.numbers.b,
-        op: challenge.numbers.op,
-        answer: challenge.correctAnswer,
-      },
-    };
+    return challenge; // return the full domain object, not legacy format
   };
 
-  // ─── MONKEY-PATCH: CHALLENGE SELECTION ──────────────────
-
-  const _oldStartChallenge = window.startChallenge;
-  window.startChallenge = function (challengeData, onComplete) {
+  // Start a challenge via the state machine
+  window._startChallengeFromDomain = function (challenge, context) {
     challengeShownAt = performance.now();
-    _oldStartChallenge(challengeData, onComplete);
-    // Stash metadata on CHALLENGE so event recorder can use it
-    CHALLENGE._sampledBand = challengeData._sampledBand || profileState.mathBand;
-    CHALLENGE._subSkill = challengeData._subSkill || null;
-    CHALLENGE._features = challengeData._features || null;
+    challengeState = createChallengeState(challenge, context);
+    window._challengeState = challengeState;
+
+    // Sync to legacy CHALLENGE object for rendering (temporary bridge)
+    syncToLegacyChallenge(challengeState, challenge);
   };
 
-  const _oldSelectChoice = window.selectChallengeChoice;
-  window.selectChallengeChoice = function (index, time) {
-    const responseTimeMs = capResponseTime(performance.now() - challengeShownAt);
-    const choice = CHALLENGE.choices[index];
-    const wasCorrect = choice?.correct;
-    const operation = mapOpToOperation(CHALLENGE.teachingData?.op);
+  // Handle an answer (from either button click or voice)
+  window._onChallengeAnswer = function (answer, time, answerMode) {
+    if (!challengeState || challengeState.phase === 'complete') return;
 
-    _oldSelectChoice(index, time);
+    const prevPhase = challengeState.phase;
+    challengeState = challengeReducer(challengeState, { type: 'ANSWER_SUBMITTED', answer });
+    window._challengeState = challengeState;
 
-    // Only record on final answer (correct, or when teaching triggers)
-    if (wasCorrect || CHALLENGE.showTeaching || CHALLENGE.answered) {
-      const sampledBand = CHALLENGE._sampledBand || profileState.mathBand;
+    // Sync to legacy globals
+    syncToLegacyChallenge(challengeState);
+
+    // Speak feedback
+    if (challengeState.feedback) {
+      speakLine(challengeState.context.npcName || 'Sparky', challengeState.feedback.speech);
+    }
+
+    // On complete (correct or teaching), record to learning domain
+    if (challengeState.phase === 'complete' || challengeState.phase === 'teaching') {
+      const responseTimeMs = capResponseTime(performance.now() - challengeShownAt);
+      const ch = challengeState.challenge;
+      const voiceResult = challengeState.voice.lastResult;
+
       const event = {
         type: 'PUZZLE_ATTEMPTED',
-        correct: wasCorrect,
-        operation,
-        subSkill: CHALLENGE._subSkill || null,
-        band: sampledBand,
+        correct: challengeState.correct ?? false,
+        operation: ch.operation,
+        subSkill: ch.subSkill || null,
+        band: ch.sampledBand || ch.band,
         centerBand: profileState.mathBand,
         responseTimeMs,
-        attemptNumber: CHALLENGE.attempts,
+        attemptNumber: challengeState.attempts,
         timestamp: Date.now(),
-        features: CHALLENGE._features || null,
-        craLevelShown: null,
-        answerMode: CHALLENGE._lastVoiceResult ? 'voice' : 'choice',
-        hintUsed: false,
-        voiceConfidence: CHALLENGE._lastVoiceResult?.confidence ?? null,
-        voiceHesitationMs: CHALLENGE._lastVoiceResult?.hesitationMs ?? null,
-        voiceSelfCorrected: CHALLENGE._lastVoiceResult?.selfCorrected ?? null,
-        voiceHadFillers: CHALLENGE._lastVoiceResult?.hadFillerWords ?? null,
-        voiceRetries: CHALLENGE._lastVoiceResult?.retries ?? 0,
+        features: ch.features || null,
+        craLevelShown: challengeState.renderHint?.craStage || null,
+        answerMode: answerMode || 'choice',
+        hintUsed: challengeState.hintUsed,
+        voiceConfidence: voiceResult?.confidence ?? null,
+        voiceHesitationMs: voiceResult?.hesitationMs ?? null,
+        voiceSelfCorrected: voiceResult?.selfCorrected ?? null,
+        voiceHadFillers: voiceResult?.hadFillerWords ?? null,
+        voiceRetries: challengeState.voice.retries,
       };
+
       profileState = learnerReducer(profileState, event);
       eventLog.push(event);
 
-      // Sync band back to legacy SKILL for display
       SKILL.math.band = profileState.mathBand;
       SKILL.math.streak = profileState.streak;
 
-      // Check frustration after each attempt
+      // Apply reward
+      if (challengeState.reward) {
+        DUM_DUMS += challengeState.reward.amount;
+        DUM_DUM_FLASH = time;
+      }
+
       checkFrustration();
     }
-  };
 
-  // Voice answer submission — called by handleVoiceInput in dialogue.js
-  // This is the proper path through the reducer, unlike the legacy recordResult
-  window._submitVoiceAnswer = function (number, correct, time) {
-    const operation = mapOpToOperation(CHALLENGE.teachingData?.op);
-    const sampledBand = CHALLENGE._sampledBand || profileState.mathBand;
-    const voiceResult = CHALLENGE._lastVoiceResult || {};
-
-    // Update legacy state (same as selectChallengeChoice path)
-    if (correct) {
-      CHALLENGE.answered = true;
-      CHALLENGE.wasCorrect = true;
-      CHALLENGE.celebrationStart = time;
-    } else {
-      CHALLENGE.attempts++;
-      if (CHALLENGE.attempts >= 2) {
-        CHALLENGE.showTeaching = true;
-        CHALLENGE.answered = false;
-      }
+    // Auto-dismiss after brief visual feedback
+    if (challengeState.phase === 'complete' || challengeState.phase === 'teaching') {
+      autoDismissChallenge(challengeState.correct, challengeState.phase === 'complete' && challengeState.correct ? 800 : 400);
     }
-
-    const event = {
-      type: 'PUZZLE_ATTEMPTED',
-      correct,
-      operation,
-      subSkill: CHALLENGE._subSkill || null,
-      band: sampledBand,
-      centerBand: profileState.mathBand,
-      responseTimeMs: capResponseTime(voiceResult.totalMs || (performance.now() - challengeShownAt)),
-      attemptNumber: CHALLENGE.attempts,
-      timestamp: Date.now(),
-      features: CHALLENGE._features || null,
-      craLevelShown: null,
-      answerMode: 'voice',
-      hintUsed: false,
-      voiceConfidence: voiceResult.confidence ?? null,
-      voiceHesitationMs: voiceResult.hesitationMs ?? null,
-      voiceSelfCorrected: voiceResult.selfCorrected ?? null,
-      voiceHadFillers: voiceResult.hadFillerWords ?? null,
-      voiceRetries: voiceResult.retries ?? 0,
-    };
-
-    profileState = learnerReducer(profileState, event);
-    eventLog.push(event);
-
-    SKILL.math.band = profileState.mathBand;
-    SKILL.math.streak = profileState.streak;
-
-    checkFrustration();
   };
+
+  // Voice actions go through the challenge reducer
+  window._onVoiceAction = function (action) {
+    if (!challengeState) return;
+    challengeState = challengeReducer(challengeState, action);
+    window._challengeState = challengeState;
+    syncToLegacyChallenge(challengeState);
+
+    // Speak voice text changes
+    if (challengeState.voice.text?.speech) {
+      speakLine('Sparky', challengeState.voice.text.speech);
+    }
+  };
+
+  // Auto-dismiss: fire onComplete after brief visual feedback, no Space needed
+  function autoDismissChallenge(wasCorrect, delayMs) {
+    setTimeout(() => {
+      if (CHALLENGE.onComplete) {
+        const cb = CHALLENGE.onComplete;
+        CHALLENGE.onComplete = null;
+        CHALLENGE.active = false;
+        challengeState = null;
+        window._challengeState = null;
+        // Fire callback first — it may start a new dialogue/challenge
+        cb(wasCorrect);
+        // Only return to PLAYING if the callback didn't change state
+        if (GAME.state === 'CHALLENGE') {
+          GAME.state = 'PLAYING';
+        }
+      }
+    }, delayMs);
+  }
+
+  // Teaching complete
+  window._onTeachingComplete = function () {
+    if (!challengeState) return;
+    challengeState = challengeReducer(challengeState, { type: 'TEACHING_COMPLETE' });
+    window._challengeState = challengeState;
+    syncToLegacyChallenge(challengeState);
+    autoDismissChallenge(false, 400);
+  };
+
+  // Show-me scaffold
+  window._onShowMe = function () {
+    if (!challengeState) return;
+    challengeState = challengeReducer(challengeState, { type: 'SHOW_ME' });
+    window._challengeState = challengeState;
+    syncToLegacyChallenge(challengeState);
+  };
+
+  // Tell-me scaffold
+  window._onTellMe = function () {
+    if (!challengeState) return;
+    challengeState = challengeReducer(challengeState, { type: 'TELL_ME' });
+    window._challengeState = challengeState;
+    syncToLegacyChallenge(challengeState);
+    if (challengeState.feedback?.speech) {
+      speakLine('Sparky', challengeState.feedback.speech);
+    }
+  };
+
+  // Sync challenge state → legacy CHALLENGE globals (bridge for renderChallenge)
+  function syncToLegacyChallenge(cs, challenge) {
+    if (!cs) return;
+    const ch = challenge || cs.challenge;
+    CHALLENGE.active = cs.phase !== 'complete';
+    CHALLENGE.type = 'math';
+    CHALLENGE.question = cs.question.display;
+    CHALLENGE.correctAnswer = ch.correctAnswer;
+    CHALLENGE.choices = ch.choices ? ch.choices.map(c => ({ text: c.text, correct: c.correct })) : [];
+    CHALLENGE.selectedIndex = -1;
+    CHALLENGE.answered = cs.phase === 'complete';
+    CHALLENGE.wasCorrect = cs.correct === true;
+    CHALLENGE.attempts = cs.attempts;
+    CHALLENGE.showTeaching = cs.phase === 'teaching';
+    CHALLENGE.teachingData = ch.numbers ? { a: ch.numbers.a, b: ch.numbers.b, op: ch.numbers.op, answer: ch.correctAnswer } : null;
+    CHALLENGE.celebrationStart = cs.phase === 'complete' && cs.correct ? GAME.time : 0;
+    CHALLENGE._retryWithHint = cs.hintUsed;
+    // Voice state
+    CHALLENGE._voiceListening = cs.voice.listening;
+    CHALLENGE._voiceConfirming = cs.voice.confirming;
+    CHALLENGE._voiceConfirmNumber = cs.voice.confirmNumber;
+    CHALLENGE._voiceText = cs.voice.text?.display || '';
+    CHALLENGE._voiceRetries = cs.voice.retries;
+    CHALLENGE._lastVoiceResult = cs.voice.lastResult;
+    CHALLENGE._micLabel = null;
+    CHALLENGE._micBounds = null;
+  }
 
   function mapOpToOperation(op) {
     if (!op) return 'add';
@@ -276,22 +326,10 @@
       }
 
       const challenge = generateIntakeQuestion(currentBand, questionIndex, Math.random);
-      const challengeData = {
-        type: 'math',
-        question: challenge.question,
-        correctAnswer: challenge.correctAnswer,
-        choices: challenge.choices.map(c => ({ text: c.text, correct: c.correct })),
-        teachingData: {
-          a: challenge.numbers.a,
-          b: challenge.numbers.b,
-          op: challenge.numbers.op,
-          answer: challenge.correctAnswer,
-        },
-      };
+      const intakeCtx = { source: 'intake', npcName: 'Sparky' };
 
       const shownAt = performance.now();
-      // Use the legacy startChallenge but with our own onComplete
-      _oldStartChallenge(challengeData, function (wasCorrect) {
+      startChallenge(challenge, intakeCtx, function (wasCorrect) {
         const responseTimeMs = performance.now() - shownAt;
         answers.push({
           band: currentBand,
@@ -301,8 +339,8 @@
         });
         currentBand = nextIntakeBand(currentBand, wasCorrect, ceiling);
         questionIndex++;
-        // Small delay then next question
-        setTimeout(askNext, 300);
+        // Next question — auto-dismiss provides the delay
+        askNext();
       });
       GAME.state = 'CHALLENGE';
     }
