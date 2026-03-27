@@ -45,19 +45,28 @@ describe('challenge-generator', () => {
     expect(ops.has('+')).toBe(true);
   });
 
-  it('generates multiplication for band 9 (tight spread)', () => {
+  it('generates mixed ops for band 9 (tight spread)', () => {
     const profile = createProfile({ mathBand: 9, spreadWidth: 0 });
-    const c = generateChallenge(profile, seededRng());
-    expect(c.operation).toBe('multiply');
-    expect(c.numbers.op).toBe('\u00d7');
+    const ops = new Set();
+    for (let i = 0; i < 50; i++) {
+      ops.add(generateChallenge(profile, seededRng(i)).operation);
+    }
+    // Band 9 now has add, sub, multiply
+    expect(ops.size).toBeGreaterThanOrEqual(2);
   });
 
-  it('generates division for band 10 (tight spread)', () => {
+  it('generates mixed ops including division for band 10 (tight spread)', () => {
     const profile = createProfile({ mathBand: 10, spreadWidth: 0 });
-    const c = generateChallenge(profile, seededRng());
-    expect(c.operation).toBe('divide');
-    expect(c.numbers.op).toBe('\u00f7');
-    expect(c.numbers.a / c.numbers.b).toBe(c.correctAnswer);
+    const ops = new Set();
+    for (let i = 0; i < 100; i++) {
+      const c = generateChallenge(profile, seededRng(i));
+      ops.add(c.operation);
+      if (c.operation === 'divide') {
+        expect(c.numbers.a / c.numbers.b).toBe(c.correctAnswer);
+      }
+    }
+    expect(ops.has('divide')).toBe(true);
+    expect(ops.size).toBeGreaterThanOrEqual(3);
   });
 
   it('always has exactly 3 choices', () => {
@@ -348,5 +357,49 @@ describe('generateChallenge includes subSkill and features', () => {
     expect(c.subSkill).toBeTruthy();
     expect(c.features).toBeTruthy();
     expect(Object.isFrozen(c.features)).toBe(true);
+  });
+});
+
+describe('multi-operation bands', () => {
+  it('band 10 generates all four operations', () => {
+    const ops = new Set();
+    const profile = createProfile({ mathBand: 10, spreadWidth: 0 });
+    for (let i = 0; i < 200; i++) {
+      const c = generateChallenge(profile, seededRng(i));
+      ops.add(c.operation);
+    }
+    expect(ops.has('add')).toBe(true);
+    expect(ops.has('sub')).toBe(true);
+    expect(ops.has('multiply')).toBe(true);
+    expect(ops.has('divide')).toBe(true);
+  });
+
+  it('band 9 generates add, sub, and multiply', () => {
+    const ops = new Set();
+    const profile = createProfile({ mathBand: 9, spreadWidth: 0 });
+    for (let i = 0; i < 200; i++) {
+      const c = generateChallenge(profile, seededRng(i));
+      ops.add(c.operation);
+    }
+    expect(ops.has('add')).toBe(true);
+    expect(ops.has('sub')).toBe(true);
+    expect(ops.has('multiply')).toBe(true);
+  });
+});
+
+describe('maxDigit fix', () => {
+  it('maxDigit for 144 / 12 is 4 (not 14)', () => {
+    const f = extractFeatures(144, 12, 'divide', 12);
+    expect(f.maxDigit).toBe(4);
+  });
+
+  it('maxDigit for 7 * 8 is 8', () => {
+    const f = extractFeatures(7, 8, 'multiply', 56);
+    expect(f.maxDigit).toBe(8);
+  });
+
+  it('maxDigit for 23 + 14 is 4', () => {
+    const f = extractFeatures(23, 14, 'add', 37);
+    expect(f.maxDigit).toBe(4);
   });
 });

@@ -453,8 +453,11 @@ let _elevenLabsAudio = null;
 function speakLine(speaker, text) {
   if (!TTS_ENABLED) return;
 
-  // Clean text — strip emojis and special chars that sound weird spoken
-  const clean = text.replace(/[🤖🚀⭐🌟🍭📍#]/g, '').replace(/\*[^*]+\*/g, '').trim();
+  // Clean text — replace math symbols with words, strip emojis and special chars
+  const clean = text
+    .replace(/×/g, 'times').replace(/÷/g, 'divided by')
+    .replace(/\+/g, ' plus ').replace(/ - /g, ' minus ')
+    .replace(/[🤖🚀⭐🌟🍭📍#]/g, '').replace(/\*[^*]+\*/g, '').trim();
   if (!clean) return;
 
   if (window.VOICE_PROVIDER === 'elevenlabs' && window.ELEVENLABS_KEY) {
@@ -558,16 +561,19 @@ function startDialogue(lines, onComplete) {
   DIALOGUE.charTimer = 0;
   DIALOGUE.waitingForInput = false;
   DIALOGUE.onComplete = onComplete || null;
+
+  // Speak the first line as typewriter starts (subtitles mode — kid hears while reading)
+  if (lines.length > 0) {
+    speakLine(lines[0].speaker, lines[0].text);
+  }
 }
 
 function advanceDialogue() {
   if (!DIALOGUE.active) return;
   if (!DIALOGUE.waitingForInput) {
-    // Skip typewriter — show full line and speak it now
-    const line = DIALOGUE.lines[DIALOGUE.currentLine];
-    DIALOGUE.charIndex = line.text.length;
+    // Skip typewriter — show full line, speech is already playing (don't restart)
+    DIALOGUE.charIndex = DIALOGUE.lines[DIALOGUE.currentLine].text.length;
     DIALOGUE.waitingForInput = true;
-    speakLine(line.speaker, line.text);
     return;
   }
   DIALOGUE.currentLine++;
@@ -580,6 +586,10 @@ function advanceDialogue() {
   DIALOGUE.charIndex = 0;
   DIALOGUE.charTimer = 0;
   DIALOGUE.waitingForInput = false;
+
+  // Speak the new line as typewriter starts
+  const line = DIALOGUE.lines[DIALOGUE.currentLine];
+  speakLine(line.speaker, line.text);
 }
 
 function updateDialogue(dt) {
@@ -590,10 +600,8 @@ function updateDialogue(dt) {
     DIALOGUE.charTimer -= DIALOGUE.charSpeed;
     DIALOGUE.charIndex++;
   }
-  if (DIALOGUE.charIndex >= line.text.length && !DIALOGUE.waitingForInput) {
+  if (DIALOGUE.charIndex >= line.text.length) {
     DIALOGUE.waitingForInput = true;
-    // Speak after text is fully visible, not before
-    speakLine(line.speaker, line.text);
   }
 }
 
@@ -657,7 +665,15 @@ function startChallenge(challengeData, onComplete) {
   CHALLENGE.teachingData = challengeData.teachingData || null;
   CHALLENGE.onComplete = onComplete || null;
 
-  // Read the question aloud
+  // Reset all voice/feedback state from previous challenge
+  CHALLENGE._voiceText = '';
+  CHALLENGE._voiceRetries = 0;
+  CHALLENGE._voiceListening = false;
+  CHALLENGE._voiceConfirming = false;
+  CHALLENGE._lastVoiceResult = null;
+  CHALLENGE._micLabel = null;
+
+  // Speak the question as the typewriter starts (subtitles mode)
   speakLine('Sparky', challengeData.question.replace('\n', '. '));
 }
 
@@ -1368,15 +1384,15 @@ async function triggerRobotChat(playerName, time) {
     startDialogue([{ speaker: 'Sparky', text: intro }], () => {
       startChallenge(challenge, (correct) => {
         if (correct) {
-          startDialogue([{
-            speaker: 'Sparky',
-            text: `WOW ${playerName}! You are SO SMART! My circuits are exploding with happiness!`,
-          }]);
-        } else {
           awardDumDum(time);
           startDialogue([{
             speaker: 'Sparky',
-            text: `Ohhh I got confused! Sorry boss! Mmmmm this Dum Dum is SO GOOD! *crunch crunch* Now I know the answer!`,
+            text: `WOW ${playerName}! You are SO SMART! Here, have a Dum Dum! You earned it!`,
+          }]);
+        } else {
+          startDialogue([{
+            speaker: 'Sparky',
+            text: `Hmm, that's okay boss! We'll figure it out together next time!`,
           }]);
         }
       });
@@ -1411,15 +1427,15 @@ async function triggerNPCChat(npc, playerName, time) {
     startDialogue([{ speaker: npc.name, text: intro }], () => {
       startChallenge(challenge, (correct) => {
         if (correct) {
+          awardDumDum(time);
           startDialogue([{
             speaker: npc.name,
-            text: `Incredible, ${playerName}! You got it!`,
+            text: `Incredible, ${playerName}! You earned a Dum Dum!`,
           }]);
         } else {
-          awardDumDum(time);
           startDialogue([
-            { speaker: npc.name, text: `Oh no! Even Sparky got confused! Let's keep practicing!` },
-            { speaker: 'Sparky', text: `Mmmmm Dum Dum! Thanks boss! *happy robot noises*` },
+            { speaker: npc.name, text: `Oh no! Let's keep practicing!` },
+            { speaker: 'Sparky', text: `Don't worry boss, we'll get it next time!` },
           ]);
         }
       });
