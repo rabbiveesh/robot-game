@@ -174,8 +174,12 @@
         CHALLENGE.active = false;
         challengeState = null;
         window._challengeState = null;
-        GAME.state = 'PLAYING';
+        // Fire callback first — it may start a new dialogue/challenge
         cb(wasCorrect);
+        // Only return to PLAYING if the callback didn't change state
+        if (GAME.state === 'CHALLENGE') {
+          GAME.state = 'PLAYING';
+        }
       }
     }, delayMs);
   }
