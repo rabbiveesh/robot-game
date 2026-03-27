@@ -191,6 +191,10 @@
         CHALLENGE.active = false;
         challengeState = null;
         window._challengeState = null;
+        if (window._activeRenderer) {
+          window._activeRenderer.dispose();
+          window._activeRenderer = null;
+        }
         // Fire callback first — it may start a new dialogue/challenge
         cb(wasCorrect);
         // Set state based on what the callback started

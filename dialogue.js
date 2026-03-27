@@ -1009,6 +1009,14 @@ function confirmVoiceAnswer(confirmed, time) {
 function renderChallenge(ctx, canvasW, canvasH, time) {
   if (!CHALLENGE.active) return;
 
+  // Use QuizRenderer when challenge state machine is active
+  if (window._challengeState && typeof createQuizRenderer === 'function') {
+    if (!window._activeRenderer) window._activeRenderer = createQuizRenderer();
+    window._activeRenderer.render(ctx, window._challengeState, canvasW, canvasH, time);
+    return;
+  }
+
+  // Legacy fallback (intake before state machine loads)
   ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
   ctx.fillRect(0, 0, canvasW, canvasH);
 
