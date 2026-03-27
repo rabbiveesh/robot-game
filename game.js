@@ -72,15 +72,10 @@ function initInput() {
       }
     }
 
-    // ESC toggles in-game settings or dismisses menu
+    // ESC dismisses interaction menu (settings handled by index.html overlay)
     if (e.key === 'Escape') {
       if (GAME.state === 'INTERACTION_MENU') {
         dismissMenu();
-      } else if (GAME.state === 'SETTINGS') {
-        GAME.state = GAME._stateBeforeSettings || 'PLAYING';
-      } else if (GAME.state === 'PLAYING') {
-        GAME._stateBeforeSettings = GAME.state;
-        GAME.state = 'SETTINGS';
       }
     }
 
