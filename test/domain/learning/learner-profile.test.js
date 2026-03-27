@@ -213,6 +213,75 @@ describe('learnerReducer — spread width adaptation', () => {
     }
     expect(state.spreadWidth).toBeLessThanOrEqual(1.0);
   });
+
+  it('widens faster at band 10 ceiling (0.1 instead of 0.05)', () => {
+    let state = createProfile({ mathBand: 10, spreadWidth: 0.3 });
+    // Feed attempts spread across bands so we don't trigger promotion (already at ceiling)
+    for (let i = 0; i < 12; i++) {
+      const band = 9 + (i % 2); // alternate 9 and 10
+      state = learnerReducer(state, makeAttempt(true, { band, centerBand: 10 }));
+    }
+    // Should have widened by 0.1 per tick (at ceiling), not 0.05
+    expect(state.spreadWidth).toBeGreaterThan(0.4);
+  });
+});
+
+describe('learnerReducer — scaffolding adaptation', () => {
+  it('scaffolding decreases on sustained high accuracy (>85% over 10+)', () => {
+    let state = createProfile({ mathBand: 5, scaffolding: 0.7 });
+    // 12 correct at various bands = 100% accuracy
+    for (let i = 0; i < 12; i++) {
+      state = learnerReducer(state, makeAttempt(true, { band: 4 + (i % 3), centerBand: 5 }));
+    }
+    expect(state.scaffolding).toBeLessThan(0.7);
+  });
+
+  it('scaffolding increases on sustained low accuracy (<50% over 10+)', () => {
+    let state = createProfile({ mathBand: 5, scaffolding: 0.3 });
+    // Mix: 3 correct, 9 wrong = 25% accuracy
+    state = feedAttempts(state, 3, true, 5);
+    state = feedAttempts(state, 9, false, 5);
+    expect(state.scaffolding).toBeGreaterThan(0.3);
+  });
+
+  it('scaffolding does not go below 0 or above 1', () => {
+    let state = createProfile({ mathBand: 5, scaffolding: 0.02 });
+    for (let i = 0; i < 15; i++) {
+      state = learnerReducer(state, makeAttempt(true, { band: 4 + (i % 3), centerBand: 5 }));
+    }
+    expect(state.scaffolding).toBeGreaterThanOrEqual(0);
+
+    let state2 = createProfile({ mathBand: 5, scaffolding: 0.98 });
+    state2 = feedAttempts(state2, 2, true, 5);
+    state2 = feedAttempts(state2, 10, false, 5);
+    expect(state2.scaffolding).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('learnerReducer — pace adaptation', () => {
+  it('pace increases on fast correct answers (<3s)', () => {
+    let state = createProfile({ mathBand: 5, pace: 0.5 });
+    state = learnerReducer(state, makeAttempt(true, { responseTimeMs: 1500 }));
+    expect(state.pace).toBeGreaterThan(0.5);
+  });
+
+  it('pace decreases on slow correct answers (>10s)', () => {
+    let state = createProfile({ mathBand: 5, pace: 0.5 });
+    state = learnerReducer(state, makeAttempt(true, { responseTimeMs: 12000 }));
+    expect(state.pace).toBeLessThan(0.5);
+  });
+
+  it('pace does not adjust on null responseTimeMs', () => {
+    let state = createProfile({ mathBand: 5, pace: 0.5 });
+    state = learnerReducer(state, makeAttempt(true, { responseTimeMs: null }));
+    expect(state.pace).toBe(0.5);
+  });
+
+  it('pace does not adjust on wrong answers', () => {
+    let state = createProfile({ mathBand: 5, pace: 0.5 });
+    state = learnerReducer(state, makeAttempt(false, { responseTimeMs: 1500 }));
+    expect(state.pace).toBe(0.5);
+  });
 });
 
 describe('learnerReducer — boredom detection', () => {

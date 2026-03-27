@@ -125,7 +125,7 @@ export function extractFeatures(a, b, operation, answer) {
     borrows: operation === 'sub' && onesA < onesB,
     borrowsTens: operation === 'sub' && (tensA % 10) - (onesA < onesB ? 1 : 0) < (tensB % 10),
     crossesTenBoundary: Math.floor(a / 10) !== Math.floor(answer / 10),
-    maxDigit: Math.max(onesA, onesB, a > 9 ? tensA : 0, b > 9 ? tensB : 0),
+    maxDigit: Math.max(...String(a).split('').map(Number), ...String(b).split('').map(Number)),
     maxDigitGte7: Math.max(onesA, onesB) >= 7,
     hasRoundNumber: onesA === 0 || onesB === 0,
     nearDoubles: Math.abs(a - b) <= 2 && operation === 'add',
@@ -156,8 +156,8 @@ const BAND_OPERATIONS = {
   6: ['add', 'sub'],
   7: ['add', 'sub'],
   8: ['multiply'],
-  9: ['multiply'],
-  10: ['divide'],
+  9: ['add', 'sub', 'multiply'],              // mix — hard add/sub + multiplication
+  10: ['add', 'sub', 'multiply', 'divide'],    // everything — maintain fluency across all ops
 };
 
 function pickOperation(profile, sampledBand, rng) {
