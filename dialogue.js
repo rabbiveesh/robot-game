@@ -411,7 +411,71 @@ const FALLBACK_NPC_LINES = {
     "This grove holds the oldest secrets of Robot Village...",
     "The leaves whisper your name... they say you are very clever.",
   ],
+  kid_1: [
+    "Wanna see me do a cartwheel? Watch! ...okay I can't actually do one yet.",
+    "Sparky is SO COOL! I wish I had a robot friend!",
+    "Did you know frogs can jump SUPER far? Like, really far!",
+    "I drew a picture of you and Sparky! It's on the fridge!",
+    "Mom said we're having pizza later! PIZZA!",
+  ],
+  kid_2: [
+    "Hi... um... do you like bugs? I found a really cool one.",
+    "Sparky beeped at me and I think that means he likes me!",
+    "I'm building a tower with blocks. Wanna help?",
+    "Do you think clouds are soft? I think they're soft.",
+    "Mom says I ask too many questions. Is that a lot of questions?",
+  ],
 };
+
+// ─── GIVE REACTIONS ─────────────────────────────────────
+
+const GIVE_REACTIONS = {
+  robot: {
+    normal: [
+      "MMMMM! *crunch* BEST BOSS EVER! My circuits are tingling!",
+      "Dum Dum Dum Dum! I love Dum Dums! Thank you, boss!",
+      "BZZZT! Sugar rush! My antenna is spinning!",
+    ],
+    first: "My FIRST Dum Dum?! This is the BEST DAY of my robot LIFE!",
+    spin: "FIVE DUM DUMS! Watch me spin! *spins around* WHEEEEE!",
+    accessory: "TEN?! I'm wearing a bow tie now! Look how FANCY I am!",
+    color_change: "TWENTY! My chest light is changing color! LOOK LOOK LOOK!",
+    ultimate: "FIFTY DUM DUMS. Boss. I... I don't have words. *happy robot tears*",
+  },
+  mommy: {
+    normal: [
+      "Oh sweetie, thank you! You're so thoughtful!",
+      "A Dum Dum for me? You're the best!",
+      "Mmm, cherry! My favorite! Thank you, honey!",
+    ],
+    first: "My very first Dum Dum! I'll treasure it forever!",
+  },
+  kid_1: {
+    normal: [
+      "WOW, thanks! You're the coolest!",
+      "Yay! Dum Dum! You're my best friend!",
+      "Mmmmm yummy! Wanna play?",
+    ],
+    first: "For ME?! Wow! No one ever gave me a Dum Dum before!",
+  },
+  kid_2: {
+    normal: [
+      "Hehe, thanks! *nom nom*",
+      "Dum Dum! You're so nice!",
+      "Ooh, what flavor? I love grape!",
+    ],
+    first: "A Dum Dum?! You're the nicest person EVER!",
+  },
+};
+
+function getGiveReaction(npcId, milestone) {
+  const reactions = GIVE_REACTIONS[npcId] || GIVE_REACTIONS.robot;
+  if (milestone) {
+    return reactions[milestone.reaction] || reactions.normal[0];
+  }
+  const normals = reactions.normal;
+  return normals[Math.floor(Math.random() * normals.length)];
+}
 
 function getRandomFallbackLine(npcId) {
   if (npcId === 'robot') {
@@ -1351,21 +1415,156 @@ function renderSkillBadges(ctx, canvasW) {
 
 // ─── INTERACTION ORCHESTRATOR ────────────────────────────
 
-async function triggerInteraction(target, playerName, time) {
-  if (DIALOGUE.active || CHALLENGE.active) return;
+// ─── INTERACTION MENU STATE ──────────────────────────────
 
-  if (target.type === 'robot') {
-    await triggerRobotChat(playerName, time);
-  } else if (target.type === 'npc') {
-    await triggerNPCChat(target.npc, playerName, time);
-  } else if (target.type === 'sign') {
-    startDialogue([{
-      speaker: 'Sign',
-      text: 'Welcome to Robot Village! Explore, make friends, and learn cool stuff!',
-    }]);
-  } else if (target.type === 'chest') {
-    await triggerChestInteraction(playerName, time);
+const INTERACTION_MENU = {
+  active: false,
+  options: [],
+  target: null,
+  playerName: '',
+  time: 0,
+};
+
+// Total gifts given per NPC — persisted in save data
+let TOTAL_GIFTS_GIVEN = {};
+
+function showInteractionMenu(target, playerName, time) {
+  // Get available options via the economy domain
+  const npc = target.type === 'npc' ? target.npc : { id: target.type, canReceiveGifts: target.type === 'robot' };
+  const playerState = { dumDums: DUM_DUMS };
+  const options = typeof EconomyDomain !== 'undefined'
+    ? EconomyDomain.getInteractionOptions(npc, playerState)
+    : [{ type: 'talk', label: 'Talk', key: '1' }];
+
+  // Signs and chests auto-trigger (no menu)
+  if (target.type === 'sign' || target.type === 'chest') {
+    executeInteractionOption('talk', target, playerName, time);
+    return;
   }
+
+  // Kid NPCs that never challenge: no coin flip, just talk or give
+  // Single option → auto-trigger
+  if (options.length === 1) {
+    executeInteractionOption(options[0].type, target, playerName, time);
+    return;
+  }
+
+  // Show menu
+  INTERACTION_MENU.active = true;
+  INTERACTION_MENU.options = options;
+  INTERACTION_MENU.target = target;
+  INTERACTION_MENU.playerName = playerName;
+  INTERACTION_MENU.time = time;
+  GAME.state = 'INTERACTION_MENU';
+}
+
+function selectMenuOption(index) {
+  if (!INTERACTION_MENU.active) return;
+  if (index < 0 || index >= INTERACTION_MENU.options.length) return;
+  const opt = INTERACTION_MENU.options[index];
+  const target = INTERACTION_MENU.target;
+  const playerName = INTERACTION_MENU.playerName;
+  const time = INTERACTION_MENU.time;
+  INTERACTION_MENU.active = false;
+  executeInteractionOption(opt.type, target, playerName, time);
+}
+
+function dismissMenu() {
+  INTERACTION_MENU.active = false;
+  GAME.state = 'PLAYING';
+}
+
+async function executeInteractionOption(optionType, target, playerName, time) {
+  if (optionType === 'talk') {
+    GAME.state = 'DIALOGUE';
+    if (target.type === 'robot') {
+      await triggerRobotChat(playerName, time);
+    } else if (target.type === 'npc') {
+      await triggerNPCChat(target.npc, playerName, time);
+    } else if (target.type === 'sign') {
+      startDialogue([{
+        speaker: 'Sign',
+        text: 'Welcome to Robot Village! Explore, make friends, and learn cool stuff!',
+      }]);
+    } else if (target.type === 'chest') {
+      await triggerChestInteraction(playerName, time);
+    }
+  } else if (optionType === 'give') {
+    await triggerGive(target, time);
+  }
+}
+
+async function triggerGive(target, time) {
+  const npcId = target.type === 'robot' ? 'robot' : (target.npc?.id || 'robot');
+  const npcName = target.type === 'robot' ? 'Sparky' : (target.npc?.name || 'Sparky');
+
+  if (typeof EconomyDomain === 'undefined') return;
+  const result = EconomyDomain.processGive(DUM_DUMS, npcId, TOTAL_GIFTS_GIVEN);
+  if (!result) {
+    GAME.state = 'DIALOGUE';
+    startDialogue([{ speaker: 'Sparky', text: "We don't have any Dum Dums to give!" }], () => { GAME.state = 'PLAYING'; });
+    return;
+  }
+
+  DUM_DUMS = result.newDumDums;
+  TOTAL_GIFTS_GIVEN = result.newTotalGifts;
+  DUM_DUM_FLASH = time;
+
+  // Log event
+  if (window.ADAPTIVE) {
+    const event = {
+      type: 'DUM_DUM_SPENT',
+      amount: 1,
+      recipient: npcId,
+      totalGiftsToRecipient: result.newTotalGifts[npcId],
+      milestone: result.milestone,
+      balanceBefore: DUM_DUMS + 1,
+      balanceAfter: DUM_DUMS,
+      timestamp: Date.now(),
+    };
+    window.ADAPTIVE.getEventLog().push(event);
+  }
+
+  const reaction = getGiveReaction(npcId, result.milestone);
+  GAME.state = 'DIALOGUE';
+  startDialogue([{ speaker: npcName, text: reaction }], () => { GAME.state = 'PLAYING'; });
+}
+
+function renderInteractionMenu(ctx, canvasW, canvasH) {
+  if (!INTERACTION_MENU.active) return;
+  const options = INTERACTION_MENU.options;
+  const panelW = options.length * 130 + 20;
+  const panelH = 50;
+  const panelX = (canvasW - panelW) / 2;
+  const panelY = canvasH - 180;
+
+  ctx.fillStyle = 'rgba(20, 20, 40, 0.9)';
+  roundRect(ctx, panelX, panelY, panelW, panelH, 10);
+  ctx.fill();
+  ctx.strokeStyle = '#00E676';
+  ctx.lineWidth = 2;
+  roundRect(ctx, panelX, panelY, panelW, panelH, 10);
+  ctx.stroke();
+
+  options.forEach((opt, i) => {
+    const btnX = panelX + 10 + i * 130;
+    const btnY = panelY + 8;
+    const btnW = 120;
+    const btnH = 34;
+    ctx.fillStyle = '#37474F';
+    roundRect(ctx, btnX, btnY, btnW, btnH, 6);
+    ctx.fill();
+    ctx.fillStyle = '#E0E0E0';
+    ctx.font = '14px "Segoe UI", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`[${opt.key}] ${opt.label}`, btnX + btnW / 2, btnY + 22);
+    opt._bounds = { x: btnX, y: btnY, w: btnW, h: btnH };
+  });
+}
+
+async function triggerInteraction(target, playerName, time) {
+  if (DIALOGUE.active || CHALLENGE.active || INTERACTION_MENU.active) return;
+  showInteractionMenu(target, playerName, time);
 }
 
 async function triggerRobotChat(playerName, time) {
@@ -1412,7 +1611,7 @@ async function triggerRobotChat(playerName, time) {
 }
 
 async function triggerNPCChat(npc, playerName, time) {
-  const doChallenge = Math.random() < 0.4;
+  const doChallenge = npc.neverChallenge ? false : Math.random() < 0.4;
 
   if (doChallenge) {
     const challenge = generateMathChallenge();

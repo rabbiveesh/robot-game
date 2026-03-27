@@ -341,6 +341,7 @@
       operationStats: JSON.parse(JSON.stringify(profileState.operationStats)),
       rollingWindowEntries: profileState.rollingWindow.entries.map(e => ({ ...e })),
     };
+    data.totalGiftsGiven = typeof TOTAL_GIFTS_GIVEN !== 'undefined' ? { ...TOTAL_GIFTS_GIVEN } : {};
     // Store current session (capped at 200 events) + last 5 prior session logs
     data.sessionLogs = [
       ...previousSessionLogs.slice(-5),
@@ -374,6 +375,10 @@
     previousSessionLogs = savedLogs.slice(-5);
     eventLog = [];
     recentBehaviors = [];
+    // Restore gift tracking
+    if (typeof TOTAL_GIFTS_GIVEN !== 'undefined') {
+      TOTAL_GIFTS_GIVEN = (data && data.totalGiftsGiven) || {};
+    }
     return result;
   };
 
