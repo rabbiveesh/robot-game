@@ -106,13 +106,13 @@ export function learnerReducer(state, event) {
       let newSpreadWidth = state.spreadWidth;
 
       if (!boredom) {
-        if (shouldPromote(newWindow, state.mathBand, state.promoteThreshold, state.stretchThreshold)) {
-          newBand = Math.min(10, state.mathBand + 1);
+        if (state.mathBand < 10 && shouldPromote(newWindow, state.mathBand, state.promoteThreshold, state.stretchThreshold)) {
+          newBand = state.mathBand + 1;
           newStreak = 0;
           // Tighten spread briefly after promotion — let kid adjust to new center
           newSpreadWidth = Math.max(0.2, state.spreadWidth - 0.1);
-        } else if (shouldDemote(newWindow, state.mathBand)) {
-          newBand = Math.max(1, state.mathBand - 1);
+        } else if (state.mathBand > 1 && shouldDemote(newWindow, state.mathBand)) {
+          newBand = state.mathBand - 1;
           newStreak = 0;
           // Tighten spread on demotion
           newSpreadWidth = Math.max(0.1, state.spreadWidth - 0.15);
@@ -120,10 +120,32 @@ export function learnerReducer(state, event) {
       }
 
       // Widen spread on sustained good performance
-      if (newBand === state.mathBand) { // no promotion/demotion this tick
-        const rollingAcc = accuracy(newWindow);
-        if (newWindow.entries.length >= 10 && rollingAcc > 0.75 && newSpreadWidth < 0.8) {
-          newSpreadWidth = Math.min(1.0, newSpreadWidth + 0.05);
+      const rollingAcc = newWindow.entries.length >= 10 ? accuracy(newWindow) : null;
+      if (newBand === state.mathBand && rollingAcc !== null) {
+        if (rollingAcc > 0.75 && newSpreadWidth < 0.8) {
+          // At ceiling (band 10), widen faster since there's no higher band
+          const widenStep = newBand === 10 ? 0.1 : 0.05;
+          newSpreadWidth = Math.min(1.0, newSpreadWidth + widenStep);
+        }
+      }
+
+      // Ongoing scaffolding adaptation based on rolling accuracy
+      let newScaffolding = state.scaffolding;
+      if (rollingAcc !== null) {
+        if (rollingAcc > 0.85 && newScaffolding > 0.1) {
+          newScaffolding = Math.max(0, newScaffolding - 0.03);
+        } else if (rollingAcc < 0.5 && newScaffolding < 0.9) {
+          newScaffolding = Math.min(1, newScaffolding + 0.05);
+        }
+      }
+
+      // Ongoing pace adaptation based on response time
+      let newPace = state.pace;
+      if (event.responseTimeMs != null && event.correct) {
+        if (event.responseTimeMs < 3000 && newPace < 1.0) {
+          newPace = Math.min(1, newPace + 0.02);
+        } else if (event.responseTimeMs > 10000 && newPace > 0) {
+          newPace = Math.max(0, newPace - 0.02);
         }
       }
 
@@ -132,6 +154,8 @@ export function learnerReducer(state, event) {
         streak: newStreak,
         mathBand: newBand,
         spreadWidth: newSpreadWidth,
+        scaffolding: newScaffolding,
+        pace: newPace,
         rollingWindow: newWindow,
         operationStats: newStats,
       });

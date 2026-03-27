@@ -7,7 +7,7 @@
     createProfile, learnerReducer,
     generateChallenge, detectFrustration,
     generateIntakeQuestion, processIntakeResults, nextIntakeBand,
-    accuracy, operationAccuracy, avgResponseTime,
+    accuracy, operationAccuracy, avgResponseTime, createWindow,
   } = window.LearningDomain;
 
   // ─── ADAPTIVE STATE ─────────────────────────────────────
@@ -17,6 +17,11 @@
   let previousSessionLogs = []; // up to 5 prior sessions
   let recentBehaviors = [];
   let challengeShownAt = 0; // track when challenge was displayed
+  const RESPONSE_TIME_CAP_MS = 30000; // 30 seconds — anything above is treated as "walked away"
+
+  function capResponseTime(rawMs) {
+    return rawMs > RESPONSE_TIME_CAP_MS ? null : rawMs;
+  }
   let debugOverlayVisible = false;
   let voiceDebugVisible = false;
   let voiceDebugState = {}; // populated by dialogue.js voice handler
@@ -93,7 +98,7 @@
 
   const _oldSelectChoice = window.selectChallengeChoice;
   window.selectChallengeChoice = function (index, time) {
-    const responseTimeMs = performance.now() - challengeShownAt;
+    const responseTimeMs = capResponseTime(performance.now() - challengeShownAt);
     const choice = CHALLENGE.choices[index];
     const wasCorrect = choice?.correct;
     const operation = mapOpToOperation(CHALLENGE.teachingData?.op);
@@ -162,7 +167,7 @@
       subSkill: CHALLENGE._subSkill || null,
       band: sampledBand,
       centerBand: profileState.mathBand,
-      responseTimeMs: voiceResult.totalMs || (performance.now() - challengeShownAt),
+      responseTimeMs: capResponseTime(voiceResult.totalMs || (performance.now() - challengeShownAt)),
       attemptNumber: CHALLENGE.attempts,
       timestamp: Date.now(),
       features: CHALLENGE._features || null,
@@ -334,6 +339,7 @@
       craStages: { ...profileState.craStages },
       intakeCompleted: profileState.intakeCompleted,
       operationStats: JSON.parse(JSON.stringify(profileState.operationStats)),
+      rollingWindowEntries: profileState.rollingWindow.entries.map(e => ({ ...e })),
     };
     // Store current session (capped at 200 events) + last 5 prior session logs
     data.sessionLogs = [
@@ -350,7 +356,11 @@
     const slots = getSaveSlots();
     const data = slots[slotIndex];
     if (data && data.learnerProfile) {
-      profileState = createProfile(data.learnerProfile);
+      const lp = data.learnerProfile;
+      profileState = createProfile({
+        ...lp,
+        rollingWindow: createWindow(lp.rollingWindowEntries || []),
+      });
       SKILL.math.band = profileState.mathBand;
       SKILL.math.streak = profileState.streak;
     } else {
