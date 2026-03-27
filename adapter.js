@@ -145,6 +145,11 @@
 
       checkFrustration();
     }
+
+    // Auto-dismiss after brief visual feedback
+    if (challengeState.phase === 'complete' || challengeState.phase === 'teaching') {
+      autoDismissChallenge(challengeState.correct, challengeState.phase === 'complete' && challengeState.correct ? 800 : 400);
+    }
   };
 
   // Voice actions go through the challenge reducer
@@ -160,12 +165,28 @@
     }
   };
 
+  // Auto-dismiss: fire onComplete after brief visual feedback, no Space needed
+  function autoDismissChallenge(wasCorrect, delayMs) {
+    setTimeout(() => {
+      if (CHALLENGE.onComplete) {
+        const cb = CHALLENGE.onComplete;
+        CHALLENGE.onComplete = null;
+        CHALLENGE.active = false;
+        challengeState = null;
+        window._challengeState = null;
+        GAME.state = 'PLAYING';
+        cb(wasCorrect);
+      }
+    }, delayMs);
+  }
+
   // Teaching complete
   window._onTeachingComplete = function () {
     if (!challengeState) return;
     challengeState = challengeReducer(challengeState, { type: 'TEACHING_COMPLETE' });
     window._challengeState = challengeState;
     syncToLegacyChallenge(challengeState);
+    autoDismissChallenge(false, 400);
   };
 
   // Show-me scaffold
@@ -314,8 +335,8 @@
         });
         currentBand = nextIntakeBand(currentBand, wasCorrect, ceiling);
         questionIndex++;
-        // Small delay then next question
-        setTimeout(askNext, 300);
+        // Next question — auto-dismiss provides the delay
+        askNext();
       });
       GAME.state = 'CHALLENGE';
     }
