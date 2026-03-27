@@ -176,8 +176,12 @@
         window._challengeState = null;
         // Fire callback first — it may start a new dialogue/challenge
         cb(wasCorrect);
-        // Only return to PLAYING if the callback didn't change state
-        if (GAME.state === 'CHALLENGE') {
+        // Set state based on what the callback started
+        if (DIALOGUE.active) {
+          GAME.state = 'DIALOGUE';
+        } else if (CHALLENGE.active) {
+          GAME.state = 'CHALLENGE';
+        } else {
           GAME.state = 'PLAYING';
         }
       }
