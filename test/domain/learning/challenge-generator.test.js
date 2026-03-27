@@ -403,3 +403,67 @@ describe('maxDigit fix', () => {
     expect(f.maxDigit).toBe(4);
   });
 });
+
+describe('displayText / speechText', () => {
+  it('challenge has displayText and speechText fields', () => {
+    const c = generateChallenge(createProfile({ mathBand: 5, spreadWidth: 0 }), seededRng());
+    expect(c.displayText).toBeTruthy();
+    expect(c.speechText).toBeTruthy();
+  });
+
+  it('displayText contains × symbol, speechText contains "times"', () => {
+    const profile = createProfile({ mathBand: 5, spreadWidth: 0 });
+    const c = generateChallenge(profile, seededRng());
+    expect(c.displayText).toMatch(/×/);
+    expect(c.speechText).toMatch(/times/);
+    expect(c.speechText).not.toMatch(/×/);
+  });
+
+  it('displayText contains ÷ symbol, speechText contains "divided by"', () => {
+    const profile = createProfile({ mathBand: 10, spreadWidth: 0 });
+    for (let i = 0; i < 50; i++) {
+      const c = generateChallenge(profile, seededRng(i));
+      if (c.operation === 'divide') {
+        expect(c.displayText).toMatch(/÷/);
+        expect(c.speechText).toMatch(/divided by/);
+        return;
+      }
+    }
+  });
+
+  it('speechText replaces + with "plus"', () => {
+    const profile = createProfile({ mathBand: 2, spreadWidth: 0 });
+    for (let i = 0; i < 30; i++) {
+      const c = generateChallenge(profile, seededRng(i));
+      if (c.operation === 'add') {
+        expect(c.speechText).toMatch(/plus/);
+        return;
+      }
+    }
+  });
+
+  it('number bond: displayText has = symbol, speechText has "equals"', () => {
+    const profile = createProfile({ mathBand: 3, spreadWidth: 0 });
+    for (let i = 0; i < 50; i++) {
+      const c = generateChallenge(profile, seededRng(i));
+      if (c.operation === 'number_bond') {
+        expect(c.displayText).toMatch(/= \d+\?$/);
+        expect(c.speechText).toMatch(/equals \d+\?$/);
+        expect(c.speechText).not.toMatch(/=/);
+        return;
+      }
+    }
+  });
+
+  it('displayText and speechText are produced from structure, not regex on question', () => {
+    // Verify they're consistent for all operations
+    for (let band = 1; band <= 10; band++) {
+      const profile = createProfile({ mathBand: band, spreadWidth: 0 });
+      const c = generateChallenge(profile, seededRng(band));
+      // Speech should never contain math symbols
+      expect(c.speechText).not.toMatch(/[×÷\u2212]/);
+      // Display should be a valid question string
+      expect(c.displayText).toMatch(/\?$/);
+    }
+  });
+});

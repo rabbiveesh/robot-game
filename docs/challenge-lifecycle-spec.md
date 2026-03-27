@@ -41,6 +41,18 @@ function createChallengeState(challenge, context) {
     feedback: null,      // { display: string, speech: string } or null
     reward: null,        // { type: 'dum_dum', amount: number } or null
 
+    // Rendering hint (tells the presentation which renderer to use)
+    renderHint: context.renderHint || {
+      craStage: 'abstract',          // overridden by learner profile per operation
+      answerMode: 'choice',          // overridden by learner profile
+      interactionType: 'quiz',       // 'quiz' | 'puzzle' | 'shop' | 'drag' | 'number_line'
+    },
+
+    // Scaffold tracking (show-me / tell-me)
+    hintUsed: false,
+    hintLevel: 0,        // how many times show-me was pressed
+    toldMe: false,       // did the kid press tell-me
+
     // Voice state (scoped to this challenge, dies with it)
     voice: {
       listening: false,
@@ -117,6 +129,38 @@ function challengeReducer(state, action) {
       return Object.freeze({
         ...state,
         phase: 'complete',
+      });
+    }
+
+    // Scaffold actions (show-me / tell-me)
+    case 'SHOW_ME': {
+      const currentCra = state.renderHint.craStage;
+      const lowerCra = currentCra === 'abstract' ? 'representational'
+                     : currentCra === 'representational' ? 'concrete'
+                     : 'concrete';
+      if (lowerCra === currentCra) return state; // already at bottom
+      return Object.freeze({
+        ...state,
+        renderHint: Object.freeze({ ...state.renderHint, craStage: lowerCra }),
+        hintUsed: true,
+        hintLevel: (state.hintLevel || 0) + 1,
+      });
+    }
+
+    case 'TELL_ME': {
+      // Sparky shows the answer with a full concrete walkthrough
+      // Phase goes to teaching (same as 2 wrong answers) but correct stays null
+      // — this is not a wrong answer, it's a request for help
+      return Object.freeze({
+        ...state,
+        phase: 'teaching',
+        toldMe: true,
+        reward: null,
+        feedback: {
+          display: `The answer is ${state.challenge.correctAnswer}!`,
+          speech: `The answer is ${state.challenge.correctAnswer}!`,
+        },
+        renderHint: Object.freeze({ ...state.renderHint, craStage: 'concrete' }),
       });
     }
 
@@ -447,6 +491,21 @@ Voice lifecycle:
   - 'VOICE_CONFIRM no → retry'
   - 'VOICE_ERROR not-allowed → mic blocked text'
 
+Scaffold (show-me / tell-me):
+  - 'SHOW_ME drops CRA from abstract to representational'
+  - 'SHOW_ME drops CRA from representational to concrete'
+  - 'SHOW_ME at concrete returns state unchanged'
+  - 'SHOW_ME sets hintUsed true and increments hintLevel'
+  - 'TELL_ME sets phase to teaching with concrete CRA'
+  - 'TELL_ME sets toldMe true and reward null'
+  - 'TELL_ME feedback contains the correct answer'
+
+Render hint:
+  - 'new challenge state includes renderHint from context'
+  - 'default renderHint is abstract/choice/quiz'
+  - 'SHOW_ME updates renderHint.craStage'
+  - 'quest challenge can override interactionType to puzzle'
+
 Display/speech separation:
   - 'question has both display and speech fields'
   - 'display contains × symbol, speech contains "times"'
@@ -466,6 +525,133 @@ Display/speech separation:
 7. **Delete monkey-patches** — `selectChallengeChoice` and `handleVoiceInput` patches in adapter die. The challenge reducer handles everything.
 
 Steps 1-2 are safe (pure domain, tested). Steps 3-7 touch the legacy code and should be done together as a single PR to avoid inconsistent states.
+
+## Pluggable Renderers
+
+The challenge state machine handles the lifecycle (phases, rewards, feedback, voice). The RENDERING is a separate concern — different challenge types look completely different but share the same lifecycle.
+
+### The Renderer Interface
+
+Every challenge renderer implements the same interface:
+
+```js
+ChallengeRenderer {
+  // Render the current state to canvas
+  render(ctx, challengeState, canvasW, canvasH, time): void
+
+  // Handle click/tap at (x, y) — returns an action to dispatch, or null
+  handleClick(x, y, challengeState): Action | null
+
+  // Handle key press — returns an action to dispatch, or null
+  handleKey(key, challengeState): Action | null
+
+  // Cleanup (stop animations, release resources)
+  dispose(): void
+}
+```
+
+The renderer reads `challengeState` and draws. It never mutates state — it returns Actions that the application layer dispatches to the reducer. The lifecycle is the same for every renderer; only the visuals change.
+
+### Renderer Types
+
+```
+src/presentation/renderers/
+  quiz-renderer.js           # Current: multiple choice buttons (what we have now)
+  cra-concrete-renderer.js   # Dots/stars/objects to count and group
+  cra-repres-renderer.js     # Number line, tens/ones blocks, bar models
+  cra-abstract-renderer.js   # Just the numbers (same as quiz but no choices — free input)
+  drag-renderer.js           # Drag objects into groups (future: concrete answer mode)
+  number-line-renderer.js    # Tap to jump on number line (future: representational answer mode)
+  shop-renderer.js           # Purchase UI with embedded math (future: economy phase 2)
+  puzzle-renderer.js         # Door codes, bridge weights, etc. (future: quest system)
+```
+
+### How the Application Layer Picks a Renderer
+
+The challenge state includes `renderHint` — a suggestion from the domain about how to render based on CRA stage and answer mode. The application layer uses it to select a renderer:
+
+```js
+// On the challenge state (set by createChallengeState):
+renderHint: {
+  craStage: 'representational',   // from learner profile for this operation
+  answerMode: 'choice',           // from learner profile
+  interactionType: 'quiz',        // 'quiz' | 'puzzle' | 'shop' | 'drag' | 'number_line'
+}
+```
+
+The application layer maps the hint to a renderer:
+
+```js
+function selectRenderer(renderHint) {
+  // CRA stage determines the visual layer
+  // answerMode determines the input mechanism
+  // interactionType overrides both for special cases (shop, quest puzzle)
+
+  if (renderHint.interactionType === 'shop') return new ShopRenderer();
+  if (renderHint.interactionType === 'puzzle') return new PuzzleRenderer();
+
+  switch (renderHint.craStage) {
+    case 'concrete': return new CraConcreteRenderer(renderHint.answerMode);
+    case 'representational': return new CraRepresRenderer(renderHint.answerMode);
+    case 'abstract':
+    default: return new QuizRenderer(renderHint.answerMode);
+  }
+}
+```
+
+### For Now: One Renderer
+
+The initial implementation has ONE renderer: `QuizRenderer` — the existing `renderChallenge` logic extracted into the renderer interface. All challenges use it regardless of CRA stage or answer mode. This is the same UX the kids have now, just properly architectured.
+
+Then we add renderers incrementally:
+1. `QuizRenderer` (this PR — extract existing code)
+2. `CraConcreteRenderer` (next: dots alongside the question, show-me drops to this)
+3. `CraRepresRenderer` (next: number line / tens blocks alongside the question)
+4. `DragRenderer` (future: drag objects to build the answer)
+5. `ShopRenderer` (future: economy phase 2)
+6. `PuzzleRenderer` (future: quest system door codes, bridge weights)
+
+Each renderer is a separate file. Adding a new one never touches the lifecycle state machine or other renderers.
+
+### How Show-Me Works With Renderers
+
+"Show me!" doesn't swap the renderer mid-challenge. It dispatches a `SHOW_ME` action to the lifecycle reducer:
+
+```js
+case 'SHOW_ME': {
+  const currentCra = state.renderHint.craStage;
+  const lowerCra = currentCra === 'abstract' ? 'representational'
+                 : currentCra === 'representational' ? 'concrete'
+                 : 'concrete'; // already at bottom
+  return Object.freeze({
+    ...state,
+    renderHint: { ...state.renderHint, craStage: lowerCra },
+    hintUsed: true,
+    hintLevel: (state.hintLevel || 0) + 1,
+  });
+}
+```
+
+The application layer sees `renderHint.craStage` changed, picks a new renderer, and re-renders. The transition can be animated (the old renderer fades out, the new one fades in). The state machine doesn't know about rendering — it just tracks which CRA level was requested.
+
+### How Quest Puzzles Will Work
+
+A quest step that says "the door code is ? + 6 = 13" creates a challenge with:
+
+```js
+createChallengeState(challenge, {
+  source: 'quest',
+  questId: 'crystal_caves_3',
+  npcName: 'Door',
+  renderHint: {
+    interactionType: 'puzzle',  // overrides CRA-based selection
+    craStage: profile.craStages.number_bond,
+    answerMode: 'free_input',   // door codes are typed, not multiple choice
+  },
+});
+```
+
+The `PuzzleRenderer` draws a door with a keypad. The lifecycle is identical — `ANSWER_SUBMITTED`, correct → `complete`, wrong → `feedback`. Same reducer, different visuals.
 
 ## This Is Presentation Migration Trigger #1
 

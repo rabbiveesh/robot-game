@@ -182,8 +182,13 @@ function pickOperation(profile, sampledBand, rng) {
   return strengths[Math.floor(rng() * strengths.length)].op;
 }
 
+const DISPLAY_OP = { '+': '+', '-': '\u2212', '\u00d7': '\u00d7', '\u00f7': '\u00f7' };
+const SPEECH_OP = { '+': 'plus', '-': 'minus', '\u00d7': 'times', '\u00f7': 'divided by' };
+
 function generateNumbers(band, operation, rng) {
   let a, b, answer, question, op;
+  let format = 'standard'; // 'standard' = "What is a op b?" or 'bond' = "What op b = total?"
+  let bondTotal = null;
 
   switch (band) {
     case 1: // Addition within 5
@@ -219,6 +224,7 @@ function generateNumbers(band, operation, rng) {
         answer = total - b;
         a = total;
         op = '+';
+        format = 'bond'; bondTotal = total;
         question = `What + ${b} = ${total}?`;
       } else if (operation === 'sub' || rng() < 0.4) {
         a = Math.floor(rng() * 10) + 5;
@@ -243,6 +249,7 @@ function generateNumbers(band, operation, rng) {
         answer = total - b;
         a = total;
         op = '+';
+        format = 'bond'; bondTotal = total;
         question = `What + ${b} = ${total}?`;
       } else if (operation === 'sub' || rng() < 0.45) {
         a = Math.floor(rng() * 12) + 8;
@@ -339,7 +346,7 @@ function generateNumbers(band, operation, rng) {
       question = 'What is 1 + 1?';
   }
 
-  return { a, b, answer, question, op };
+  return { a, b, answer, question, op, format, bondTotal };
 }
 
 function makeChoices(answer, rng) {
@@ -372,13 +379,27 @@ export function generateChallenge(profile, rng) {
   const sampledBand = sampleFromDistribution(dist, rng);
 
   const operation = pickOperation(profile, sampledBand, rng);
-  const { a, b, answer, question, op } = generateNumbers(sampledBand, operation, rng);
+  const { a, b, answer, question, op, format, bondTotal } = generateNumbers(sampledBand, operation, rng);
   const choices = makeChoices(answer, rng);
   const subSkill = classifyChallenge(a, b, operation);
   const features = extractFeatures(a, b, operation, answer);
 
+  // Produce display + speech from structured data (not regex on question string)
+  const dOp = DISPLAY_OP[op] || op;
+  const sOp = SPEECH_OP[op] || op;
+  let displayText, speechText;
+  if (format === 'bond') {
+    displayText = `What ${dOp} ${b} = ${bondTotal}?`;
+    speechText = `What ${sOp} ${b} equals ${bondTotal}?`;
+  } else {
+    displayText = `What is ${a} ${dOp} ${b}?`;
+    speechText = `What is ${a} ${sOp} ${b}?`;
+  }
+
   return Object.freeze({
     question,
+    displayText,
+    speechText,
     correctAnswer: answer,
     choices: Object.freeze(choices.map(c => Object.freeze(c))),
     operation,
