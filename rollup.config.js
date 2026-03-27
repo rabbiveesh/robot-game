@@ -11,6 +11,15 @@ export default [
     plugins: [resolve()],
   },
   {
+    input: 'src/domain/challenge/index.js',
+    output: {
+      file: 'dist/challenge-domain.js',
+      format: 'iife',
+      name: 'ChallengeDomain',
+    },
+    plugins: [resolve()],
+  },
+  {
     input: 'src/domain/economy/index.js',
     output: {
       file: 'dist/economy-domain.js',
