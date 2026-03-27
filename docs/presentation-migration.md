@@ -49,6 +49,23 @@ This is manageable without migration (add voice handlers alongside existing ones
 
 **Migrate when:** input handling in `game.js` exceeds 3 input modalities or the state machine exceeds 6 states. Until then, additive patches are fine.
 
+**URGENT sub-task: centralize key dispatch.** We shipped a freeze bug because ESC was handled by both `game.js` and `index.html`, each partially managing SETTINGS state. Currently 4 files register key listeners independently (game.js, index.html, adapter.js, dialogue.js). Must consolidate to a single `keydown` listener with state-based dispatch:
+
+```js
+// One listener, one place. State determines which handler runs.
+window.addEventListener('keydown', (e) => {
+  switch (GAME.state) {
+    case 'INTERACTION_MENU': handleMenuInput(e); break;
+    case 'SETTINGS':         handleSettingsInput(e); break;
+    case 'CHALLENGE':        handleChallengeInput(e); break;
+    case 'PLAYING':          handlePlayingInput(e); break;
+    case 'DIALOGUE':         handleDialogueInput(e); break;
+  }
+});
+```
+
+Handler functions can live in different files but are CALLED from one dispatcher. No conflicts possible. Do this before adding more key-driven features.
+
 ### Trigger 3: Quest System
 **Spec:** `docs/rpg-quest-spec.md`
 **Forces migration of:** Interaction orchestration, NPC system, game state
