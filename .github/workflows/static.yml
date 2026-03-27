@@ -53,6 +53,7 @@ jobs:
           cp dist/challenge-domain.js _site/dist/
           cp dist/economy-domain.js _site/dist/
           cp dist/speech-recognition.js _site/dist/
+          mkdir -p _site/src
           cp -r src/presentation _site/src/presentation
 
       - name: Setup Pages
