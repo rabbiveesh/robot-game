@@ -15,7 +15,7 @@ function createQuizRenderer() {
       }
 
       const panelW = Math.min(650, canvasW - 40);
-      const panelH = cs.hintUsed ? 440 : 360;
+      const panelH = cs.hintUsed ? 480 : 360;
       const panelX = (canvasW - panelW) / 2;
       const panelY = (canvasH - panelH) / 2 - 10;
 
@@ -53,7 +53,12 @@ function createQuizRenderer() {
       if (cs.hintUsed && cs.challenge.numbers) {
         const td = cs.challenge.numbers;
         hintOffset = 70;
-        if (typeof renderDotVisual === 'function') {
+        const band = cs.challenge.sampledBand || cs.challenge.band || 1;
+        // Use base-10 blocks for bands 5+, dots for bands 1-4
+        if (band >= 5 && typeof renderBase10Blocks === 'function') {
+          renderBase10Blocks(ctx, td.a, td.b, td.op, cs.challenge.correctAnswer,
+            panelX + panelW / 2, panelY + 80 + qLines.length * 38, time);
+        } else if (typeof renderDotVisual === 'function') {
           renderDotVisual(ctx, panelX + panelW / 2, panelY + 80 + qLines.length * 38,
             td.a, td.b, td.op, cs.challenge.correctAnswer, time);
         }
