@@ -472,3 +472,42 @@ This is inherently messy because the legacy code is global-mutable. The integrat
 - Dum Dum reward logic is tested for all 3 interaction types (robot, NPC, chest)
 - Challenge state reset is tested
 - Adapter round-trip (generate → answer → record event → save → load) is tested
+
+## 10. TTS Reads Math Symbols Instead of Words
+
+### Problem
+
+TTS reads "What is 8 × 5?" as "what is 8 [silence or garbled] 5" because `×` (U+00D7, multiplication sign) and `÷` (U+00F7, division sign) aren't speech-friendly. Some engines skip them, some say "times sign," some say nothing. The kid hears a broken sentence.
+
+Also `+` may read as "plus" (fine) or "and" (confusing for math), and `-` may read as "minus" or "dash" or "hyphen" depending on the engine.
+
+### Fix
+
+Expand the text cleaning in `speakLine` (dialogue.js line 457) to replace math symbols with spoken words:
+
+```js
+const clean = text
+  .replace(/[🤖🚀⭐🌟🍭📍#]/g, '')
+  .replace(/\*[^*]+\*/g, '')
+  .replace(/×/g, ' times ')
+  .replace(/÷/g, ' divided by ')
+  .replace(/(\d)\s*\+\s*(\d)/g, '$1 plus $2')
+  .replace(/(\d)\s*-\s*(\d)/g, '$1 minus $2')
+  .replace(/(\d)\s*=\s*(\d)/g, '$1 equals $2')
+  .trim();
+```
+
+The regex patterns anchor to digits on both sides so we don't replace `+` or `-` in non-math contexts (e.g., "B0RK.exe" or "Sparky's").
+
+### Files to change
+
+- `dialogue.js` — expand the `clean` regex chain in `speakLine`
+
+### Acceptance
+
+- "What is 8 × 5?" speaks as "What is 8 times 5?"
+- "What is 24 ÷ 6?" speaks as "What is 24 divided by 6?"
+- "What is 13 + 8?" speaks as "What is 13 plus 8?"
+- "What is 20 - 7?" speaks as "What is 20 minus 7?"
+- "What + 3 = 10?" speaks as "What plus 3 equals 10?"
+- Non-math text with + or - is unaffected
