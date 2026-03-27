@@ -524,7 +524,147 @@ Display/speech separation:
 6. **Delete old interaction functions** — replace `triggerRobotInteraction`, `triggerNPCChat`, `triggerChestInteraction` with unified `triggerChallengeInteraction`.
 7. **Delete monkey-patches** — `selectChallengeChoice` and `handleVoiceInput` patches in adapter die. The challenge reducer handles everything.
 
-Steps 1-2 are safe (pure domain, tested). Steps 3-7 touch the legacy code and should be done together as a single PR to avoid inconsistent states.
+Steps 1-7 are done. The remaining work is CRA renderers + the adaptive feedback loop.
+
+## CRA Adaptive Feedback Loop
+
+The challenge lifecycle captures hint/CRA signals (`hintUsed`, `hintLevel`, `toldMe`, `craLevelShown`) in `PUZZLE_ATTEMPTED` events. The learner reducer must consume these to advance CRA stages per operation and adjust scaffolding. Currently the reducer has a TODO placeholder at `TEACHING_RETRY` and ignores all hint fields.
+
+### What the learner reducer should consume from PUZZLE_ATTEMPTED
+
+```js
+case 'PUZZLE_ATTEMPTED': {
+  // ... existing band/streak/spread/scaffolding/pace logic ...
+
+  // CRA stage progression (NEW)
+  const op = event.operation;
+  let newCraStages = state.craStages;
+
+  if (event.correct && !event.hintUsed && !event.toldMe) {
+    // Correct without any help at the current CRA stage
+    // Track consecutive no-hint successes per operation
+    // After 3 no-hint correct at the SAME CRA stage, promote CRA
+    //   concrete → representational → abstract
+    const noHintSuccesses = countConsecutiveNoHintCorrect(newWindow, op, state.craStages[op]);
+    if (noHintSuccesses >= 3 && state.craStages[op] !== 'abstract') {
+      const nextCra = state.craStages[op] === 'concrete' ? 'representational' : 'abstract';
+      newCraStages = Object.freeze({ ...state.craStages, [op]: nextCra });
+    }
+  }
+
+  if (event.hintUsed && event.correct) {
+    // Correct but needed a hint — the CRA stage they dropped TO is where they succeed
+    // If they're marked as 'abstract' for this operation but needed show-me to
+    // 'representational' to get it right, demote to 'representational'
+    const shownStage = event.craLevelShown;
+    if (shownStage && CRA_ORDER[shownStage] < CRA_ORDER[state.craStages[op]]) {
+      newCraStages = Object.freeze({ ...state.craStages, [op]: shownStage });
+    }
+  }
+
+  if (event.toldMe) {
+    // Gave up entirely — don't change CRA stage, but note it.
+    // Repeated tell-me on the same operation should demote CRA to concrete.
+    const tellMeCount = countRecentTellMe(newWindow, op);
+    if (tellMeCount >= 2 && state.craStages[op] !== 'concrete') {
+      newCraStages = Object.freeze({ ...state.craStages, [op]: 'concrete' });
+    }
+  }
+}
+
+const CRA_ORDER = { concrete: 0, representational: 1, abstract: 2 };
+```
+
+### Helper: countConsecutiveNoHintCorrect
+
+```js
+function countConsecutiveNoHintCorrect(window, operation, craStage) {
+  let count = 0;
+  for (let i = window.entries.length - 1; i >= 0; i--) {
+    const e = window.entries[i];
+    if (e.operation !== operation) continue;
+    if (!e.correct || e.hintUsed || e.toldMe) break;
+    if (e.craLevelShown && e.craLevelShown !== craStage) break;
+    count++;
+  }
+  return count;
+}
+```
+
+### Helper: countRecentTellMe
+
+```js
+function countRecentTellMe(window, operation) {
+  return window.entries.filter(e =>
+    e.operation === operation && e.toldMe
+  ).length;
+}
+```
+
+### How CRA stages feed into challenge creation
+
+When the adapter creates a challenge, it sets the `renderHint.craStage` from the learner profile:
+
+```js
+// In _startChallengeFromDomain or the trigger functions:
+const operation = challenge.operation;
+const craStage = profileState.craStages[operation] || 'concrete';
+const context = {
+  source: 'robot',
+  npcName: 'Sparky',
+  renderHint: {
+    craStage,                     // from learner profile for THIS operation
+    answerMode: 'choice',         // from profile answerMode dial
+    interactionType: 'quiz',
+  },
+};
+```
+
+This closes the loop:
+1. Challenge starts at the kid's CRA stage for this operation
+2. Kid uses show-me → CRA drops → they succeed at a lower level
+3. Event records `craLevelShown` and `hintUsed`
+4. Learner reducer reads these → adjusts `craStages[operation]`
+5. Next challenge for this operation starts at the updated CRA stage
+
+### The TEACHING_RETRY case becomes unnecessary
+
+The old TODO at `TEACHING_RETRY` in the learner reducer was the placeholder for CRA tracking. With the new approach, CRA tracking happens inside `PUZZLE_ATTEMPTED` using `hintUsed`, `hintLevel`, `toldMe`, and `craLevelShown`. The `TEACHING_RETRY` case can be deleted — it served no purpose and the signals it was meant to capture now flow through the standard event fields.
+
+### What the CRA renderer PR should include
+
+Domain changes:
+- Replace the `TEACHING_RETRY` TODO with CRA stage logic in `PUZZLE_ATTEMPTED` handler
+- Add `countConsecutiveNoHintCorrect` and `countRecentTellMe` helpers
+- Add `hintUsed`, `toldMe`, `craLevelShown` to rolling window entries (they're in events but not stored in the window)
+- Tests: CRA promotion after 3 no-hint correct, CRA demotion on hint-assisted correct, CRA demotion on repeated tell-me
+
+Adapter changes:
+- Pass `profileState.craStages[operation]` into the challenge context renderHint
+- Include `hintUsed`, `toldMe`, `craLevelShown` in events (already done for new fields, but verify window entries include them)
+
+Presentation changes:
+- QuizRenderer extraction (from `renderChallenge`)
+- CRA concrete renderer (dots/stars alongside the question)
+- CRA representational renderer (number line or tens/ones blocks)
+- Show-me button → dispatches `SHOW_ME` to challenge reducer → application swaps renderer
+- Tell-me button → dispatches `TELL_ME` → shows answer at concrete level
+
+### Tests for CRA feedback loop
+
+```
+Learner reducer — CRA progression:
+  - 'CRA promotes from concrete to representational after 3 no-hint correct'
+  - 'CRA promotes from representational to abstract after 3 no-hint correct'
+  - 'CRA does not promote above abstract'
+  - 'CRA demotes when hint was needed and succeeded at lower level'
+  - 'CRA demotes to concrete after 2 tell-me events for same operation'
+  - 'CRA stages are tracked per-operation independently'
+  - 'mixed operations: CRA for add can be abstract while sub is concrete'
+  - 'hint-assisted correct at same CRA level does not demote'
+  - 'no-hint streak resets on a wrong answer'
+  - 'no-hint streak resets on a hint-used answer'
+```
 
 ## Pluggable Renderers
 

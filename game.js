@@ -122,6 +122,22 @@ function initInput() {
       return;
     }
 
+    // Scaffold buttons (show-me / tell-me)
+    if (window._showMeBounds) {
+      const b = window._showMeBounds;
+      if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+        if (typeof window._onShowMe === 'function') window._onShowMe();
+        return;
+      }
+    }
+    if (window._tellMeBounds) {
+      const b = window._tellMeBounds;
+      if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
+        if (typeof window._onTellMe === 'function') window._onTellMe();
+        return;
+      }
+    }
+
     if (CHALLENGE.answered) {
       dismissChallenge();
       if (DIALOGUE.active) {
