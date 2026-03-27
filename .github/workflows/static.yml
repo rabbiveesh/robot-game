@@ -50,6 +50,7 @@ jobs:
           cp *.js _site/ 2>/dev/null || true
           # Copy the built bundles
           cp dist/learning-domain.js _site/dist/
+          cp dist/challenge-domain.js _site/dist/
           cp dist/economy-domain.js _site/dist/
           cp dist/speech-recognition.js _site/dist/
 

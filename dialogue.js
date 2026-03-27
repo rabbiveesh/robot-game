@@ -514,11 +514,11 @@ const ELEVENLABS_VOICES = {
 
 let _elevenLabsAudio = null;
 
-function speakLine(speaker, text) {
+function speakLine(speaker, text, speech) {
   if (!TTS_ENABLED) return;
 
-  // Clean text — replace math symbols with words, strip emojis and special chars
-  const clean = text
+  // Use speech if provided, else clean text as fallback (legacy dialogue without speech field)
+  const clean = (speech || text)
     .replace(/×/g, 'times').replace(/÷/g, 'divided by')
     .replace(/\+/g, ' plus ').replace(/ - /g, ' minus ')
     .replace(/[🤖🚀⭐🌟🍭📍#]/g, '').replace(/\*[^*]+\*/g, '').trim();
@@ -628,7 +628,7 @@ function startDialogue(lines, onComplete) {
 
   // Speak the first line as typewriter starts (subtitles mode — kid hears while reading)
   if (lines.length > 0) {
-    speakLine(lines[0].speaker, lines[0].text);
+    speakLine(lines[0].speaker, lines[0].text, lines[0].speech);
   }
 }
 
@@ -653,7 +653,7 @@ function advanceDialogue() {
 
   // Speak the new line as typewriter starts
   const line = DIALOGUE.lines[DIALOGUE.currentLine];
-  speakLine(line.speaker, line.text);
+  speakLine(line.speaker, line.text, line.speech);
 }
 
 function updateDialogue(dt) {
@@ -715,9 +715,19 @@ function renderDialogue(ctx, canvasW, canvasH, time) {
 // ─── CHALLENGE SYSTEM ────────────────────────────────────
 
 function startChallenge(challengeData, onComplete) {
+  CHALLENGE.onComplete = onComplete || null;
+
+  // If this is a domain challenge object (has displayText), use the state machine
+  if (challengeData.displayText && typeof window._startChallengeFromDomain === 'function') {
+    window._startChallengeFromDomain(challengeData, challengeData._context || { source: 'unknown', npcName: 'Sparky' });
+    speakLine('Sparky', challengeData.displayText, challengeData.speechText);
+    return;
+  }
+
+  // Legacy path (intake quiz, old-format challenges)
   CHALLENGE.active = true;
-  CHALLENGE.type = challengeData.type;
-  CHALLENGE.question = challengeData.question;
+  CHALLENGE.type = challengeData.type || 'math';
+  CHALLENGE.question = challengeData.question || challengeData.displayText;
   CHALLENGE.correctAnswer = challengeData.correctAnswer;
   CHALLENGE.choices = challengeData.choices;
   CHALLENGE.selectedIndex = -1;
@@ -727,9 +737,6 @@ function startChallenge(challengeData, onComplete) {
   CHALLENGE.celebrationStart = 0;
   CHALLENGE.showTeaching = false;
   CHALLENGE.teachingData = challengeData.teachingData || null;
-  CHALLENGE.onComplete = onComplete || null;
-
-  // Reset all voice/feedback state from previous challenge
   CHALLENGE._voiceText = '';
   CHALLENGE._voiceRetries = 0;
   CHALLENGE._voiceListening = false;
@@ -737,12 +744,20 @@ function startChallenge(challengeData, onComplete) {
   CHALLENGE._lastVoiceResult = null;
   CHALLENGE._micLabel = null;
 
-  // Speak the question as the typewriter starts (subtitles mode)
-  speakLine('Sparky', challengeData.question.replace('\n', '. '));
+  speakLine('Sparky', (challengeData.question || '').replace('\n', '. '));
 }
 
 function selectChallengeChoice(index, time) {
   if (CHALLENGE.answered) return;
+
+  // If challenge state machine is active, dispatch through it
+  if (window._challengeState && typeof window._onChallengeAnswer === 'function') {
+    const answer = Number(CHALLENGE.choices[index]?.text);
+    window._onChallengeAnswer(answer, time, 'choice');
+    return;
+  }
+
+  // Legacy path (intake quiz)
   CHALLENGE.selectedIndex = index;
   const choice = CHALLENGE.choices[index];
 
@@ -868,6 +883,9 @@ async function handleVoiceInput(time) {
   if (CHALLENGE._voiceListening || CHALLENGE._voiceConfirming || CHALLENGE.answered) return;
   if (typeof listenForNumber !== 'function') return;
 
+  // Use challenge state machine if available
+  const useStateMachine = !!window._challengeState && typeof window._onVoiceAction === 'function';
+
   // Run pre-flight on first tap
   const preflight = await runVoicePreflight();
   if (!preflight.isSecure) {
@@ -881,9 +899,14 @@ async function handleVoiceInput(time) {
     return;
   }
 
-  CHALLENGE._voiceListening = true;
-  CHALLENGE._voiceText = '';
-  CHALLENGE._voiceRetries = (CHALLENGE._voiceRetries || 0);
+  // Dispatch through state machine if available
+  if (useStateMachine) {
+    window._onVoiceAction({ type: 'VOICE_LISTEN_START' });
+  } else {
+    CHALLENGE._voiceListening = true;
+    CHALLENGE._voiceText = '';
+    CHALLENGE._voiceRetries = (CHALLENGE._voiceRetries || 0);
+  }
 
   // Update debug state
   const vd = window._voiceDebug || {};
@@ -925,32 +948,48 @@ async function handleVoiceInput(time) {
       alternatives: result.alternatives,
     });
 
-    if (result.number === null || result.confidence < 0.5) {
-      vd.status = 'retry (low confidence)';
-      CHALLENGE._voiceText = "Didn't catch that! Tap mic to try again.";
-      CHALLENGE._voiceRetries++;
-      return;
-    }
-
-    // Store voice metadata for event recording
-    CHALLENGE._lastVoiceResult = {
-      confidence: result.confidence,
-      hesitationMs: result.hesitationMs,
-      totalMs: result.totalMs,
-      selfCorrected: result.selfCorrected,
-      hadFillerWords: result.hadFillerWords,
-      retries: CHALLENGE._voiceRetries,
-      number: result.number,
-    };
-
-    if (result.confidence >= 0.8) {
-      vd.status = 'auto-submit';
-      submitVoiceAnswer(result.number, time);
+    if (useStateMachine) {
+      // Dispatch through challenge reducer — it handles all confidence tiers
+      window._onVoiceAction({ type: 'VOICE_RESULT', number: result.number, confidence: result.confidence,
+        hesitationMs: result.hesitationMs, totalMs: result.totalMs,
+        selfCorrected: result.selfCorrected, hadFillerWords: result.hadFillerWords });
+      // Auto-submit on high confidence
+      if (result.number !== null && result.confidence >= 0.8) {
+        vd.status = 'auto-submit';
+        window._onChallengeAnswer(result.number, time, 'voice');
+      } else if (result.number !== null && result.confidence >= 0.5) {
+        vd.status = 'confirming';
+      } else {
+        vd.status = 'retry (low confidence)';
+      }
     } else {
-      vd.status = 'confirming';
-      CHALLENGE._voiceConfirming = true;
-      CHALLENGE._voiceConfirmNumber = result.number;
-      CHALLENGE._voiceText = `Did you say ${result.number}?`;
+      // Legacy path
+      if (result.number === null || result.confidence < 0.5) {
+        vd.status = 'retry (low confidence)';
+        CHALLENGE._voiceText = "Didn't catch that! Tap mic to try again.";
+        CHALLENGE._voiceRetries++;
+        return;
+      }
+
+      CHALLENGE._lastVoiceResult = {
+        confidence: result.confidence,
+        hesitationMs: result.hesitationMs,
+        totalMs: result.totalMs,
+        selfCorrected: result.selfCorrected,
+        hadFillerWords: result.hadFillerWords,
+        retries: CHALLENGE._voiceRetries,
+        number: result.number,
+      };
+
+      if (result.confidence >= 0.8) {
+        vd.status = 'auto-submit';
+        submitVoiceAnswer(result.number, time);
+      } else {
+        vd.status = 'confirming';
+        CHALLENGE._voiceConfirming = true;
+        CHALLENGE._voiceConfirmNumber = result.number;
+        CHALLENGE._voiceText = `Did you say ${result.number}?`;
+      }
     }
   } catch (e) {
     CHALLENGE._voiceListening = false;
@@ -1004,12 +1043,19 @@ function submitVoiceAnswer(number, time) {
 }
 
 function confirmVoiceAnswer(confirmed, time) {
-  CHALLENGE._voiceConfirming = false;
-  if (confirmed) {
-    submitVoiceAnswer(CHALLENGE._voiceConfirmNumber, time);
+  if (window._challengeState && typeof window._onVoiceAction === 'function') {
+    window._onVoiceAction({ type: 'VOICE_CONFIRM', confirmed });
+    if (confirmed) {
+      window._onChallengeAnswer(CHALLENGE._voiceConfirmNumber, time, 'voice');
+    }
   } else {
-    CHALLENGE._voiceText = 'Okay! Tap mic to try again.';
-    CHALLENGE._voiceRetries++;
+    CHALLENGE._voiceConfirming = false;
+    if (confirmed) {
+      submitVoiceAnswer(CHALLENGE._voiceConfirmNumber, time);
+    } else {
+      CHALLENGE._voiceText = 'Okay! Tap mic to try again.';
+      CHALLENGE._voiceRetries++;
+    }
   }
 }
 
@@ -1572,18 +1618,19 @@ async function triggerRobotChat(playerName, time) {
 
   if (doChallenge) {
     const challenge = generateMathChallenge();
+    challenge._context = { source: 'robot', npcName: 'Sparky' };
 
     let intro = getPreFetchedLine();
     if (!intro) {
-      const ctx = `${playerName} wants to talk. Introduce a math challenge. Be excited! The question will be: "${challenge.question}" — lead into it naturally but do NOT answer it.`;
+      const ctx = `${playerName} wants to talk. Introduce a math challenge. Be excited! The question will be: "${challenge.displayText || challenge.question}" — lead into it naturally but do NOT answer it.`;
       intro = await fetchRobotDialogue(ctx);
     }
     if (!intro) intro = "BEEP BOOP! My math sensors are going CRAZY! Quick, help me solve this!";
 
     startDialogue([{ speaker: 'Sparky', text: intro }], () => {
       startChallenge(challenge, (correct) => {
+        // Reward is handled by the state machine — no awardDumDum call needed
         if (correct) {
-          awardDumDum(time);
           startDialogue([{
             speaker: 'Sparky',
             text: `WOW ${playerName}! You are SO SMART! Here, have a Dum Dum! You earned it!`,
@@ -1615,10 +1662,11 @@ async function triggerNPCChat(npc, playerName, time) {
 
   if (doChallenge) {
     const challenge = generateMathChallenge();
+    challenge._context = { source: 'npc', npcName: npc.name };
 
     let intro = null;
     if (API_KEY) {
-      const ctx = `You are ${npc.name}. ${npc.dialogueContext} Talk to ${playerName} and introduce a math challenge. The question is: "${challenge.question}" — lead into it but do NOT answer it. Stay in character. 2-3 short sentences.`;
+      const ctx = `You are ${npc.name}. ${npc.dialogueContext} Talk to ${playerName} and introduce a math challenge. The question is: "${challenge.displayText || challenge.question}" — lead into it but do NOT answer it. Stay in character. 2-3 short sentences.`;
       intro = await fetchRobotDialogue(ctx);
     }
     if (!intro) intro = `Aha, ${playerName}! I have a challenge for you! Let's see how smart you are!`;
@@ -1626,7 +1674,6 @@ async function triggerNPCChat(npc, playerName, time) {
     startDialogue([{ speaker: npc.name, text: intro }], () => {
       startChallenge(challenge, (correct) => {
         if (correct) {
-          awardDumDum(time);
           startDialogue([{
             speaker: npc.name,
             text: `Incredible, ${playerName}! You earned a Dum Dum!`,
@@ -1652,6 +1699,7 @@ async function triggerNPCChat(npc, playerName, time) {
 
 async function triggerChestInteraction(playerName, time) {
   const challenge = generateMathChallenge();
+  challenge._context = { source: 'chest', npcName: 'Sparky' };
 
   startDialogue([{
     speaker: 'Sparky',
@@ -1659,7 +1707,6 @@ async function triggerChestInteraction(playerName, time) {
   }], () => {
     startChallenge(challenge, (correct) => {
       if (correct) {
-        awardDumDum(time);
         startDialogue([
           { speaker: 'Sparky', text: `YOU OPENED IT! There's a Dum Dum inside! For ME?! You're the BEST BOSS EVER!!!` },
         ]);
