@@ -81,7 +81,22 @@
   // Start a challenge via the state machine
   window._startChallengeFromDomain = function (challenge, context) {
     challengeShownAt = performance.now();
-    challengeState = createChallengeState(challenge, context);
+
+    // Inject CRA stage from learner profile for this operation
+    const op = challenge.operation;
+    const craStage = (op && profileState.craStages[op]) || 'concrete';
+    const enrichedContext = {
+      ...context,
+      renderHint: {
+        craStage,
+        answerMode: 'choice',
+        interactionType: context.renderHint?.interactionType || 'quiz',
+        ...(context.renderHint || {}),
+        craStage, // profile CRA takes precedence over context default
+      },
+    };
+
+    challengeState = createChallengeState(challenge, enrichedContext);
     window._challengeState = challengeState;
 
     // Sync to legacy CHALLENGE object for rendering (temporary bridge)
@@ -125,6 +140,8 @@
       craLevelShown: challengeState.renderHint?.craStage || null,
       answerMode: answerMode || 'choice',
       hintUsed: challengeState.hintUsed,
+      toldMe: challengeState.toldMe,
+      craLevelShown: challengeState.renderHint?.craStage || null,
       voiceConfidence: voiceResult?.confidence ?? null,
       voiceHesitationMs: voiceResult?.hesitationMs ?? null,
       voiceSelfCorrected: voiceResult?.selfCorrected ?? null,
