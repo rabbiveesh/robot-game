@@ -287,6 +287,8 @@ CHALLENGE._micLabel = null;
 - No leftover voice state from previous challenge
 - Works across NPC → NPC transitions and chest → NPC transitions
 
+**Note:** The challenge lifecycle refactor (`docs/challenge-lifecycle-spec.md`) eliminates this bug class — each challenge creates a new immutable state object. No globals to forget to reset.
+
 ## 7. TTS Should Sync With Typewriter, Not After
 
 ### Problem
@@ -379,6 +381,8 @@ if (correct) {
 - Wrong answer → no Dum Dum, encouragement only
 - Chest behavior unchanged (already correct)
 - Dum Dum counter in HUD only increases on correct answers
+
+**Note:** The challenge lifecycle refactor (`docs/challenge-lifecycle-spec.md`) eliminates this bug class entirely — reward logic moves to a single domain reducer where it's impossible to get backwards. The quick fix above is for shipping before the refactor lands.
 
 ## 9. Integration / E2E Tests
 
@@ -477,37 +481,8 @@ This is inherently messy because the legacy code is global-mutable. The integrat
 
 ### Problem
 
-TTS reads "What is 8 × 5?" as "what is 8 [silence or garbled] 5" because `×` (U+00D7, multiplication sign) and `÷` (U+00F7, division sign) aren't speech-friendly. Some engines skip them, some say "times sign," some say nothing. The kid hears a broken sentence.
-
-Also `+` may read as "plus" (fine) or "and" (confusing for math), and `-` may read as "minus" or "dash" or "hyphen" depending on the engine.
+TTS reads "What is 8 × 5?" as "what is 8 [silence or garbled] 5". Root cause: one string serves display AND speech. The TTS layer shouldn't have to parse math symbols — the source should produce separate display and speech text.
 
 ### Fix
 
-Expand the text cleaning in `speakLine` (dialogue.js line 457) to replace math symbols with spoken words:
-
-```js
-const clean = text
-  .replace(/[🤖🚀⭐🌟🍭📍#]/g, '')
-  .replace(/\*[^*]+\*/g, '')
-  .replace(/×/g, ' times ')
-  .replace(/÷/g, ' divided by ')
-  .replace(/(\d)\s*\+\s*(\d)/g, '$1 plus $2')
-  .replace(/(\d)\s*-\s*(\d)/g, '$1 minus $2')
-  .replace(/(\d)\s*=\s*(\d)/g, '$1 equals $2')
-  .trim();
-```
-
-The regex patterns anchor to digits on both sides so we don't replace `+` or `-` in non-math contexts (e.g., "B0RK.exe" or "Sparky's").
-
-### Files to change
-
-- `dialogue.js` — expand the `clean` regex chain in `speakLine`
-
-### Acceptance
-
-- "What is 8 × 5?" speaks as "What is 8 times 5?"
-- "What is 24 ÷ 6?" speaks as "What is 24 divided by 6?"
-- "What is 13 + 8?" speaks as "What is 13 plus 8?"
-- "What is 20 - 7?" speaks as "What is 20 minus 7?"
-- "What + 3 = 10?" speaks as "What plus 3 equals 10?"
-- Non-math text with + or - is unaffected
+**Superseded by `docs/challenge-lifecycle-spec.md`.** The challenge lifecycle refactor produces `{ displayText, speechText }` from structured data at the source. The TTS layer receives speech-ready text and never sees symbols. This eliminates the entire class of display/speech divergence bugs, not just math symbols.
