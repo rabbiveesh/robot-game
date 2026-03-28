@@ -83,13 +83,14 @@ function renderBase10Blocks(ctx, a, b, op, answer, cx, cy, time) {
     return onesH || CUBE;
   }
 
-  // Draw operator symbol centered vertically between the taller group
+  // Draw operator symbol centered vertically with the taller group
   function drawOp(x, y, symbol, numA, numB) {
     const h = Math.max(contentHeight(numA), contentHeight(numB));
     ctx.fillStyle = '#FFF';
     ctx.font = 'bold 28px "Segoe UI", system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(symbol, x, y + h / 2 + 8);
+    ctx.fillText(symbol, x, y + h / 2 + 4);
+    ctx.textAlign = 'left'; // reset
   }
 
   if (op === '+') {

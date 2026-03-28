@@ -149,7 +149,9 @@ function renderDevZone(ctx, canvasW, canvasH, time) {
   ctx.strokeRect(lx, y, canvasW - 40, 130);
   const vis = typeof getVisual === 'function' ? getVisual(c.visualMethod) : null;
   if (vis) {
+    ctx.save();
     vis.render(ctx, c.a, c.b, c.op, answer, canvasW / 2, y + 20, time);
+    ctx.restore();
   } else {
     ctx.fillStyle = '#546E7A'; ctx.font = '16px monospace'; ctx.textAlign = 'center';
     ctx.fillText('No visual: ' + c.visualMethod, canvasW / 2, y + 65);
@@ -175,7 +177,9 @@ function renderDevZone(ctx, canvasW, canvasH, time) {
     ctx.fillStyle = '#90CAF9'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'left';
     ctx.fillText(v.name + (v.bandRange ? ` (${v.bandRange[0]}-${v.bandRange[1]})` : ''), cx + 5, cy + 14);
     if (v.operations.includes(DEV_OP_NAMES[c.op])) {
+      ctx.save();
       v.render(ctx, c.a, c.b, c.op, answer, cx + cardW / 2, cy + 50, time);
+      ctx.restore();
     } else {
       ctx.fillStyle = '#37474F'; ctx.font = '14px monospace'; ctx.textAlign = 'center';
       ctx.fillText('N/A for ' + c.op, cx + cardW / 2, cy + 70);
