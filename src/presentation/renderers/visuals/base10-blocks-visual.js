@@ -7,24 +7,29 @@
 function renderBase10Blocks(ctx, a, b, op, answer, cx, cy, time) {
   const ROD_W = 10;
   const ROD_H = 44;
+  const FIVE_H = 22;   // 5-bar: half the rod height
   const CUBE = 10;
   const GAP = 3;
-  const COLOR_A = { rod: '#42A5F5', cube: '#64B5F6' };
-  const COLOR_B = { rod: '#FFD54F', cube: '#FFE082' };
+  const COLOR_A = { rod: '#42A5F5', cube: '#64B5F6', five: '#66BB6A' };
+  const COLOR_B = { rod: '#FFD54F', cube: '#FFE082', five: '#81C784' };
 
   // Measure width needed for a number's blocks
   function measureNum(num) {
     const tens = Math.floor(num / 10);
     const ones = num % 10;
+    const fives = Math.floor(ones / 5);
+    const remainder = ones % 5;
     const rodsW = tens > 0 ? tens * (ROD_W + GAP) : 0;
-    const onesW = ones > 0 ? ones * (CUBE + GAP) : 0;
+    const onesW = fives * (ROD_W + GAP) + remainder * (CUBE + GAP);
     return Math.max(rodsW, onesW, 20);
   }
 
-  // Draw one number as blocks: rods on top, cubes below, label above
+  // Draw one number as blocks: tens rods on top, 5-bars + cubes below
   function drawNum(x, y, num, colors) {
     const tens = Math.floor(num / 10);
     const ones = num % 10;
+    const fives = Math.floor(ones / 5);
+    const remainder = ones % 5;
     const totalW = measureNum(num);
 
     // Label centered above
@@ -43,23 +48,39 @@ function renderBase10Blocks(ctx, a, b, op, answer, cx, cy, time) {
       ctx.strokeRect(rx, y, ROD_W, ROD_H);
     }
 
-    // Ones cubes (below rods, or at top if no rods)
-    const cubeY = tens > 0 ? y + ROD_H + 5 : y;
-    for (let i = 0; i < ones; i++) {
-      const cx2 = x + i * (CUBE + GAP);
-      ctx.fillStyle = colors.cube;
-      ctx.fillRect(cx2, cubeY, CUBE, CUBE);
+    // Ones row: 5-bars (green half-rods) + remainder cubes
+    const onesY = tens > 0 ? y + ROD_H + 5 : y;
+    let onesX = x;
+
+    // 5-bars
+    for (let i = 0; i < fives; i++) {
+      ctx.fillStyle = colors.five;
+      ctx.fillRect(onesX, onesY, ROD_W, FIVE_H);
       ctx.strokeStyle = 'rgba(0,0,0,0.3)';
       ctx.lineWidth = 1;
-      ctx.strokeRect(cx2, cubeY, CUBE, CUBE);
+      ctx.strokeRect(onesX, onesY, ROD_W, FIVE_H);
+      onesX += ROD_W + GAP;
+    }
+
+    // Remainder cubes
+    for (let i = 0; i < remainder; i++) {
+      ctx.fillStyle = colors.cube;
+      ctx.fillRect(onesX, onesY + (fives > 0 ? (FIVE_H - CUBE) / 2 : 0), CUBE, CUBE);
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(onesX, onesY + (fives > 0 ? (FIVE_H - CUBE) / 2 : 0), CUBE, CUBE);
+      onesX += CUBE + GAP;
     }
   }
 
-  // Height of the block area for a number (rods + cubes, or just cubes)
+  // Height of the block area for a number
   function contentHeight(num) {
     const tens = Math.floor(num / 10);
-    if (tens > 0) return ROD_H + 5 + CUBE; // rods + gap + cubes row
-    return CUBE; // just cubes
+    const ones = num % 10;
+    const fives = Math.floor(ones / 5);
+    const onesH = fives > 0 ? FIVE_H : (ones > 0 ? CUBE : 0);
+    if (tens > 0) return ROD_H + 5 + onesH;
+    return onesH || CUBE;
   }
 
   // Draw operator symbol centered vertically between the taller group
@@ -92,7 +113,7 @@ function renderBase10Blocks(ctx, a, b, op, answer, cx, cy, time) {
     drawNum(startX, cy, a, COLOR_A);
     drawOp(startX + wA + opGap / 2, cy, '\u2212', a, b);
     // Draw B in red to show "take away"
-    drawNum(startX + wA + opGap, cy, b, { rod: '#EF5350', cube: '#EF9A9A' });
+    drawNum(startX + wA + opGap, cy, b, { rod: '#EF5350', cube: '#EF9A9A', five: '#E57373' });
 
   } else if (op === '\u00d7' || op === '*') {
     // Array: a rows of b dots
