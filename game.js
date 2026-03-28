@@ -472,6 +472,7 @@ function initGame(playerName, apiKey, slotIndex, isLoad, opts) {
   if (!isLoad && playerName && playerName.toLowerCase().replace(/\s/g, '') === 'justinbailey') {
     GAME.state = 'DEV_ZONE';
     GAME.lastTime = performance.now();
+    initInput(); // need click/key handlers
     if (typeof initDevZone === 'function') initDevZone();
     requestAnimationFrame(gameLoop);
     return;
