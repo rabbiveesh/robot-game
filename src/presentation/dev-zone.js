@@ -234,23 +234,24 @@ function renderDevZone(ctx, canvasW, canvasH, time) {
   ctx.fillText('TILE GALLERY', lx, y);
   y += 25;
 
-  const tileTypes = typeof TILE_TYPES !== 'undefined' ? TILE_TYPES : [];
-  tileTypes.forEach((tile, i) => {
+  const tileIds = typeof TILE_TYPES !== 'undefined' ? Object.keys(TILE_TYPES).map(Number) : [];
+  tileIds.forEach((tileId, i) => {
     const tx = lx + (i % 10) * 50;
     const ty = y + Math.floor(i / 10) * 60;
     if (typeof renderTile === 'function') {
-      try { renderTile(ctx, tx, ty, i, time); } catch (e) { }
+      try { renderTile(ctx, tx, ty, tileId, time); } catch (e) { }
     } else {
-      ctx.fillStyle = tile.color || '#333';
+      const tile = TILE_TYPES[tileId];
+      ctx.fillStyle = (tile && tile.color) || '#333';
       ctx.fillRect(tx, ty, 32, 32);
     }
     ctx.fillStyle = '#546E7A';
     ctx.font = '9px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(String(i), tx + 16, ty + 44);
+    ctx.fillText(String(tileId), tx + 16, ty + 44);
     ctx.textAlign = 'left';
   });
-  y += Math.ceil(tileTypes.length / 10) * 60 + 20;
+  y += Math.ceil(tileIds.length / 10) * 60 + 20;
 
   // ─── TTS TEST ─────────────────────────────────────
   ctx.fillStyle = '#FFD54F';
