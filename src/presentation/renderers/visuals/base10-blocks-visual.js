@@ -5,152 +5,149 @@
 // Registration is at end of file (after function definition).
 
 function renderBase10Blocks(ctx, a, b, op, answer, cx, cy, time) {
-  const rodW = 8;
-  const rodH = 40;
-  const cubeSize = 8;
-  const gap = 3;
-  const groupGap = 30;
-  const rodColor1 = '#42A5F5';
-  const rodColor2 = '#FFD54F';
-  const cubeColor1 = '#64B5F6';
-  const cubeColor2 = '#FFE082';
-  const ansColor = '#69F0AE';
+  const ROD_W = 10;
+  const ROD_H = 44;
+  const CUBE = 10;
+  const GAP = 3;
+  const COLOR_A = { rod: '#42A5F5', cube: '#64B5F6' };
+  const COLOR_B = { rod: '#FFD54F', cube: '#FFE082' };
 
-  function drawNumber(x, y, num, rodColor, cubeColor, label) {
+  // Measure width needed for a number's blocks
+  function measureNum(num) {
     const tens = Math.floor(num / 10);
     const ones = num % 10;
+    const rodsW = tens > 0 ? tens * (ROD_W + GAP) : 0;
+    const onesW = ones > 0 ? ones * (CUBE + GAP) : 0;
+    return Math.max(rodsW, onesW, 20);
+  }
 
-    // Label
-    ctx.fillStyle = '#AAA';
-    ctx.font = 'bold 14px "Segoe UI", system-ui, sans-serif';
+  // Draw one number as blocks: rods on top, cubes below, label above
+  function drawNum(x, y, num, colors) {
+    const tens = Math.floor(num / 10);
+    const ones = num % 10;
+    const totalW = measureNum(num);
+
+    // Label centered above
+    ctx.fillStyle = '#E0E0E0';
+    ctx.font = 'bold 16px "Segoe UI", system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(String(num), x + Math.max((tens * (rodW + gap)) / 2, 20), y - 8);
+    ctx.fillText(String(num), x + totalW / 2, y - 6);
 
-    let drawX = x;
-
-    // Tens rods (vertical bars)
-    for (let i = 0; i < Math.min(tens, 12); i++) {
-      ctx.fillStyle = rodColor;
-      ctx.fillRect(drawX, y, rodW, rodH);
-      ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    // Tens rods
+    for (let i = 0; i < Math.min(tens, 15); i++) {
+      const rx = x + i * (ROD_W + GAP);
+      ctx.fillStyle = colors.rod;
+      ctx.fillRect(rx, y, ROD_W, ROD_H);
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
       ctx.lineWidth = 1;
-      ctx.strokeRect(drawX, y, rodW, rodH);
-      drawX += rodW + gap;
-    }
-    if (tens > 12) {
-      ctx.fillStyle = '#AAA';
-      ctx.font = '12px "Segoe UI", system-ui, sans-serif';
-      ctx.textAlign = 'left';
-      ctx.fillText(`+${tens - 12} more`, drawX, y + rodH / 2 + 4);
+      ctx.strokeRect(rx, y, ROD_W, ROD_H);
     }
 
-    // Ones cubes (below the rods)
-    const onesY = y + rodH + 6;
-    let onesX = x;
+    // Ones cubes (below rods, or at top if no rods)
+    const cubeY = tens > 0 ? y + ROD_H + 5 : y;
     for (let i = 0; i < ones; i++) {
-      ctx.fillStyle = cubeColor;
-      ctx.fillRect(onesX, onesY, cubeSize, cubeSize);
-      ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+      const cx2 = x + i * (CUBE + GAP);
+      ctx.fillStyle = colors.cube;
+      ctx.fillRect(cx2, cubeY, CUBE, CUBE);
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
       ctx.lineWidth = 1;
-      ctx.strokeRect(onesX, onesY, cubeSize, cubeSize);
-      onesX += cubeSize + gap;
+      ctx.strokeRect(cx2, cubeY, CUBE, CUBE);
     }
   }
 
-  if (op === '+') {
-    // Show A blocks + B blocks → Answer blocks
-    const aWidth = Math.max(Math.floor(a / 10) * (rodW + gap), 30);
-    const bWidth = Math.max(Math.floor(b / 10) * (rodW + gap), 30);
+  // Draw operator symbol between two groups
+  function drawOp(x, y, symbol) {
+    ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 28px "Segoe UI", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(symbol, x, y + ROD_H / 2 + 5);
+  }
 
-    const totalW = aWidth + groupGap + 30 + groupGap + bWidth;
+  if (op === '+') {
+    const wA = measureNum(a);
+    const wB = measureNum(b);
+    const opGap = 40;
+    const totalW = wA + opGap + wB;
     const startX = cx - totalW / 2;
 
-    drawNumber(startX, cy, a, rodColor1, cubeColor1);
-
-    // Plus sign
-    ctx.fillStyle = '#FFF';
-    ctx.font = 'bold 24px "Segoe UI", system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('+', startX + aWidth + groupGap / 2 + 5, cy + 20);
-
-    drawNumber(startX + aWidth + groupGap + 20, cy, b, rodColor2, cubeColor2);
+    drawNum(startX, cy, a, COLOR_A);
+    drawOp(startX + wA + opGap / 2, cy, '+');
+    drawNum(startX + wA + opGap, cy, b, COLOR_B);
 
   } else if (op === '-' || op === '\u2212') {
-    // Show A blocks, then cross out B worth
-    const aWidth = Math.max(Math.floor(a / 10) * (rodW + gap), 30);
-    const startX = cx - aWidth / 2;
+    const wA = measureNum(a);
+    const wB = measureNum(b);
+    const opGap = 40;
+    const totalW = wA + opGap + wB;
+    const startX = cx - totalW / 2;
 
-    drawNumber(startX, cy, a, rodColor1, cubeColor1);
-
-    // Show B blocks to remove (in red, to the right)
-    ctx.fillStyle = '#F44336';
-    ctx.font = 'bold 18px "Segoe UI", system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(`take away`, cx, cy + rodH + cubeSize + 25);
-
-    const bWidth = Math.max(Math.floor(b / 10) * (rodW + gap), 30);
-    drawNumber(cx - bWidth / 2, cy + rodH + cubeSize + 32, b, '#EF5350', '#EF9A9A');
+    drawNum(startX, cy, a, COLOR_A);
+    drawOp(startX + wA + opGap / 2, cy, '\u2212');
+    // Draw B in red to show "take away"
+    drawNum(startX + wA + opGap, cy, b, { rod: '#EF5350', cube: '#EF9A9A' });
 
   } else if (op === '\u00d7' || op === '*') {
-    // Show a × b as 'a groups of b'
-    const groups = Math.min(a, 12);
-    const perGroup = Math.min(b, 12);
-    const dotSize = 6;
-    const dotGap = 2;
-    const groupW = perGroup * (dotSize + dotGap);
-    const totalW = groups * (groupW + 10);
-    let startX = cx - Math.min(totalW, 300) / 2;
+    // Array: a rows of b dots
+    const rows = Math.min(a, b) <= 12 ? Math.min(a, b) : Math.min(a, 6);
+    const cols = Math.max(a, b) <= 12 ? Math.max(a, b) : Math.min(Math.max(a, b), 12);
+    const dotR = 5;
+    const dotGap = 4;
+    const gridW = cols * (dotR * 2 + dotGap);
+    const gridH = rows * (dotR * 2 + dotGap);
+    const startX = cx - gridW / 2;
+    const startY = cy;
 
     ctx.fillStyle = '#AAA';
     ctx.font = '14px "Segoe UI", system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`${a} groups of ${b}`, cx, cy - 8);
+    ctx.fillText(`${Math.min(a, b)} rows of ${Math.max(a, b)}`, cx, cy - 8);
 
-    for (let g = 0; g < groups && g < 6; g++) {
-      for (let d = 0; d < perGroup; d++) {
-        ctx.fillStyle = g % 2 === 0 ? rodColor1 : rodColor2;
+    for (let r = 0; r < rows; r++) {
+      for (let c2 = 0; c2 < cols; c2++) {
+        ctx.fillStyle = r % 2 === 0 ? COLOR_A.rod : COLOR_B.rod;
         ctx.beginPath();
-        ctx.arc(startX + d * (dotSize + dotGap) + dotSize / 2,
-          cy + 10 + g * (dotSize + dotGap + 2) + dotSize / 2,
-          dotSize / 2, 0, Math.PI * 2);
+        ctx.arc(startX + c2 * (dotR * 2 + dotGap) + dotR,
+          startY + 5 + r * (dotR * 2 + dotGap) + dotR,
+          dotR, 0, Math.PI * 2);
         ctx.fill();
       }
-    }
-    if (groups > 6) {
-      ctx.fillStyle = '#AAA';
-      ctx.font = '12px "Segoe UI", system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(`... and ${groups - 6} more groups`, cx, cy + 10 + 6 * (dotSize + dotGap + 2) + 10);
     }
 
   } else if (op === '\u00f7' || op === '/') {
-    // Division: show dividend as blocks, partition into divisor groups
+    // Division: show as "a split into b groups of answer"
+    const groups = Math.min(b, 6);
+    const perGroup = Math.min(answer, 12);
+    const dotR = 5;
+    const dotGap = 3;
+    const groupW = perGroup * (dotR * 2 + dotGap) + 10;
+    const totalW = groups * groupW;
+    const startX = cx - Math.min(totalW, 500) / 2;
+
     ctx.fillStyle = '#AAA';
     ctx.font = '14px "Segoe UI", system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(`${a} split into ${b} equal groups`, cx, cy - 8);
-    ctx.fillText(`= ${answer} in each group`, cx, cy + 12);
-
-    // Draw answer-sized groups
-    const groups = Math.min(b, 6);
-    const perGroup = Math.min(answer, 12);
-    const dotSize = 6;
-    const dotGap = 2;
-    let startX = cx - (groups * (perGroup * (dotSize + dotGap) + 15)) / 2;
+    ctx.fillText(`${a} split into ${b} groups`, cx, cy - 8);
 
     for (let g = 0; g < groups; g++) {
-      const gx = startX + g * (perGroup * (dotSize + dotGap) + 15);
-      // Group bracket
+      const gx = startX + g * groupW;
+      // Group outline
       ctx.strokeStyle = '#546E7A';
       ctx.lineWidth = 1;
-      ctx.strokeRect(gx - 2, cy + 22, perGroup * (dotSize + dotGap) + 2, dotSize + 6);
+      ctx.strokeRect(gx, cy + 2, groupW - 8, dotR * 2 + 8);
+      // Dots in group
       for (let d = 0; d < perGroup; d++) {
-        ctx.fillStyle = g % 2 === 0 ? rodColor1 : rodColor2;
+        ctx.fillStyle = g % 2 === 0 ? COLOR_A.rod : COLOR_B.rod;
         ctx.beginPath();
-        ctx.arc(gx + d * (dotSize + dotGap) + dotSize / 2, cy + 25 + dotSize / 2, dotSize / 2, 0, Math.PI * 2);
+        ctx.arc(gx + 5 + d * (dotR * 2 + dotGap) + dotR, cy + 7 + dotR, dotR, 0, Math.PI * 2);
         ctx.fill();
       }
+      // Group count
+      ctx.fillStyle = '#78909C';
+      ctx.font = '11px "Segoe UI", system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(String(perGroup), gx + (groupW - 8) / 2, cy + dotR * 2 + 22);
     }
+    ctx.textAlign = 'left';
   }
 }
 
