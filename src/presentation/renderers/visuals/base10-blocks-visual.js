@@ -55,12 +55,20 @@ function renderBase10Blocks(ctx, a, b, op, answer, cx, cy, time) {
     }
   }
 
-  // Draw operator symbol between two groups
-  function drawOp(x, y, symbol) {
+  // Height of the block area for a number (rods + cubes, or just cubes)
+  function contentHeight(num) {
+    const tens = Math.floor(num / 10);
+    if (tens > 0) return ROD_H + 5 + CUBE; // rods + gap + cubes row
+    return CUBE; // just cubes
+  }
+
+  // Draw operator symbol centered vertically between the taller group
+  function drawOp(x, y, symbol, numA, numB) {
+    const h = Math.max(contentHeight(numA), contentHeight(numB));
     ctx.fillStyle = '#FFF';
     ctx.font = 'bold 28px "Segoe UI", system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(symbol, x, y + ROD_H / 2 + 5);
+    ctx.fillText(symbol, x, y + h / 2 + 8);
   }
 
   if (op === '+') {
@@ -71,7 +79,7 @@ function renderBase10Blocks(ctx, a, b, op, answer, cx, cy, time) {
     const startX = cx - totalW / 2;
 
     drawNum(startX, cy, a, COLOR_A);
-    drawOp(startX + wA + opGap / 2, cy, '+');
+    drawOp(startX + wA + opGap / 2, cy, '+', a, b);
     drawNum(startX + wA + opGap, cy, b, COLOR_B);
 
   } else if (op === '-' || op === '\u2212') {
@@ -82,7 +90,7 @@ function renderBase10Blocks(ctx, a, b, op, answer, cx, cy, time) {
     const startX = cx - totalW / 2;
 
     drawNum(startX, cy, a, COLOR_A);
-    drawOp(startX + wA + opGap / 2, cy, '\u2212');
+    drawOp(startX + wA + opGap / 2, cy, '\u2212', a, b);
     // Draw B in red to show "take away"
     drawNum(startX + wA + opGap, cy, b, { rod: '#EF5350', cube: '#EF9A9A' });
 

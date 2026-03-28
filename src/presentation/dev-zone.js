@@ -147,6 +147,7 @@ function renderDevZone(ctx, canvasW, canvasH, time) {
   y += 145;
 
   // ─── ALL VISUALS COMPARISON ───────────────────────
+  ctx.textAlign = 'left'; // reset after visual render
   ctx.fillStyle = '#FFD54F'; ctx.font = 'bold 20px monospace';
   ctx.fillText(`ALL VISUALS for ${c.a} ${c.op} ${c.b}`, lx, y);
   y += 25;
@@ -163,7 +164,7 @@ function renderDevZone(ctx, canvasW, canvasH, time) {
     ctx.fillStyle = '#90CAF9'; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'left';
     ctx.fillText(v.name + (v.bandRange ? ` (${v.bandRange[0]}-${v.bandRange[1]})` : ''), cx + 5, cy + 14);
     if (v.operations.includes(DEV_OP_NAMES[c.op])) {
-      v.render(ctx, c.a, c.b, c.op, answer, cx + cardW / 2, cy + 35, time);
+      v.render(ctx, c.a, c.b, c.op, answer, cx + cardW / 2, cy + 50, time);
     } else {
       ctx.fillStyle = '#37474F'; ctx.font = '14px monospace'; ctx.textAlign = 'center';
       ctx.fillText('N/A for ' + c.op, cx + cardW / 2, cy + 70);
@@ -173,6 +174,7 @@ function renderDevZone(ctx, canvasW, canvasH, time) {
   y += Math.ceil(allVisuals.length / 3) * (cardH + 10) + 20;
 
   // ─── SPRITE GALLERY ───────────────────────────────
+  ctx.textAlign = 'left';
   ctx.fillStyle = '#FFD54F'; ctx.font = 'bold 20px monospace';
   ctx.fillText('SPRITE GALLERY', lx, y);
   y += 30;
