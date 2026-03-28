@@ -132,32 +132,112 @@ registerSprite('kid2', { name: 'Noa' }, drawKidNPC2);
 
 The Dev Zone is a scrollable canvas-rendered page (or DOM overlay) with sections:
 
-### 1. Visualization Gallery
+### 1. Visualization Playground
 
-For each registered visual:
+An interactive sandbox where you control EVERY input and see the rendered result live.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Base-10 Blocks                                          │
-│  Tens rods + ones cubes. Shows place value.              │
-│  Bands: 5-10  |  CRA: concrete  |  Ops: + - × ÷        │
+│  VISUALIZATION PLAYGROUND                                │
 │                                                          │
-│  Addition:      [rendered: 47 + 28]                      │
-│  Subtraction:   [rendered: 63 - 27]                      │
-│  Multiplication: [rendered: 6 × 7]                       │
-│  Division:      [rendered: 48 ÷ 8]                       │
-└─────────────────────────────────────────────────────────┘
-┌─────────────────────────────────────────────────────────┐
-│  Counting Dots                                           │
-│  Individual dots. Count them up.                         │
-│  Bands: 1-4  |  CRA: concrete  |  Ops: + -              │
+│  Operation:  [+ ] [- ] [×✓] [÷ ]                        │
+│  A: [__7__]  B: [__8__]  (Answer: 56)                   │
+│  Band:       [1] [2] [3] [4] [5] [6✓] [7] [8] [9] [10]│
 │                                                          │
-│  Addition:      [rendered: 3 + 4]                        │
-│  Subtraction:   [rendered: 9 - 5]                        │
+│  Visual method:                                          │
+│  [dots] [ten_frame] [base10✓] [array] [number_line]     │
+│                                                          │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │                                                   │    │
+│  │     [LIVE RENDER of base10 blocks for 7 × 8]     │    │
+│  │                                                   │    │
+│  └─────────────────────────────────────────────────┘    │
+│                                                          │
+│  Challenge phase:                                        │
+│  [presented✓] [feedback] [teaching] [complete]           │
+│                                                          │
+│  Hint state:                                             │
+│  [no hint✓] [show-me ×1] [show-me ×2] [told-me]        │
+│                                                          │
+│  Answer mode:                                            │
+│  [choice✓] [eliminate] [free_input] [voice]              │
+│                                                          │
+│  ┌─────────────────────────────────────────────────┐    │
+│  │                                                   │    │
+│  │     [LIVE RENDER of full QuizRenderer              │    │
+│  │      at selected phase/hint/mode]                  │    │
+│  └─────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────┘
 ```
 
-Each visual is rendered with sample problems from its band range, for each operation it supports. The sample problems are generated from the challenge generator with a fixed seed so they're deterministic.
+Controls are clickable buttons on canvas (same button rendering as the game). Changing any input immediately re-renders both panels:
+- **Top panel**: just the visualization method in isolation (the visual render function with your A, B, op)
+- **Bottom panel**: the full QuizRenderer with a mock `challengeState` built from your selected phase, hint state, answer mode, and visual method
+
+This lets you answer questions like:
+- "What does base-10 blocks look like for 144 ÷ 12?" → set op=÷, A=144, B=12, visual=base10
+- "What does the quiz panel look like after show-me twice?" → set hint=show-me×2, see the visual alongside the choices
+- "What does teaching phase look like with tell-me?" → set phase=teaching, hint=told-me
+- "What if the band is 1 but we force base10 blocks?" → set band=1, visual=base10, see if it still makes sense
+
+The mock `challengeState` is constructed from the controls:
+
+```js
+function buildMockChallengeState(controls) {
+  const { a, b, op, band, phase, hintLevel, toldMe, answerMode, visualMethod } = controls;
+
+  // Generate a real challenge with the specified numbers
+  const challenge = {
+    correctAnswer: compute(a, b, op),
+    displayText: `What is ${a} ${DISPLAY_OP[op]} ${b}?`,
+    speechText: `What is ${a} ${SPEECH_OP[op]} ${b}?`,
+    question: `What is ${a} ${DISPLAY_OP[op]} ${b}?`,
+    operation: opToOperation(op),
+    numbers: { a, b, op },
+    choices: makeChoicesForAnswer(compute(a, b, op)),
+    sampledBand: band,
+    band,
+  };
+
+  return createChallengeState(challenge, {
+    source: 'dev_zone',
+    npcName: 'Sparky',
+    renderHint: {
+      craStage: METHOD_CRA[visualMethod] || 'concrete',
+      visualMethod,
+      answerMode,
+      interactionType: 'quiz',
+    },
+  });
+  // Then apply hint/phase actions to get desired state:
+  // for (let i = 0; i < hintLevel; i++) state = challengeReducer(state, { type: 'SHOW_ME' });
+  // if (toldMe) state = challengeReducer(state, { type: 'TELL_ME' });
+  // etc.
+}
+```
+
+### All Visuals At Once
+
+Below the playground, a static comparison grid showing the SAME problem rendered by every registered visual side-by-side:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  ALL VISUALS for 47 + 28  (from playground A, B, op)    │
+│                                                          │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
+│  │  dots    │  │ ten_frame│  │ base10   │              │
+│  │  (47     │  │ (4 full  │  │ (4 rods  │              │
+│  │  dots!!) │  │  frames) │  │  7 cubes │              │
+│  └──────────┘  └──────────┘  └──────────┘              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐              │
+│  │  array  │  │ num_line │  │ bar_model│              │
+│  │  (N/A   │  │  (jump   │  │  (parts  │              │
+│  │  for +) │  │  47→75)  │  │  /whole) │              │
+│  └──────────┘  └──────────┘  └──────────┘              │
+└─────────────────────────────────────────────────────────┘
+```
+
+Visuals that don't support the selected operation show "N/A" greyed out. Change A, B, or op in the playground → the comparison grid updates too.
 
 ### 2. Renderer Gallery
 
