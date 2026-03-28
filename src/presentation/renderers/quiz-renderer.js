@@ -206,3 +206,11 @@ function createQuizRenderer() {
     },
   };
 }
+
+// Register with renderer registry
+if (typeof registerRenderer === "function") {
+  registerRenderer("quiz", {
+    name: "Quiz (Multiple Choice)",
+    description: "Standard multiple choice with Show-me/Tell-me buttons.",
+  }, createQuizRenderer);
+}

@@ -2,6 +2,8 @@
 // For numbers 1-200+. Shows place value visually.
 // A long bar = 10, a small square = 1.
 
+// Registration is at end of file (after function definition).
+
 function renderBase10Blocks(ctx, a, b, op, answer, cx, cy, time) {
   const rodW = 8;
   const rodH = 40;
@@ -150,4 +152,15 @@ function renderBase10Blocks(ctx, a, b, op, answer, cx, cy, time) {
       }
     }
   }
+}
+
+// Register with visual registry
+if (typeof registerVisual === "function") {
+  registerVisual("base10_blocks", {
+    name: "Base-10 Blocks",
+    description: "Tens rods + ones cubes. Shows place value.",
+    operations: ["add", "sub", "multiply", "divide"],
+    bandRange: [5, 10],
+    craStage: "concrete",
+  }, renderBase10Blocks);
 }
