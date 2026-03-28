@@ -226,12 +226,24 @@ function handleDevZoneClick(mx, my) {
   const adjX = mx;
   const adjY = my + _devZoneScroll;
 
+  console.log('[DevZone Click]', {
+    raw: { mx: Math.round(mx), my: Math.round(my) },
+    adjusted: { adjX: Math.round(adjX), adjY: Math.round(adjY) },
+    scroll: Math.round(_devZoneScroll),
+    buttonCount: _devZoneButtons.length,
+    firstFewButtons: _devZoneButtons.slice(0, 5).map(b => ({
+      x: Math.round(b.x), y: Math.round(b.y), w: b.w, h: b.h,
+    })),
+  });
+
   for (const btn of _devZoneButtons) {
     if (adjX >= btn.x && adjX <= btn.x + btn.w && adjY >= btn.y && adjY <= btn.y + btn.h) {
+      console.log('[DevZone Hit]', { x: btn.x, y: btn.y, w: btn.w, h: btn.h });
       btn.onClick();
       return;
     }
   }
+  console.log('[DevZone Miss] no button hit');
 }
 
 function handleDevZoneKey(key) {
