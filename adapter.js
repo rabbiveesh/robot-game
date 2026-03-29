@@ -199,6 +199,11 @@
 
     checkFrustration();
 
+    // Save after every challenge completion
+    if (typeof activeSlot !== 'undefined' && activeSlot >= 0) {
+      saveToSlot(activeSlot);
+    }
+
     // Auto-dismiss after brief visual feedback
     if (challengeState.phase === 'complete' || challengeState.phase === 'teaching') {
       autoDismissChallenge(challengeState.correct, challengeState.phase === 'complete' && challengeState.correct ? 800 : 400);
@@ -399,6 +404,7 @@
   const _oldGatherSave = window.gatherSaveData;
   window.gatherSaveData = function () {
     const data = _oldGatherSave();
+    if (!profileState) return data; // not initialized yet
     data.learnerProfile = {
       mathBand: profileState.mathBand,
       streak: profileState.streak,
