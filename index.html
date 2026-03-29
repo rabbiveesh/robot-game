@@ -444,9 +444,12 @@
   <script src="dialogue.js"></script>
   <script src="game.js"></script>
   <!-- Adaptive learning engine + economy -->
+  <!-- JS domain (fallback) -->
   <script src="dist/learning-domain.js"></script>
   <script src="dist/challenge-domain.js"></script>
   <script src="dist/economy-domain.js"></script>
+  <!-- WASM domain (loads async, overrides JS when ready) -->
+  <script src="wasm-bridge.js"></script>
   <script src="dist/speech-recognition.js"></script>
   <script src="src/presentation/renderers/visual-registry.js"></script>
   <script src="src/presentation/renderers/renderer-registry.js"></script>

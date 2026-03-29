@@ -1,18 +1,33 @@
-// adapter.js — Bridge between the new Learning domain and the legacy game.
-// Loaded via <script> after the legacy files and dist/learning-domain.js.
-// This is intentionally ugly — it's a bridge, not architecture.
+// adapter.js — Bridge between the domain (WASM or JS fallback) and the legacy game.
+// WASM loads async via wasm-bridge.js. Adapter picks it up when available.
 
 (function () {
-  const {
-    createProfile, learnerReducer,
-    generateChallenge, detectFrustration,
-    generateIntakeQuestion, processIntakeResults, nextIntakeBand,
-    accuracy, operationAccuracy, avgResponseTime, createWindow,
-  } = window.LearningDomain;
+  // Use WASM if loaded, fall back to JS domain bundles
+  function D() { return window.WasmDomain || window.LearningDomain; }
+  function CD() { return window.WasmDomain || window.ChallengeDomain; }
 
-  const {
-    createChallengeState, challengeReducer,
-  } = window.ChallengeDomain;
+  // Wrappers that defer to whatever domain is available
+  function createProfile(overrides) { return D().createProfile(overrides); }
+  function learnerReducer(state, event) { return D().learnerReducer(state, event); }
+  function generateChallenge(profile, rng) { return D().generateChallenge(profile, rng); }
+  function detectFrustration(window, behaviors) { return D().detectFrustration(window, behaviors); }
+  function generateIntakeQuestion(band, idx, rng) { return D().generateIntakeQuestion(band, idx, rng); }
+  function processIntakeResults(answers, band) { return D().processIntakeResults(answers, band); }
+  function nextIntakeBand(band, correct, ceiling) { return D().nextIntakeBand(band, correct, ceiling); }
+  function accuracy(window) { return D().accuracy(window); }
+  function createWindow(entries) { return D().createWindow(entries); }
+
+  function createChallengeState(challenge, context) {
+    // WASM doesn't have createChallengeState yet (challenge_state is ported but
+    // the WASM export creates from JSON, not from challenge+context).
+    // Use JS ChallengeDomain for now.
+    if (window.ChallengeDomain) return window.ChallengeDomain.createChallengeState(challenge, context);
+    return null;
+  }
+  function challengeReducer(state, action) {
+    if (window.ChallengeDomain) return window.ChallengeDomain.challengeReducer(state, action);
+    return state;
+  }
 
   // ─── ADAPTIVE STATE ─────────────────────────────────────
 
