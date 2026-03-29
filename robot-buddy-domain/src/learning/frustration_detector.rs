@@ -4,6 +4,7 @@ use super::rolling_window::RollingWindow;
 use crate::types::FrustrationLevel;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BehaviorSignal {
     pub signal: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -11,6 +12,7 @@ pub struct BehaviorSignal {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FrustrationResult {
     pub level: FrustrationLevel,
     pub recommendation: String,

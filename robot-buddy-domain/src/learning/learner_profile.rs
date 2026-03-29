@@ -6,6 +6,7 @@ use super::operation_stats::OperationStats;
 use super::rolling_window::{RollingWindow, WindowEntry};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LearnerProfile {
     pub math_band: u8,
     pub streak: i32,
@@ -59,7 +60,7 @@ impl LearnerProfile {
 // ─── Events ─────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum LearnerEvent {
     #[serde(rename = "PUZZLE_ATTEMPTED")]
     PuzzleAttempted {

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::{CraStage, Phase};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RenderHint {
     pub cra_stage: CraStage,
     pub answer_mode: String,
@@ -19,12 +20,14 @@ impl Default for RenderHint {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DisplaySpeech {
     pub display: String,
     pub speech: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VoiceState {
     pub listening: bool,
     pub confirming: bool,
@@ -40,12 +43,14 @@ impl VoiceState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Reward {
     pub reward_type: String,
     pub amount: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChallengeState {
     pub phase: Phase,
     pub correct_answer: i32,
@@ -63,7 +68,7 @@ pub struct ChallengeState {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ChallengeAction {
     AnswerSubmitted { answer: i32 },
     Retry,

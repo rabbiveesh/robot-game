@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use crate::types::{Operation, SubSkill};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StatEntry {
     pub correct: u32,
     pub attempts: u32,
@@ -36,6 +37,7 @@ impl StatEntry {
 /// Tracks both coarse (per-operation) and fine (per-sub-skill) stats.
 /// Uses HashMaps keyed by the enum — compiler-checked, no magic strings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct OperationStats {
     pub coarse: HashMap<Operation, StatEntry>,
     pub fine: HashMap<SubSkill, StatEntry>,

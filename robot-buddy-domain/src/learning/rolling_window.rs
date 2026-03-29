@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::{CraStage, Operation, SubSkill};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WindowEntry {
     pub correct: bool,
     pub operation: Operation,
@@ -26,6 +27,7 @@ pub struct WindowEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RollingWindow {
     pub entries: Vec<WindowEntry>,
     pub max_size: usize,

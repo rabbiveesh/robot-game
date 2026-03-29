@@ -4,6 +4,7 @@ use super::challenge_generator::{generate_challenge, ChallengeProfile, Challenge
 use super::operation_stats::OperationStats;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IntakeAnswer {
     pub band: u8,
     pub correct: bool,
@@ -12,6 +13,7 @@ pub struct IntakeAnswer {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IntakeResult {
     pub math_band: u8,
     pub pace: f64,

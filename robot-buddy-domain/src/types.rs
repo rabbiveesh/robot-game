@@ -74,6 +74,7 @@ pub enum Phase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DisplaySpeech {
     pub display: String,
     pub speech: String,

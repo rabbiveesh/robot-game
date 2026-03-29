@@ -160,6 +160,7 @@ fn classify_challenge(a: i32, b: i32, operation: Operation) -> Option<SubSkill> 
 // ─── FEATURE EXTRACTION ─────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Features {
     pub carries: bool,
     pub carries_tens: bool,
@@ -226,6 +227,7 @@ fn speech_op(op: &str) -> &str {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NumberResult {
     pub a: i32,
     pub b: i32,
@@ -367,6 +369,7 @@ pub fn generate_numbers(band: u8, operation: Operation, rng: &mut impl Rng) -> N
 // ─── CHOICE GENERATION ──────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Choice {
     pub text: String,
     pub correct: bool,
@@ -398,6 +401,7 @@ pub fn make_choices(answer: i32, rng: &mut impl Rng) -> Vec<Choice> {
 // ─── FULL CHALLENGE ─────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Challenge {
     pub question: String,
     pub display_text: String,
@@ -414,6 +418,7 @@ pub struct Challenge {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Numbers {
     pub a: i32,
     pub b: i32,
@@ -422,6 +427,7 @@ pub struct Numbers {
 
 /// Minimal profile shape needed for challenge generation
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChallengeProfile {
     pub math_band: u8,
     pub spread_width: f64,

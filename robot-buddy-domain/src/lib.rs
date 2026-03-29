@@ -19,13 +19,13 @@ pub fn create_profile() -> String {
 #[wasm_bindgen]
 pub fn create_profile_with_overrides(overrides_json: &str) -> Result<String, JsValue> {
     let mut profile = learning::learner_profile::LearnerProfile::new();
-    // Apply overrides from JSON (partial update)
     let overrides: serde_json::Value = serde_json::from_str(overrides_json)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-    if let Some(band) = overrides.get("math_band").and_then(|v| v.as_u64()) {
+    // camelCase field names (matching serde rename_all = "camelCase")
+    if let Some(band) = overrides.get("mathBand").and_then(|v| v.as_u64()) {
         profile.math_band = band as u8;
     }
-    if let Some(sw) = overrides.get("spread_width").and_then(|v| v.as_f64()) {
+    if let Some(sw) = overrides.get("spreadWidth").and_then(|v| v.as_f64()) {
         profile.spread_width = sw;
     }
     if let Some(p) = overrides.get("pace").and_then(|v| v.as_f64()) {
@@ -34,16 +34,16 @@ pub fn create_profile_with_overrides(overrides_json: &str) -> Result<String, JsV
     if let Some(s) = overrides.get("scaffolding").and_then(|v| v.as_f64()) {
         profile.scaffolding = s;
     }
-    if let Some(pt) = overrides.get("promote_threshold").and_then(|v| v.as_f64()) {
+    if let Some(pt) = overrides.get("promoteThreshold").and_then(|v| v.as_f64()) {
         profile.promote_threshold = pt;
     }
-    if let Some(st) = overrides.get("stretch_threshold").and_then(|v| v.as_f64()) {
+    if let Some(st) = overrides.get("stretchThreshold").and_then(|v| v.as_f64()) {
         profile.stretch_threshold = st;
     }
-    if let Some(ts) = overrides.get("text_speed").and_then(|v| v.as_f64()) {
+    if let Some(ts) = overrides.get("textSpeed").and_then(|v| v.as_f64()) {
         profile.text_speed = ts;
     }
-    if let Some(ic) = overrides.get("intake_completed").and_then(|v| v.as_bool()) {
+    if let Some(ic) = overrides.get("intakeCompleted").and_then(|v| v.as_bool()) {
         profile.intake_completed = ic;
     }
     Ok(serde_json::to_string(&profile).unwrap())

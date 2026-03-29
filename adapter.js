@@ -20,28 +20,28 @@
 
   // Challenge lifecycle — createChallengeState builds from challenge + context
   function createChallengeState(challenge, context) {
-    // Build the state struct that the Rust challenge_reducer expects
+    // Build the state struct that the Rust challenge_reducer expects (camelCase)
     return {
       phase: 'presented',
-      correct_answer: challenge.correctAnswer ?? challenge.correct_answer,
+      correctAnswer: challenge.correctAnswer,
       attempts: 0,
-      max_attempts: 2,
+      maxAttempts: 2,
       correct: null,
       question: {
-        display: challenge.displayText ?? challenge.display_text ?? challenge.question,
-        speech: challenge.speechText ?? challenge.speech_text ?? challenge.question,
+        display: challenge.displayText ?? challenge.question,
+        speech: challenge.speechText ?? challenge.question,
       },
       feedback: null,
       reward: null,
-      render_hint: context.renderHint ?? {
-        cra_stage: 'abstract',
-        answer_mode: 'choice',
-        interaction_type: 'quiz',
+      renderHint: context.renderHint ?? {
+        craStage: 'abstract',
+        answerMode: 'choice',
+        interactionType: 'quiz',
       },
-      hint_used: false,
-      hint_level: 0,
-      told_me: false,
-      voice: { listening: false, confirming: false, confirm_number: null, retries: 0, text: null },
+      hintUsed: false,
+      hintLevel: 0,
+      toldMe: false,
+      voice: { listening: false, confirming: false, confirmNumber: null, retries: 0, text: null },
       // Keep the full challenge + context for the adapter to read
       challenge,
       context,
@@ -148,7 +148,7 @@
     if (!challengeState || challengeState.phase === 'complete') return;
 
     const prevPhase = challengeState.phase;
-    challengeState = challengeReducer(challengeState, { type: 'ANSWER_SUBMITTED', answer });
+    challengeState = challengeReducer(challengeState, { type: 'answerSubmitted', answer });
     window._challengeState = challengeState;
 
     // Speak feedback
@@ -247,7 +247,7 @@
   // Teaching complete
   window._onTeachingComplete = function () {
     if (!challengeState) return;
-    challengeState = challengeReducer(challengeState, { type: 'TEACHING_COMPLETE' });
+    challengeState = challengeReducer(challengeState, { type: 'teachingComplete' });
     window._challengeState = challengeState;
     autoDismissChallenge(false, 400);
   };
@@ -255,14 +255,14 @@
   // Show-me scaffold
   window._onShowMe = function () {
     if (!challengeState) return;
-    challengeState = challengeReducer(challengeState, { type: 'SHOW_ME' });
+    challengeState = challengeReducer(challengeState, { type: 'showMe' });
     window._challengeState = challengeState;
   };
 
   // Tell-me scaffold
   window._onTellMe = function () {
     if (!challengeState) return;
-    challengeState = challengeReducer(challengeState, { type: 'TELL_ME' });
+    challengeState = challengeReducer(challengeState, { type: 'tellMe' });
     window._challengeState = challengeState;
     if (challengeState.feedback?.speech) {
       speakLine('Sparky', challengeState.feedback.speech);

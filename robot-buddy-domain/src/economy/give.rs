@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Milestone {
     pub recipient_id: String,
     pub total: u32,
@@ -9,6 +10,7 @@ pub struct Milestone {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GiveResult {
     pub new_dum_dums: u32,
     pub new_total_gifts: HashMap<String, u32>,

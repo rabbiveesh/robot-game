@@ -11,17 +11,7 @@
       // ── Profile ──
       createProfile(overrides) {
         if (overrides && Object.keys(overrides).length > 0) {
-          // Convert JS camelCase to Rust snake_case
-          const mapped = {};
-          if (overrides.mathBand != null) mapped.math_band = overrides.mathBand;
-          if (overrides.spreadWidth != null) mapped.spread_width = overrides.spreadWidth;
-          if (overrides.pace != null) mapped.pace = overrides.pace;
-          if (overrides.scaffolding != null) mapped.scaffolding = overrides.scaffolding;
-          if (overrides.promoteThreshold != null) mapped.promote_threshold = overrides.promoteThreshold;
-          if (overrides.stretchThreshold != null) mapped.stretch_threshold = overrides.stretchThreshold;
-          if (overrides.textSpeed != null) mapped.text_speed = overrides.textSpeed;
-          if (overrides.intakeCompleted != null) mapped.intake_completed = overrides.intakeCompleted;
-          return JSON.parse(wasm.create_profile_with_overrides(JSON.stringify(mapped)));
+          return JSON.parse(wasm.create_profile_with_overrides(JSON.stringify(overrides)));
         }
         return JSON.parse(wasm.create_profile());
       },
@@ -35,9 +25,9 @@
         // RNG: use a random seed (Rust creates its own PRNG from the seed)
         const seed = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER);
         const challengeProfile = {
-          math_band: profile.math_band ?? profile.mathBand,
-          spread_width: profile.spread_width ?? profile.spreadWidth ?? 0.5,
-          operation_stats: profile.operation_stats ?? profile.operationStats,
+          mathBand: profile.mathBand,
+          spreadWidth: profile.spreadWidth ?? 0.5,
+          operationStats: profile.operationStats,
         };
         return JSON.parse(wasm.generate_challenge(JSON.stringify(challengeProfile), seed));
       },

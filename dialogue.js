@@ -780,7 +780,7 @@ async function handleVoiceInput(time) {
 
   // Dispatch through state machine if available
   if (useStateMachine) {
-    window._onVoiceAction({ type: 'VOICE_LISTEN_START' });
+    window._onVoiceAction({ type: 'voiceListenStart' });
   } else {
     CHALLENGE._voiceListening = true;
     CHALLENGE._voiceText = '';
@@ -829,7 +829,7 @@ async function handleVoiceInput(time) {
 
     if (useStateMachine) {
       // Dispatch through challenge reducer — it handles all confidence tiers
-      window._onVoiceAction({ type: 'VOICE_RESULT', number: result.number, confidence: result.confidence,
+      window._onVoiceAction({ type: 'voiceResult', number: result.number, confidence: result.confidence,
         hesitationMs: result.hesitationMs, totalMs: result.totalMs,
         selfCorrected: result.selfCorrected, hadFillerWords: result.hadFillerWords });
       // Auto-submit on high confidence
@@ -923,7 +923,7 @@ function submitVoiceAnswer(number, time) {
 
 function confirmVoiceAnswer(confirmed, time) {
   if (window._challengeState && typeof window._onVoiceAction === 'function') {
-    window._onVoiceAction({ type: 'VOICE_CONFIRM', confirmed });
+    window._onVoiceAction({ type: 'voiceConfirm', confirmed });
     if (confirmed) {
       window._onChallengeAnswer(CHALLENGE._voiceConfirmNumber, time, 'voice');
     }
