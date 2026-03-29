@@ -100,6 +100,12 @@ function initInput() {
     const px = (e.clientX - rect.left) * scaleX;
     const py = (e.clientY - rect.top) * scaleY;
 
+    // Dev Zone clicks
+    if (GAME.state === 'DEV_ZONE') {
+      if (typeof handleDevZoneClick === 'function') handleDevZoneClick(px, py);
+      return;
+    }
+
     // Interaction menu clicks
     if (GAME.state === 'INTERACTION_MENU' && INTERACTION_MENU.active) {
       for (let i = 0; i < INTERACTION_MENU.options.length; i++) {
@@ -215,6 +221,14 @@ function render() {
   const ctx = GAME.ctx;
   const w = GAME.canvasW;
   const h = GAME.canvasH;
+
+  // Dev Zone
+  if (GAME.state === 'DEV_ZONE') {
+    if (typeof renderDevZone === 'function') {
+      renderDevZone(ctx, w, h, GAME.time);
+    }
+    return;
+  }
 
   // Clear
   ctx.fillStyle = '#1a1a2e';
@@ -453,6 +467,16 @@ function initGame(playerName, apiKey, slotIndex, isLoad, opts) {
   GAME.canvas.width = GAME.canvasW;
   GAME.canvas.height = GAME.canvasH;
   GAME.ctx.imageSmoothingEnabled = false;
+
+  // Dev Zone: name a save file "justinbailey"
+  if (!isLoad && playerName && playerName.toLowerCase().replace(/\s/g, '') === 'justinbailey') {
+    GAME.state = 'DEV_ZONE';
+    GAME.lastTime = performance.now();
+    initInput(); // need click/key handlers
+    if (typeof initDevZone === 'function') initDevZone();
+    requestAnimationFrame(gameLoop);
+    return;
+  }
 
   if (isLoad) {
     loadFromSlot(slotIndex);
