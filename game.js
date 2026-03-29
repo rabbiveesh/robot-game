@@ -28,23 +28,19 @@ function initInput() {
       } else if (GAME.state === 'PLAYING') {
         handleInteract();
       } else if (GAME.state === 'CHALLENGE') {
-        if (CHALLENGE.showTeaching) {
-          dismissTeaching(GAME.time);
-        } else if (CHALLENGE.answered) {
-          dismissChallenge();
-          if (DIALOGUE.active) {
-            GAME.state = 'DIALOGUE';
-          } else if (CHALLENGE.active) {
-            GAME.state = 'CHALLENGE';
-          } else {
-            GAME.state = 'PLAYING';
+        // All challenge Space handling goes through the state machine
+        if (window._challengeState) {
+          const cs = window._challengeState;
+          if (cs.phase === 'teaching') {
+            if (typeof window._onTeachingComplete === 'function') window._onTeachingComplete();
           }
+          // complete: auto-dismiss handles it, Space is a no-op
         }
       } else if (GAME.state === 'DIALOGUE') {
         advanceDialogue();
         // If dialogue ended, onComplete may have started challenge or new dialogue
         if (!DIALOGUE.active) {
-          if (CHALLENGE.active) {
+          if (window._challengeState) {
             GAME.state = 'CHALLENGE';
           } else if (DIALOGUE.active) {
             // onComplete restarted dialogue
@@ -79,11 +75,11 @@ function initInput() {
       }
     }
 
-    // Number keys for challenge choices
-    if (GAME.state === 'CHALLENGE' && !CHALLENGE.answered && !CHALLENGE.showTeaching) {
-      const num = parseInt(e.key);
-      if (num >= 1 && num <= 3) {
-        selectChallengeChoice(num - 1, GAME.time);
+    // Number keys for challenge choices — route through renderer
+    if (GAME.state === 'CHALLENGE' && window._activeRenderer && window._challengeState) {
+      const action = window._activeRenderer.handleKey(e.key, window._challengeState);
+      if (action && action.type === 'ANSWER_SUBMITTED') {
+        window._onChallengeAnswer(action.answer, GAME.time, 'choice');
       }
     }
   });
@@ -120,43 +116,33 @@ function initInput() {
     }
 
     if (GAME.state !== 'CHALLENGE') return;
-    const mx = px;
-    const my = py;
 
-    if (CHALLENGE.showTeaching) {
-      dismissTeaching(GAME.time);
-      return;
-    }
+    // All challenge clicks route through the renderer
+    if (window._activeRenderer && window._challengeState) {
+      const cs = window._challengeState;
 
-    // Scaffold buttons (show-me / tell-me)
-    if (window._showMeBounds) {
-      const b = window._showMeBounds;
-      if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-        if (typeof window._onShowMe === 'function') window._onShowMe();
+      // Teaching phase: click dismisses
+      if (cs.phase === 'teaching') {
+        if (typeof window._onTeachingComplete === 'function') window._onTeachingComplete();
+        return;
+      }
+
+      // Complete phase: auto-dismiss handles it, ignore clicks
+      if (cs.phase === 'complete') return;
+
+      // Presented/feedback: let renderer handle
+      const action = window._activeRenderer.handleClick(px, py, cs);
+      if (action) {
+        if (action.type === 'ANSWER_SUBMITTED') {
+          window._onChallengeAnswer(action.answer, GAME.time, 'choice');
+        } else if (action.type === 'SHOW_ME') {
+          window._onShowMe();
+        } else if (action.type === 'TELL_ME') {
+          window._onTellMe();
+        }
         return;
       }
     }
-    if (window._tellMeBounds) {
-      const b = window._tellMeBounds;
-      if (mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-        if (typeof window._onTellMe === 'function') window._onTellMe();
-        return;
-      }
-    }
-
-    if (CHALLENGE.answered) {
-      dismissChallenge();
-      if (DIALOGUE.active) {
-        GAME.state = 'DIALOGUE';
-      } else if (CHALLENGE.active) {
-        GAME.state = 'CHALLENGE';
-      } else {
-        GAME.state = 'PLAYING';
-      }
-      return;
-    }
-
-    handleChallengeClick(mx, my, GAME.time);
   }
 
   window.addEventListener('click', handlePointer);
@@ -278,7 +264,7 @@ function render() {
     renderDialogue(ctx, w, h, GAME.time);
   }
 
-  if (CHALLENGE.active) {
+  if (window._challengeState) {
     renderChallenge(ctx, w, h, GAME.time);
   }
 

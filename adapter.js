@@ -99,8 +99,6 @@
     challengeState = createChallengeState(challenge, enrichedContext);
     window._challengeState = challengeState;
 
-    // Sync to legacy CHALLENGE object for rendering (temporary bridge)
-    syncToLegacyChallenge(challengeState, challenge);
   };
 
   // Handle an answer (from either button click or voice)
@@ -110,9 +108,6 @@
     const prevPhase = challengeState.phase;
     challengeState = challengeReducer(challengeState, { type: 'ANSWER_SUBMITTED', answer });
     window._challengeState = challengeState;
-
-    // Sync to legacy globals
-    syncToLegacyChallenge(challengeState);
 
     // Speak feedback
     if (challengeState.feedback) {
@@ -124,7 +119,7 @@
     const responseTimeMs = capResponseTime(performance.now() - challengeShownAt);
     const ch = challengeState.challenge;
     const voiceResult = challengeState.voice.lastResult;
-    const correct = action.answer === ch.correctAnswer;
+    const correct = answer === ch.correctAnswer;
 
     const event = {
       type: 'PUZZLE_ATTEMPTED',
@@ -173,7 +168,6 @@
     if (!challengeState) return;
     challengeState = challengeReducer(challengeState, action);
     window._challengeState = challengeState;
-    syncToLegacyChallenge(challengeState);
 
     // Speak voice text changes
     if (challengeState.voice.text?.speech) {
@@ -213,7 +207,6 @@
     if (!challengeState) return;
     challengeState = challengeReducer(challengeState, { type: 'TEACHING_COMPLETE' });
     window._challengeState = challengeState;
-    syncToLegacyChallenge(challengeState);
     autoDismissChallenge(false, 400);
   };
 
@@ -222,7 +215,6 @@
     if (!challengeState) return;
     challengeState = challengeReducer(challengeState, { type: 'SHOW_ME' });
     window._challengeState = challengeState;
-    syncToLegacyChallenge(challengeState);
   };
 
   // Tell-me scaffold
@@ -230,39 +222,10 @@
     if (!challengeState) return;
     challengeState = challengeReducer(challengeState, { type: 'TELL_ME' });
     window._challengeState = challengeState;
-    syncToLegacyChallenge(challengeState);
     if (challengeState.feedback?.speech) {
       speakLine('Sparky', challengeState.feedback.speech);
     }
   };
-
-  // Sync challenge state → legacy CHALLENGE globals (bridge for renderChallenge)
-  function syncToLegacyChallenge(cs, challenge) {
-    if (!cs) return;
-    const ch = challenge || cs.challenge;
-    CHALLENGE.active = cs.phase !== 'complete';
-    CHALLENGE.type = 'math';
-    CHALLENGE.question = cs.question.display;
-    CHALLENGE.correctAnswer = ch.correctAnswer;
-    CHALLENGE.choices = ch.choices ? ch.choices.map(c => ({ text: c.text, correct: c.correct })) : [];
-    CHALLENGE.selectedIndex = -1;
-    CHALLENGE.answered = cs.phase === 'complete';
-    CHALLENGE.wasCorrect = cs.correct === true;
-    CHALLENGE.attempts = cs.attempts;
-    CHALLENGE.showTeaching = cs.phase === 'teaching';
-    CHALLENGE.teachingData = ch.numbers ? { a: ch.numbers.a, b: ch.numbers.b, op: ch.numbers.op, answer: ch.correctAnswer } : null;
-    CHALLENGE.celebrationStart = cs.phase === 'complete' && cs.correct ? GAME.time : 0;
-    CHALLENGE._retryWithHint = cs.hintUsed;
-    // Voice state
-    CHALLENGE._voiceListening = cs.voice.listening;
-    CHALLENGE._voiceConfirming = cs.voice.confirming;
-    CHALLENGE._voiceConfirmNumber = cs.voice.confirmNumber;
-    CHALLENGE._voiceText = cs.voice.text?.display || '';
-    CHALLENGE._voiceRetries = cs.voice.retries;
-    CHALLENGE._lastVoiceResult = cs.voice.lastResult;
-    CHALLENGE._micLabel = null;
-    CHALLENGE._micBounds = null;
-  }
 
   function mapOpToOperation(op) {
     if (!op) return 'add';

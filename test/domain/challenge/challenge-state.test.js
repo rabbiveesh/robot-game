@@ -161,10 +161,12 @@ describe('challengeReducer — SHOW_ME', () => {
     expect(s.renderHint.craStage).toBe('concrete');
   });
 
-  it('at concrete returns state unchanged', () => {
+  it('at concrete still sets hintUsed (kid asked for help)', () => {
     const s0 = create({ renderHint: { craStage: 'concrete', answerMode: 'choice', interactionType: 'quiz' } });
     const s = challengeReducer(s0, { type: 'SHOW_ME' });
-    expect(s).toBe(s0); // same reference — no change
+    expect(s.renderHint.craStage).toBe('concrete'); // can't go lower
+    expect(s.hintUsed).toBe(true); // but hint was used
+    expect(s.hintLevel).toBe(1);
   });
 
   it('sets hintUsed true and increments hintLevel', () => {
