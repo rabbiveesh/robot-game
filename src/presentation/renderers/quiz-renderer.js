@@ -2,6 +2,8 @@
 // Reads from challengeState via window._challengeState
 
 function createQuizRenderer() {
+  const _choiceBounds = [];
+
   return {
     render(ctx, cs, canvasW, canvasH, time) {
       if (!cs) return;
@@ -83,6 +85,7 @@ function createQuizRenderer() {
       const totalBtnW = btnW * 3 + 20 * 2;
       const btnStartX = panelX + (panelW - totalBtnW) / 2;
 
+      _choiceBounds.length = 0;
       choices.forEach((choice, i) => {
         const bx = btnStartX + i * (btnW + 20);
         const by = btnY;
@@ -101,7 +104,7 @@ function createQuizRenderer() {
         ctx.font = 'bold 28px "Segoe UI", system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(choice.text, bx + btnW / 2, by + btnH / 2 + 10);
-        choice._bounds = { x: bx, y: by, w: btnW, h: btnH };
+        _choiceBounds[i] = { x: bx, y: by, w: btnW, h: btnH };
       });
 
       // Show-me / Tell-me buttons (when not answered)
@@ -177,11 +180,10 @@ function createQuizRenderer() {
       }
 
       // Choice buttons
-      const choices = cs.challenge.choices || [];
-      for (let i = 0; i < choices.length; i++) {
-        const b = choices[i]._bounds;
+      for (let i = 0; i < _choiceBounds.length; i++) {
+        const b = _choiceBounds[i];
         if (b && mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-          return { type: 'ANSWER_SUBMITTED', answer: Number(choices[i].text) };
+          return { type: 'ANSWER_SUBMITTED', answer: Number(cs.challenge.choices[i].text) };
         }
       }
 

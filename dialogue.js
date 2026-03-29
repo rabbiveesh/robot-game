@@ -724,75 +724,9 @@ function startChallenge(challengeData, context, onComplete) {
   }
 }
 
-function selectChallengeChoice(index, time) {
-  if (CHALLENGE.answered) return;
-  const answer = Number(CHALLENGE.choices[index]?.text);
-  window._onChallengeAnswer(answer, time, 'choice');
-}
-
-function dismissTeaching(time) {
-  // After teaching, let them try one more time with the visual still showing
-  CHALLENGE.showTeaching = false;
-  CHALLENGE.selectedIndex = -1;
-  CHALLENGE.attempts = 0; // reset attempts for the retry
-  CHALLENGE._retryWithHint = true; // flag: show hint dots during retry
-}
-
-function dismissChallenge() {
-  CHALLENGE.active = false;
-  CHALLENGE._retryWithHint = false;
-  if (CHALLENGE.onComplete) {
-    CHALLENGE.onComplete(CHALLENGE.wasCorrect);
-  }
-}
-
-function handleChallengeClick(mx, my, time) {
-  if (!CHALLENGE.active) return;
-
-  // If in teaching mode, click dismisses it
-  if (CHALLENGE.showTeaching) {
-    dismissTeaching(time);
-    return;
-  }
-
-  if (CHALLENGE.answered) return;
-
-  // Check voice confirmation buttons
-  if (CHALLENGE._voiceConfirming) {
-    if (CHALLENGE._confirmYesBounds) {
-      const yb = CHALLENGE._confirmYesBounds;
-      if (mx >= yb.x && mx <= yb.x + yb.w && my >= yb.y && my <= yb.y + yb.h) {
-        confirmVoiceAnswer(true, time);
-        return;
-      }
-    }
-    if (CHALLENGE._confirmNoBounds) {
-      const nb = CHALLENGE._confirmNoBounds;
-      if (mx >= nb.x && mx <= nb.x + nb.w && my >= nb.y && my <= nb.y + nb.h) {
-        confirmVoiceAnswer(false, time);
-        return;
-      }
-    }
-    return; // Block other clicks while confirming
-  }
-
-  // Check mic button click
-  if (CHALLENGE._micBounds) {
-    const mb = CHALLENGE._micBounds;
-    if (mx >= mb.x && mx <= mb.x + mb.w && my >= mb.y && my <= mb.y + mb.h) {
-      handleVoiceInput(time);
-      return;
-    }
-  }
-
-  for (let i = 0; i < CHALLENGE.choices.length; i++) {
-    const b = CHALLENGE.choices[i]._bounds;
-    if (b && mx >= b.x && mx <= b.x + b.w && my >= b.y && my <= b.y + b.h) {
-      selectChallengeChoice(i, time);
-      return;
-    }
-  }
-}
+// Legacy challenge functions deleted — all challenge interaction goes through
+// the QuizRenderer (handleClick/handleKey) → adapter (_onChallengeAnswer).
+// See docs/burn-the-bridge-spec.md.
 
 // ─── VOICE INPUT ─────────────────────────────────────────
 
@@ -1007,16 +941,16 @@ function confirmVoiceAnswer(confirmed, time) {
 // ─── CHALLENGE RENDERING ─────────────────────────────────
 
 function renderChallenge(ctx, canvasW, canvasH, time) {
-  if (!CHALLENGE.active) return;
+  if (!window._challengeState) return;
 
-  // Use QuizRenderer when challenge state machine is active
-  if (window._challengeState && typeof createQuizRenderer === 'function') {
+  // All rendering goes through QuizRenderer
+  if (typeof createQuizRenderer === 'function') {
     if (!window._activeRenderer) window._activeRenderer = createQuizRenderer();
     window._activeRenderer.render(ctx, window._challengeState, canvasW, canvasH, time);
     return;
   }
 
-  // Legacy fallback (intake before state machine loads)
+  // Bare minimum fallback if renderer script failed to load
   ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
   ctx.fillRect(0, 0, canvasW, canvasH);
 
@@ -1564,7 +1498,7 @@ function renderInteractionMenu(ctx, canvasW, canvasH) {
 }
 
 async function triggerInteraction(target, playerName, time) {
-  if (DIALOGUE.active || CHALLENGE.active || INTERACTION_MENU.active) return;
+  if (DIALOGUE.active || window._challengeState || INTERACTION_MENU.active) return;
   showInteractionMenu(target, playerName, time);
 }
 
