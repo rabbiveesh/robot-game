@@ -2,18 +2,21 @@
 // WASM loads async via wasm-bridge.js. Adapter picks it up when available.
 
 (function () {
-  // Domain is WASM — no fallback
-  const W = window.WasmDomain;
+  // Domain is WASM — accessed lazily (WASM loads async, adapter runs sync)
+  function W() {
+    if (!window.WasmDomain) throw new Error('WASM domain not loaded yet');
+    return window.WasmDomain;
+  }
 
-  function createProfile(overrides) { return W.createProfile(overrides); }
-  function learnerReducer(state, event) { return W.learnerReducer(state, event); }
-  function generateChallenge(profile, rng) { return W.generateChallenge(profile, rng); }
-  function detectFrustration(win, behaviors) { return W.detectFrustration(win, behaviors); }
-  function generateIntakeQuestion(band, idx, rng) { return W.generateIntakeQuestion(band, idx, rng); }
-  function processIntakeResults(answers, band) { return W.processIntakeResults(answers, band); }
-  function nextIntakeBand(band, correct, ceiling) { return W.nextIntakeBand(band, correct, ceiling); }
-  function accuracy(win) { return W.accuracy(win); }
-  function createWindow(entries) { return W.createWindow(entries); }
+  function createProfile(overrides) { return W().createProfile(overrides); }
+  function learnerReducer(state, event) { return W().learnerReducer(state, event); }
+  function generateChallenge(profile, rng) { return W().generateChallenge(profile, rng); }
+  function detectFrustration(win, behaviors) { return W().detectFrustration(win, behaviors); }
+  function generateIntakeQuestion(band, idx, rng) { return W().generateIntakeQuestion(band, idx, rng); }
+  function processIntakeResults(answers, band) { return W().processIntakeResults(answers, band); }
+  function nextIntakeBand(band, correct, ceiling) { return W().nextIntakeBand(band, correct, ceiling); }
+  function accuracy(win) { return W().accuracy(win); }
+  function createWindow(entries) { return W().createWindow(entries); }
 
   // Challenge lifecycle — createChallengeState builds from challenge + context
   function createChallengeState(challenge, context) {
@@ -46,7 +49,7 @@
   }
   function challengeReducer(state, action) {
     // Use WASM reducer
-    const result = W.challengeReducer(state, action);
+    const result = W().challengeReducer(state, action);
     // Preserve challenge + context (not part of Rust state)
     result.challenge = state.challenge;
     result.context = state.context;
@@ -55,7 +58,7 @@
 
   // ─── ADAPTIVE STATE ─────────────────────────────────────
 
-  let profileState = createProfile();
+  let profileState = null; // initialized lazily when WASM is ready
   let eventLog = [];          // current session events
   let previousSessionLogs = []; // up to 5 prior sessions
   let recentBehaviors = [];

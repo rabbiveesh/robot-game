@@ -76,6 +76,7 @@
       },
     };
 
+    window._wasmReady = true;
     console.log('[WASM] Domain loaded — all modules active');
   } catch (e) {
     document.body.innerHTML = `<div style="color:#F44336;padding:40px;font-family:monospace;">

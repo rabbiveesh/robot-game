@@ -394,7 +394,7 @@
         </div>
       </div>
 
-      <button id="startBtn" onclick="startNewGame()">START ADVENTURE!</button>
+      <button id="startBtn" onclick="startNewGame()" disabled style="opacity:0.5">Loading...</button>
     </div>
 
     <div class="controls-hint">
@@ -530,6 +530,7 @@
     }
 
     function loadGame(slotIndex) {
+      if (!window._wasmReady) return; // WASM not loaded yet
       selectedSlot = slotIndex;
       launchCanvas();
       initGame(null, null, slotIndex, true);
@@ -687,6 +688,18 @@
 
     // Render save slots on page load
     renderSaveSlots();
+
+    // Wait for WASM to load, then enable start button
+    (function waitForWasm() {
+      if (window._wasmReady) {
+        const btn = document.getElementById('startBtn');
+        btn.disabled = false;
+        btn.style.opacity = '';
+        btn.textContent = 'START ADVENTURE!';
+      } else {
+        setTimeout(waitForWasm, 50);
+      }
+    })();
   </script>
 </body>
 </html>
