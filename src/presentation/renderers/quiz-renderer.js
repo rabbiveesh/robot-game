@@ -5,6 +5,74 @@ function createQuizRenderer() {
   const _choiceBounds = [];
   let _celebrationStart = null;
 
+  // ─── TEACHING PHASE RENDERER ────────────────────────
+  // Shows the question, a concrete visual walkthrough, and the answer.
+  // Used for both "2 wrong → teaching" and "tell me".
+  function renderTeachingPhase(ctx, cs, canvasW, canvasH, time) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillRect(0, 0, canvasW, canvasH);
+
+    const ch = cs.challenge;
+    const nums = ch ? ch.numbers : null;
+    const answer = ch ? ch.correctAnswer : '?';
+    const band = ch ? (ch.sampledBand || ch.band || 1) : 1;
+
+    const panelW = Math.min(650, canvasW - 40);
+    const panelH = 380;
+    const panelX = (canvasW - panelW) / 2;
+    const panelY = (canvasH - panelH) / 2 - 10;
+
+    // Panel
+    ctx.fillStyle = '#1a1a2e';
+    roundRect(ctx, panelX, panelY, panelW, panelH, 16);
+    ctx.fill();
+    ctx.strokeStyle = '#FF8A65';
+    ctx.lineWidth = 4;
+    roundRect(ctx, panelX, panelY, panelW, panelH, 16);
+    ctx.stroke();
+
+    // Header
+    ctx.fillStyle = '#FF8A65';
+    ctx.font = 'bold 16px "Segoe UI", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(cs.toldMe ? "Here's how it works!" : "Let's figure it out!", panelX + panelW / 2, panelY + 30);
+
+    // Question
+    ctx.fillStyle = '#FFF';
+    ctx.font = 'bold 24px "Segoe UI", system-ui, sans-serif';
+    ctx.fillText(cs.question.display, panelX + panelW / 2, panelY + 65);
+
+    // Visual walkthrough (always concrete in teaching)
+    if (nums) {
+      const vizY = panelY + 90;
+      ctx.save();
+      if (band >= 5 && typeof renderBase10Blocks === 'function') {
+        renderBase10Blocks(ctx, nums.a, nums.b, nums.op, answer, panelX + panelW / 2, vizY, time);
+      } else if (typeof renderDotVisual === 'function') {
+        renderDotVisual(ctx, panelX + panelW / 2, vizY, nums.a, nums.b, nums.op, answer, time);
+      }
+      ctx.restore();
+    }
+
+    // Answer
+    ctx.fillStyle = '#69F0AE';
+    ctx.font = 'bold 40px "Segoe UI", system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`= ${answer}`, panelX + panelW / 2, panelY + panelH - 70);
+
+    // Feedback text (if any — "The answer is 7!" from tell-me, or "Let's figure it out!")
+    if (cs.feedback) {
+      ctx.fillStyle = '#FFD54F';
+      ctx.font = '18px "Segoe UI", system-ui, sans-serif';
+      ctx.fillText(cs.feedback.display, panelX + panelW / 2, panelY + panelH - 40);
+    }
+
+    // Dismiss
+    ctx.fillStyle = '#78909C';
+    ctx.font = '14px "Segoe UI", system-ui, sans-serif';
+    ctx.fillText('Press SPACE or click to continue', panelX + panelW / 2, panelY + panelH - 15);
+  }
+
   return {
     render(ctx, cs, canvasW, canvasH, time) {
       if (!cs) return;
@@ -13,7 +81,7 @@ function createQuizRenderer() {
       ctx.fillRect(0, 0, canvasW, canvasH);
 
       if (cs.phase === 'teaching') {
-        renderTeaching(ctx, canvasW, canvasH, time);
+        renderTeachingPhase(ctx, cs, canvasW, canvasH, time);
         return;
       }
 
