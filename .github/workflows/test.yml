@@ -5,10 +5,39 @@ on:
     branches: ["main"]
 
 jobs:
-  test:
+  test-rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Rust tests
+        run: cargo test --manifest-path robot-buddy-domain/Cargo.toml
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM
+        run: wasm-pack build robot-buddy-domain --target web --out-dir ../dist/wasm
+
+  test-js:
+    needs: test-rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM
+        run: wasm-pack build robot-buddy-domain --target web --out-dir ../dist/wasm
 
       - uses: actions/setup-node@v4
         with:

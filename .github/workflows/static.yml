@@ -36,7 +36,18 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install and build
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build WASM domain
+        run: wasm-pack build robot-buddy-domain --target web --out-dir ../dist/wasm
+
+      - name: Install and build JS
         run: |
           npm ci
           npm run build
@@ -44,15 +55,14 @@ jobs:
 
       - name: Prepare deploy directory
         run: |
-          mkdir -p _site/dist
+          mkdir -p _site/dist/wasm
           # Copy only the game files that the browser needs
           cp index.html _site/
-          cp *.js _site/ 2>/dev/null || true
-          # Copy the built bundles
-          cp dist/learning-domain.js _site/dist/
-          cp dist/challenge-domain.js _site/dist/
-          cp dist/economy-domain.js _site/dist/
+          cp adapter.js wasm-bridge.js game.js dialogue.js sprites.js world.js characters.js _site/
+          # Copy built bundles
           cp dist/speech-recognition.js _site/dist/
+          cp dist/wasm/robot_buddy_domain_bg.wasm _site/dist/wasm/
+          cp dist/wasm/robot_buddy_domain.js _site/dist/wasm/
           mkdir -p _site/src
           cp -r src/presentation _site/src/presentation
 

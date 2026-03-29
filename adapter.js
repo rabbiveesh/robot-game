@@ -1,22 +1,64 @@
-// adapter.js — Bridge between the new Learning domain and the legacy game.
-// Loaded via <script> after the legacy files and dist/learning-domain.js.
-// This is intentionally ugly — it's a bridge, not architecture.
+// adapter.js — Bridge between the domain (WASM or JS fallback) and the legacy game.
+// WASM loads async via wasm-bridge.js. Adapter picks it up when available.
 
 (function () {
-  const {
-    createProfile, learnerReducer,
-    generateChallenge, detectFrustration,
-    generateIntakeQuestion, processIntakeResults, nextIntakeBand,
-    accuracy, operationAccuracy, avgResponseTime, createWindow,
-  } = window.LearningDomain;
+  // Domain is WASM — accessed lazily (WASM loads async, adapter runs sync)
+  function W() {
+    if (!window.WasmDomain) throw new Error('WASM domain not loaded yet');
+    return window.WasmDomain;
+  }
 
-  const {
-    createChallengeState, challengeReducer,
-  } = window.ChallengeDomain;
+  function createProfile(overrides) { return W().createProfile(overrides); }
+  function learnerReducer(state, event) { return W().learnerReducer(state, event); }
+  function generateChallenge(profile, rng) { return W().generateChallenge(profile, rng); }
+  function detectFrustration(win, behaviors) { return W().detectFrustration(win, behaviors); }
+  function generateIntakeQuestion(band, idx, rng) { return W().generateIntakeQuestion(band, idx, rng); }
+  function processIntakeResults(answers, band) { return W().processIntakeResults(answers, band); }
+  function nextIntakeBand(band, correct, ceiling) { return W().nextIntakeBand(band, correct, ceiling); }
+  function accuracy(win) { return W().accuracy(win); }
+  function createWindow(entries) { return W().createWindow(entries); }
+
+  // Challenge lifecycle — createChallengeState builds from challenge + context
+  function createChallengeState(challenge, context) {
+    // Build the state struct that the Rust challenge_reducer expects (camelCase)
+    return {
+      phase: 'presented',
+      correctAnswer: challenge.correctAnswer,
+      attempts: 0,
+      maxAttempts: 2,
+      correct: null,
+      question: {
+        display: challenge.displayText ?? challenge.question,
+        speech: challenge.speechText ?? challenge.question,
+      },
+      feedback: null,
+      reward: null,
+      renderHint: context.renderHint ?? {
+        craStage: 'abstract',
+        answerMode: 'choice',
+        interactionType: 'quiz',
+      },
+      hintUsed: false,
+      hintLevel: 0,
+      toldMe: false,
+      voice: { listening: false, confirming: false, confirmNumber: null, retries: 0, text: null },
+      // Keep the full challenge + context for the adapter to read
+      challenge,
+      context,
+    };
+  }
+  function challengeReducer(state, action) {
+    // Use WASM reducer
+    const result = W().challengeReducer(state, action);
+    // Preserve challenge + context (not part of Rust state)
+    result.challenge = state.challenge;
+    result.context = state.context;
+    return result;
+  }
 
   // ─── ADAPTIVE STATE ─────────────────────────────────────
 
-  let profileState = createProfile();
+  let profileState = null; // initialized lazily when WASM is ready
   let eventLog = [];          // current session events
   let previousSessionLogs = []; // up to 5 prior sessions
   let recentBehaviors = [];
@@ -106,7 +148,7 @@
     if (!challengeState || challengeState.phase === 'complete') return;
 
     const prevPhase = challengeState.phase;
-    challengeState = challengeReducer(challengeState, { type: 'ANSWER_SUBMITTED', answer });
+    challengeState = challengeReducer(challengeState, { type: 'answerSubmitted', answer });
     window._challengeState = challengeState;
 
     // Speak feedback
@@ -157,6 +199,11 @@
 
     checkFrustration();
 
+    // Save after every challenge completion
+    if (typeof activeSlot !== 'undefined' && activeSlot >= 0) {
+      saveToSlot(activeSlot);
+    }
+
     // Auto-dismiss after brief visual feedback
     if (challengeState.phase === 'complete' || challengeState.phase === 'teaching') {
       autoDismissChallenge(challengeState.correct, challengeState.phase === 'complete' && challengeState.correct ? 800 : 400);
@@ -205,7 +252,7 @@
   // Teaching complete
   window._onTeachingComplete = function () {
     if (!challengeState) return;
-    challengeState = challengeReducer(challengeState, { type: 'TEACHING_COMPLETE' });
+    challengeState = challengeReducer(challengeState, { type: 'teachingComplete' });
     window._challengeState = challengeState;
     autoDismissChallenge(false, 400);
   };
@@ -213,14 +260,14 @@
   // Show-me scaffold
   window._onShowMe = function () {
     if (!challengeState) return;
-    challengeState = challengeReducer(challengeState, { type: 'SHOW_ME' });
+    challengeState = challengeReducer(challengeState, { type: 'showMe' });
     window._challengeState = challengeState;
   };
 
   // Tell-me scaffold
   window._onTellMe = function () {
     if (!challengeState) return;
-    challengeState = challengeReducer(challengeState, { type: 'TELL_ME' });
+    challengeState = challengeReducer(challengeState, { type: 'tellMe' });
     window._challengeState = challengeState;
     if (challengeState.feedback?.speech) {
       speakLine('Sparky', challengeState.feedback.speech);
@@ -357,6 +404,7 @@
   const _oldGatherSave = window.gatherSaveData;
   window.gatherSaveData = function () {
     const data = _oldGatherSave();
+    if (!profileState) return data; // not initialized yet
     data.learnerProfile = {
       mathBand: profileState.mathBand,
       streak: profileState.streak,
@@ -393,10 +441,12 @@
     const data = slots[slotIndex];
     if (data && data.learnerProfile) {
       const lp = data.learnerProfile;
-      profileState = createProfile({
-        ...lp,
-        rollingWindow: createWindow(lp.rollingWindowEntries || []),
-      });
+      // Restore rolling window from saved entries
+      if (lp.rollingWindowEntries && !lp.rollingWindow) {
+        lp.rollingWindow = { entries: lp.rollingWindowEntries, maxSize: 20 };
+      }
+      // The saved profile is a complete serialized LearnerProfile — use it directly
+      profileState = lp;
       SKILL.math.band = profileState.mathBand;
       SKILL.math.streak = profileState.streak;
     } else {
@@ -514,7 +564,7 @@
     const ops = ['add', 'sub', 'multiply', 'divide', 'number_bond'];
     const opLabels = { add: 'add', sub: 'sub', multiply: 'mult', divide: 'div', number_bond: 'bond' };
     for (const op of ops) {
-      const s = p.operationStats[op];
+      const s = (p.operationStats.coarse || p.operationStats)[op];
       const opAcc = s.attempts > 0 ? `${((s.correct / s.attempts) * 100).toFixed(0)}%` : '--';
       const opDetail = s.attempts > 0 ? `(${s.correct}/${s.attempts})` : '';
       const cra = p.craStages[op] || 'concrete';
