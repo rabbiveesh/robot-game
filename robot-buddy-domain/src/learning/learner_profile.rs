@@ -6,7 +6,7 @@ use super::operation_stats::OperationStats;
 use super::rolling_window::{RollingWindow, WindowEntry};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default = "LearnerProfile::new")]
 pub struct LearnerProfile {
     pub math_band: u8,
     pub streak: i32,

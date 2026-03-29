@@ -314,3 +314,38 @@ describe('Save/load round-trip', () => {
     expect(afterLoad.rollingWindow.maxSize).toBe(20);
   });
 });
+
+// ─── OLD SAVE COMPATIBILITY ─────────────────────────────
+
+describe('Old save compatibility — missing fields get defaults', () => {
+  it('profile with missing textSkipCount deserializes through reducer', () => {
+    // Simulate an old save that lacks textSkipCount
+    const oldProfile = JSON.parse(wasm.create_profile());
+    delete oldProfile.textSkipCount;
+    const result = reduce(oldProfile, { type: 'BEHAVIOR', signal: 'text_skipped' });
+    expect(result.textSkipCount).toBe(1); // default 0 + 1
+  });
+
+  it('profile with missing spreadWidth deserializes through reducer', () => {
+    const oldProfile = JSON.parse(wasm.create_profile());
+    delete oldProfile.spreadWidth;
+    const result = reduce(oldProfile, correctAttempt(1));
+    expect(result.spreadWidth).toBeDefined();
+  });
+
+  it('profile with missing craStages deserializes through reducer', () => {
+    const oldProfile = JSON.parse(wasm.create_profile());
+    delete oldProfile.craStages;
+    const result = reduce(oldProfile, correctAttempt(1));
+    expect(result.craStages).toBeDefined();
+    expect(result.craStages.add).toBe('concrete');
+  });
+
+  it('profile with missing rollingWindow deserializes through reducer', () => {
+    const oldProfile = JSON.parse(wasm.create_profile());
+    delete oldProfile.rollingWindow;
+    const result = reduce(oldProfile, correctAttempt(1));
+    expect(result.rollingWindow).toBeDefined();
+    expect(result.rollingWindow.entries.length).toBe(1);
+  });
+});
