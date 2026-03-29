@@ -123,9 +123,9 @@ function renderDevZone(ctx, canvasW, canvasH, time) {
     devBtn(ctx, lx + 55 + (band - 1) * 36, y, 30, 22, String(band), c.band === band, () => {
       c.band = band;
       // Generate a real challenge at this band to populate A, B, op
-      if (typeof LearningDomain !== 'undefined') {
-        const profile = LearningDomain.createProfile({ mathBand: band, spreadWidth: 0 });
-        const ch = LearningDomain.generateChallenge(profile, Math.random);
+      if (window.WasmDomain) {
+        const profile = WasmDomain.createProfile({ mathBand: band, spreadWidth: 0 });
+        const ch = WasmDomain.generateChallenge(profile, Math.random);
         c.a = ch.numbers.a;
         c.b = ch.numbers.b;
         const opMap = { '+': '+', '-': '-', '\u00d7': '\u00d7', '\u00f7': '\u00f7', '\u2212': '-' };
