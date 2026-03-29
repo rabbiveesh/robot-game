@@ -18,13 +18,16 @@ A math education RPG for kids (ages 4-10). Zelda-style top-down tile game where 
 
 These are NOT optional. Every PR must respect these:
 
-1. **The Learning domain (`src/domain/learning/`) has ZERO browser dependencies.** No DOM, no canvas, no `window`, no `document`. Pure logic. If it can't run in `node`, it's in the wrong layer.
+1. **The domain is Rust.** All game logic lives in `robot-buddy-domain/`. No browser APIs, no JS interop in domain code. `cargo test` must pass. Adding a field to a domain struct? The compiler finds every place that needs updating.
 
-2. **State mutations in the Learning domain happen ONLY through the reducer.** `(state, event) → newState`. No direct mutation. `Object.freeze` on all returned state. The event log is the source of truth.
+2. **State mutations happen ONLY through reducers.** `learner_reducer(state, event) → new_state`. Rust ownership enforces this — you can't mutate the old state. The event log is the source of truth.
 
-3. **All randomness is injected.** Every function that needs randomness takes an `rng: () => number` parameter. In production, pass `Math.random`. In tests, pass a seeded PRNG. No calls to `Math.random()` inside domain code.
+3. **All randomness is seeded.** Domain functions take `&mut impl Rng`. In production, seeded from `Math.random()` at the bridge. In tests, `SmallRng::seed_from_u64(42)`. No global RNG state.
 
-4. **Domain events are plain objects.** No classes, no methods on events. `{ type: 'PUZZLE_ATTEMPTED', correct: true, operation: 'add', ... }`. Serializable to JSON.
+4. **The WASM boundary is the most dangerous part of the codebase.** Serde silently drops fields with wrong names (`responseTimeMs` vs `response_time_ms`) instead of crashing. A camelCase mismatch = silent data loss = the adaptive system runs on wrong data with no error. EVERY struct that crosses the boundary MUST have:
+   - `#[serde(rename_all = "camelCase")]` on the struct
+   - An integration test that round-trips the struct JS→Rust→JS and checks EVERY field
+   - The integration test suite (`test/integration/wasm-bridge.test.js`) is the GATE — if a struct isn't tested there, assume the boundary is broken for that struct
 
 5. **The game must never time-pressure a child.** No countdown timers on challenges, ever. We measure response time silently for the adaptive system, but the child never sees a clock.
 
@@ -33,6 +36,8 @@ These are NOT optional. Every PR must respect these:
 7. **No labels shown to kids.** The child never sees "Easy", "Band 3", skill levels, or any indication they're being assessed. The adaptive system is invisible. Parent dashboard is the only place this is visible.
 
 8. **Fail gracefully.** Wrong answers have natural in-game consequences (Sparky's battery drains, door doesn't open, merchant says "hmm that's not right"). Never a red X, never "WRONG!", never punishment.
+
+9. **Every domain struct crossing the WASM boundary needs a boundary test.** Not optional. Not "we'll add it later." If you add a new struct to `lib.rs` exports, add the boundary test in the same PR. The Rust compiler guards the domain. The boundary tests guard the bridge. Neither alone is sufficient.
 
 ## Tech Stack
 
