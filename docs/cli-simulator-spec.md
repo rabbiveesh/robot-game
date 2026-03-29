@@ -1,173 +1,296 @@
-# CLI Intake Simulator — Implementation Spec
+# CLI Simulators — Rust Native
 
-## Goal
+## Overview
 
-A node script that simulates a kid going through the intake quiz and subsequent challenges, printing the profile evolution to stdout. Used by designers/parents to understand what the adaptive system does without needing a real kid or a browser.
+Two Rust binary targets that exercise the domain directly — no WASM boundary, no JSON serialization, no Node. They compile alongside the domain crate and run as native executables.
 
-## Usage
+```
+cargo run --bin simulate -- --profile gifted
+cargo run --bin simulate-challenge -- --answer wrong,show-me,correct --trace
+```
+
+## 1. Learning Simulator (`src/bin/simulate.rs`)
+
+Replaces `tools/simulate.js`. Simulates a kid going through intake + play session, printing profile evolution.
+
+### Usage
 
 ```bash
 # Simulate a gifted 4-year-old (fast, mostly correct, gets bored)
-node tools/simulate.js --profile gifted
+cargo run --bin simulate -- --profile gifted
 
 # Simulate a struggling kid (slow, mostly wrong, needs patience)
-node tools/simulate.js --profile struggling
+cargo run --bin simulate -- --profile struggling
 
-# Simulate a 7-year-old (fast, correct up to band 7, then struggles)
-node tools/simulate.js --profile seven-year-old
+# Simulate a 7-year-old
+cargo run --bin simulate -- --profile seven-year-old
 
-# Custom: specify response patterns directly
-node tools/simulate.js --intake correct,correct,wrong,correct --speed fast --questions 30
+# 2e kid (high reasoning, slow processing)
+cargo run --bin simulate -- --profile 2e
+
+# Custom intake pattern
+cargo run --bin simulate -- --intake correct,correct,wrong,correct --speed fast --questions 30
 
 # Just intake, no follow-up questions
-node tools/simulate.js --profile gifted --intake-only
+cargo run --bin simulate -- --profile gifted --intake-only
+
+# Deterministic (same output every time)
+cargo run --bin simulate -- --profile gifted --seed 42
 ```
 
-## Output
+### Output
 
-Colored terminal output showing each event and the resulting profile state:
+Same format as the old JS simulator — colored terminal output:
 
 ```
-═══ INTAKE (Sparky's Calibration) ═══
+═══════════════════════════════════════════════════
+  INTAKE (Sparky's Calibration)
+═══════════════════════════════════════════════════
 
- Q1  band:3  7 + 5 = ?   ✓  1.8s  → next band: 5
- Q2  band:5  2 × 8 = ?   ✓  2.1s  → next band: 7
- Q3  band:7  63 + 28 = ? ✗  8.4s  → next band: 6
- Q4  band:6  42 - 17 = ? ✓  3.2s  → next band: 8
+ Q1  band:3  What is 7 − 5?       ✓  1.4s  → next band: 5
+ Q2  band:5  What is 2 × 9?       ✓  1.9s  → next band: 7  [skipped text]
+ Q3  band:7  What is 36 − 17?     ✗  2.1s  → next band: 6
+ Q4  band:6  What is 43 − 21?     ✓  2.2s  → next band: 8
 
  Intake result:
    Placed at band: 6 (+/- <50)
-   Pace: 0.60   Scaffolding: 0.45
-   Streak to promote: 3
-   Text speed: 0.035
+   Pace: 0.70   Scaffolding: 0.30
+   Promote threshold: 0.65  Stretch threshold: 0.50
 
-═══ PLAY SESSION (30 challenges) ═══
+═══════════════════════════════════════════════════
+  PLAY SESSION (30 challenges)
+═══════════════════════════════════════════════════
 
-  #1  add   band:6  23 + 14 = 37  ✓  2.1s  streak:1   pace:0.60
-  #2  sub   band:6  41 - 18 = 23  ✓  3.4s  streak:2   pace:0.60
-  #3  add   band:6  35 + 12 = 47  ✓  1.9s  streak:3   pace:0.60  ⬆ PROMOTED → band:7
-  #4  sub   band:7  82 - 35 = 47  ✗  7.2s  streak:-1  pace:0.58
-  #5  add   band:7  54 + 38 = 92  ✗  9.1s  streak:-2  pace:0.55  ⬇ DEMOTED → band:6
-  ...
-  #18 add   band:6  29 + 16 = 45  ✗  0.4s  [BOREDOM — not penalized]  streak:2
-  ...
-  #22 sub   band:6  38 - 19 = ?   ✗  8s
-  #23 sub   band:6  31 - 14 = ?   ✗  9s
-  #24 sub   band:6  26 - 11 = ?   ✗  11s   😰 FRUSTRATION: high → drop_band
+  #1  add_no_carry   band:6       What is 13 + 1?        ✗   3.1s  sw:0.50
+  #2  sub_no_borrow  band:6       What is 27 − 6?        ✓   1.9s  sw:0.50
   ...
 
-═══ FINAL PROFILE ═══
+═══════════════════════════════════════════════════
+  FINAL PROFILE
+═══════════════════════════════════════════════════
 
-  Band: 5 (x1 x2)        Play time: 30 questions
-  Pace: 0.48              Scaffolding: 0.52
+  Band: 6 (+/- <50)        Questions: 30
+  Spread: 0.40             Pace: 0.90        Scaffolding: 0.15
   Frustration events: 1
-  Accuracy: 67% (20/30)
 
-  Operation breakdown:
-    add:    82% (14/17)   strength
-    sub:    46% (6/13)    growth area
-    mult:   --
-    div:    --
+  Sub-skill breakdown:
+    Addition:
+      add no carry      80% (4/5)   strength
+      add carry         50% (1/2)   developing
+    Subtraction:
+      sub no borrow     89% (8/9)   strength
+      sub borrow        20% (1/5)   growth area
+    Multiplication:
+      mul trivial       67% (4/6)   developing
 ```
 
-## Simulated Kid Profiles
+### Simulated Kid Profiles
 
-Each profile defines how the simulated kid "behaves" — their accuracy at each band, response speed, and quirks.
+Same 4 profiles as the JS version, now as Rust structs:
 
-```js
-const PROFILES = {
-  gifted: {
-    name: 'Gifted 4yo',
-    // Probability of correct answer at each band
-    accuracy: { 1: 0.99, 2: 0.95, 3: 0.90, 4: 0.85, 5: 0.75, 6: 0.50, 7: 0.30, 8: 0.20, 9: 0.10, 10: 0.05 },
-    // Response time range [min, max] in ms
-    speed: { fast: [800, 2500], normal: [1500, 4000] },
-    // Chance of boredom wrong (fast wrong on easy questions)
-    boredomChance: 0.15,
-    skipsText: true,
-  },
+```rust
+struct KidProfile {
+    name: &'static str,
+    // Probability of correct answer at each band (index 0 = band 1)
+    accuracy: [f64; 10],
+    // Response time range [min_ms, max_ms]
+    speed_fast: (f64, f64),
+    speed_normal: (f64, f64),
+    boredom_chance: f64,
+    skips_text: bool,
+}
 
-  struggling: {
-    name: 'Struggling 5yo',
-    accuracy: { 1: 0.80, 2: 0.60, 3: 0.40, 4: 0.20, 5: 0.10, 6: 0.05, 7: 0.02, 8: 0.01, 9: 0.01, 10: 0.01 },
-    speed: { fast: [4000, 8000], normal: [6000, 12000] },
-    boredomChance: 0,
-    skipsText: false,
-  },
-
-  'seven-year-old': {
-    name: 'Typical 7yo',
-    accuracy: { 1: 0.99, 2: 0.98, 3: 0.95, 4: 0.92, 5: 0.85, 6: 0.80, 7: 0.70, 8: 0.55, 9: 0.35, 10: 0.20 },
-    speed: { fast: [1000, 3000], normal: [2000, 5000] },
-    boredomChance: 0.10,
-    skipsText: true,
-  },
-
-  '2e': {
-    name: '2e kid (high reasoning, slow processing)',
-    accuracy: { 1: 0.95, 2: 0.95, 3: 0.90, 4: 0.88, 5: 0.80, 6: 0.75, 7: 0.65, 8: 0.50, 9: 0.30, 10: 0.15 },
-    speed: { fast: [5000, 9000], normal: [7000, 15000] },
-    boredomChance: 0.05,
-    skipsText: false,  // slow reader but deep thinker
-  },
+const GIFTED: KidProfile = KidProfile {
+    name: "Gifted 4yo",
+    accuracy: [0.99, 0.95, 0.90, 0.85, 0.75, 0.50, 0.30, 0.20, 0.10, 0.05],
+    speed_fast: (800.0, 2500.0),
+    speed_normal: (1500.0, 4000.0),
+    boredom_chance: 0.15,
+    skips_text: true,
 };
+
+const STRUGGLING: KidProfile = KidProfile {
+    name: "Struggling 5yo",
+    accuracy: [0.80, 0.60, 0.40, 0.20, 0.10, 0.05, 0.02, 0.01, 0.01, 0.01],
+    speed_fast: (4000.0, 8000.0),
+    speed_normal: (6000.0, 12000.0),
+    boredom_chance: 0.0,
+    skips_text: false,
+};
+
+// ... SEVEN_YEAR_OLD, TWO_E
 ```
 
-## Implementation
+### Implementation
 
-### File: `tools/simulate.js`
+```rust
+// robot-buddy-domain/src/bin/simulate.rs
 
-Node script. Imports directly from `src/domain/learning/` (ES modules). No browser deps, no adapter, no canvas.
+use robot_buddy_domain::learning::*;
+use robot_buddy_domain::types::*;
+use rand::SeedableRng;
+use rand::rngs::SmallRng;
 
-```js
-import { createProfile, learnerReducer } from '../src/domain/learning/index.js';
-import { generateChallenge } from '../src/domain/learning/challenge-generator.js';
-import { generateIntakeQuestion, processIntakeResults, nextIntakeBand } from '../src/domain/learning/intake-assessor.js';
-import { detectFrustration } from '../src/domain/learning/frustration-detector.js';
-import { accuracy } from '../src/domain/learning/rolling-window.js';
+fn main() {
+    let args = parse_args();
+    let mut rng = SmallRng::seed_from_u64(args.seed);
+    let profile_def = get_profile(&args.profile_name);
+
+    // Run intake
+    let intake_result = run_intake(&mut rng, profile_def, args.configured_band);
+    let mut profile = learner_profile::LearnerProfile::new();
+    profile = learner_profile::learner_reducer(profile, intake_completed_event(&intake_result));
+
+    if args.intake_only { return; }
+
+    // Run N challenges
+    for q in 1..=args.questions {
+        let challenge_profile = challenge_generator::ChallengeProfile {
+            math_band: profile.math_band,
+            spread_width: profile.spread_width,
+            operation_stats: profile.operation_stats.clone(),
+        };
+        let challenge = challenge_generator::generate_challenge(&challenge_profile, &mut rng);
+        let sim = simulate_answer(profile_def, challenge.sampled_band, &mut rng);
+
+        let event = puzzle_attempted_event(&challenge, &sim, &profile);
+        profile = learner_profile::learner_reducer(profile, event);
+
+        print_challenge_line(q, &challenge, &sim, &profile);
+    }
+
+    print_final_profile(&profile);
+}
 ```
 
-### Flow
+Direct function calls — no JSON, no WASM boundary, no serialization. The domain types are used natively. `SmallRng` is the same PRNG the WASM bridge uses.
 
-1. Parse CLI args (profile name, question count, flags)
-2. Create a simulated kid from the profile
-3. Run intake: 4 questions, simulate answers based on profile accuracy at each band
-4. Process intake → get initial profile
-5. Run N challenges, simulating answers:
-   - Generate challenge from current profile
-   - Simulate answer: correct with probability `profile.accuracy[band]`
-   - Simulate response time: random within speed range
-   - Simulate boredom: if correct streak > 3 and easy band, chance of fast wrong
-   - Feed event into reducer
-   - Run frustration detection
-   - Print the line
-6. Print final profile summary
+### Cargo.toml addition
 
-### Seeded RNG
+```toml
+[[bin]]
+name = "simulate"
+path = "src/bin/simulate.rs"
 
-Use a seeded PRNG so simulations are reproducible. Default seed from profile name, overridable with `--seed`.
-
-```bash
-node tools/simulate.js --profile gifted --seed 42
-# Same output every time
+[[bin]]
+name = "simulate-challenge"
+path = "src/bin/simulate_challenge.rs"
 ```
 
-### Add to package.json
+### Package.json script (convenience)
 
 ```json
 "scripts": {
-  "simulate": "node tools/simulate.js"
+  "simulate": "cargo run --manifest-path robot-buddy-domain/Cargo.toml --bin simulate --"
 }
 ```
 
 Then: `npm run simulate -- --profile gifted`
 
+## 2. Challenge Simulator (`src/bin/simulate_challenge.rs`)
+
+Replaces the specced `tools/simulate-challenge.js`. Exercises the challenge lifecycle reducer.
+
+### Usage
+
+```bash
+# Simulate a single challenge interaction
+cargo run --bin simulate-challenge -- --answer correct --cra abstract
+
+# Kid needs hints
+cargo run --bin simulate-challenge -- --answer wrong,show-me,wrong,tell-me --cra abstract
+
+# Voice input
+cargo run --bin simulate-challenge -- --answer voice:0.6:correct --cra representational
+
+# 20 random challenges with a kid profile
+cargo run --bin simulate-challenge -- --profile hesitant --count 20
+
+# Full state trace
+cargo run --bin simulate-challenge -- --answer wrong,retry,correct --trace
+```
+
+### Action Sequences
+
+Parsed from comma-separated strings:
+
+```
+correct              → AnswerSubmitted(correct_answer)
+wrong                → AnswerSubmitted(wrong_answer)
+show-me              → ShowMe
+tell-me              → TellMe
+retry                → Retry
+voice:0.9:correct    → VoiceListenStart → VoiceResult(confidence=0.9) → AnswerSubmitted(correct)
+voice:0.6:correct    → VoiceListenStart → VoiceResult(confidence=0.6) → VoiceConfirm(yes) → AnswerSubmitted(correct)
+voice:0.3:wrong      → VoiceListenStart → VoiceResult(confidence=0.3, retry)
+```
+
+### Challenge Profiles
+
+```rust
+struct ChallengeKidProfile {
+    name: &'static str,
+    first_attempt_accuracy: f64,
+    retry_accuracy: f64,
+    uses_show_me: f64,
+    uses_tell_me: f64,
+    uses_voice: f64,
+    voice_confidence: (f64, f64),
+}
+
+const CONFIDENT: ChallengeKidProfile = ChallengeKidProfile {
+    name: "Confident kid",
+    first_attempt_accuracy: 0.85,
+    retry_accuracy: 0.95,
+    uses_show_me: 0.05,
+    uses_tell_me: 0.01,
+    uses_voice: 0.3,
+    voice_confidence: (0.7, 0.95),
+};
+
+// ... HESITANT, EXPLORER, FRUSTRATED
+```
+
+### Composition
+
+The two simulators compose via JSON piping:
+
+```bash
+# Learning sim outputs JSON lines
+cargo run --bin simulate -- --profile gifted --output json | \
+  cargo run --bin simulate-challenge -- --stdin --profile hesitant
+
+# Or combined mode
+cargo run --bin simulate -- --profile gifted --challenge-detail --challenge-profile hesitant
+```
+
+The `--challenge-detail` flag runs both simulators internally — learning domain picks the problem, challenge domain simulates the interaction.
+
+## Files
+
+```
+robot-buddy-domain/
+  src/
+    bin/
+      simulate.rs              # Learning simulator
+      simulate_challenge.rs    # Challenge lifecycle simulator
+  Cargo.toml                   # [[bin]] targets added
+```
+
+## What to delete
+
+```
+tools/simulate.js              # Replaced by cargo run --bin simulate
+docs/cli-simulator-spec.md     # This file replaces it
+```
+
 ## Acceptance Criteria
 
-1. All 4 built-in profiles produce plausible output
-2. Gifted profile promotes quickly, hits a ceiling, system speeds up pace
-3. Struggling profile stays at low bands, system slows down, frustration triggers band drops
-4. 2e profile: high bands but slow pace dial — system correctly separates reasoning from speed
-5. `--intake-only` shows just the placement
-6. `--seed` makes output deterministic
-7. Zero browser dependencies — runs in pure Node
+1. `cargo run --bin simulate -- --profile gifted --seed 42` produces deterministic colored output
+2. All 4 learning profiles (gifted, struggling, seven-year-old, 2e) produce plausible output
+3. `cargo run --bin simulate-challenge -- --answer wrong,show-me,correct --trace` shows state transitions
+4. All 4 challenge profiles (confident, hesitant, explorer, frustrated) work
+5. `--output json` piping works between the two tools
+6. `--challenge-detail` combined mode works
+7. `tools/simulate.js` deleted
+8. No Node dependency for simulation
