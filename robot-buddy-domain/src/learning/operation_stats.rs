@@ -35,7 +35,8 @@ impl StatEntry {
 }
 
 /// Tracks both coarse (per-operation) and fine (per-sub-skill) stats.
-/// Uses HashMaps keyed by the enum — compiler-checked, no magic strings.
+/// Nested: { coarse: { add: {...} }, fine: { addSingle: {...} } }
+/// JS adapter accesses via profileState.operationStats.coarse.add
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationStats {

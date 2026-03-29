@@ -62,7 +62,7 @@
       },
 
       createWindow(entries) {
-        return { entries: entries || [], max_size: 20 };
+        return { entries: entries || [], maxSize: 20 };
       },
     };
 

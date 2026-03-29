@@ -564,7 +564,7 @@
     const ops = ['add', 'sub', 'multiply', 'divide', 'number_bond'];
     const opLabels = { add: 'add', sub: 'sub', multiply: 'mult', divide: 'div', number_bond: 'bond' };
     for (const op of ops) {
-      const s = p.operationStats[op];
+      const s = (p.operationStats.coarse || p.operationStats)[op];
       const opAcc = s.attempts > 0 ? `${((s.correct / s.attempts) * 100).toFixed(0)}%` : '--';
       const opDetail = s.attempts > 0 ? `(${s.correct}/${s.attempts})` : '';
       const cra = p.craStages[op] || 'concrete';
