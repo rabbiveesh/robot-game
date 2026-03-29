@@ -3,6 +3,7 @@
 
 function createQuizRenderer() {
   const _choiceBounds = [];
+  let _celebrationStart = null;
 
   return {
     render(ctx, cs, canvasW, canvasH, time) {
@@ -148,6 +149,7 @@ function createQuizRenderer() {
 
       // Celebration
       if (cs.phase === 'complete' && cs.correct) {
+        if (_celebrationStart === null) _celebrationStart = time;
         ctx.font = 'bold 32px "Segoe UI", system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillStyle = '#FFD54F';
@@ -155,8 +157,10 @@ function createQuizRenderer() {
         const praise = praises[(cs.challenge.correctAnswer || 0) % praises.length];
         ctx.fillText(praise, panelX + panelW / 2, btnY + btnH + 55);
         if (typeof drawStarBurst === 'function') {
-          drawStarBurst(ctx, panelX + panelW / 2, btnY + btnH + 35, time, CHALLENGE.celebrationStart || time, 2);
+          drawStarBurst(ctx, panelX + panelW / 2, btnY + btnH + 35, time, _celebrationStart, 2);
         }
+      } else {
+        _celebrationStart = null;
       }
     },
 
