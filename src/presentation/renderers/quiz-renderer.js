@@ -152,7 +152,7 @@ function createQuizRenderer() {
         ctx.textAlign = 'center';
         ctx.fillStyle = '#FFD54F';
         const praises = ['AMAZING!', 'WOW!', 'GENIUS!', 'SO SMART!', 'INCREDIBLE!', 'YOU GOT IT!'];
-        const praise = praises[Math.floor((time * 10) % praises.length)];
+        const praise = praises[(cs.challenge.correctAnswer || 0) % praises.length];
         ctx.fillText(praise, panelX + panelW / 2, btnY + btnH + 55);
         if (typeof drawStarBurst === 'function') {
           drawStarBurst(ctx, panelX + panelW / 2, btnY + btnH + 35, time, CHALLENGE.celebrationStart || time, 2);

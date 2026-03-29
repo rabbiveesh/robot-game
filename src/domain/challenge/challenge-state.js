@@ -112,7 +112,7 @@ export function challengeReducer(state, action) {
       const lowerCra = currentCra === 'abstract' ? 'representational'
         : currentCra === 'representational' ? 'concrete'
           : 'concrete';
-      if (lowerCra === currentCra) return state;
+      // Always set hintUsed — even at concrete, the kid asked for help
       return Object.freeze({
         ...state,
         renderHint: Object.freeze({ ...state.renderHint, craStage: lowerCra }),
