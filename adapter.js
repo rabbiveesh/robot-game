@@ -445,6 +445,28 @@
       if (lp.rollingWindowEntries && !lp.rollingWindow) {
         lp.rollingWindow = { entries: lp.rollingWindowEntries, maxSize: 20 };
       }
+      if (!lp.rollingWindow) {
+        lp.rollingWindow = { entries: [], maxSize: 20 };
+      }
+      // Migrate old flat operationStats to nested { coarse, fine }
+      if (lp.operationStats && !lp.operationStats.coarse) {
+        const ops = ['add', 'sub', 'multiply', 'divide', 'number_bond'];
+        const subSkills = [
+          'add_single', 'add_no_carry', 'add_carry', 'add_carry_tens',
+          'sub_single', 'sub_no_borrow', 'sub_borrow', 'sub_borrow_tens',
+          'mul_trivial', 'mul_easy', 'mul_hard', 'div_easy', 'div_hard',
+          'bond_small', 'bond_large',
+        ];
+        const coarse = {};
+        const fine = {};
+        for (const k of ops) {
+          coarse[k] = lp.operationStats[k] || { correct: 0, attempts: 0 };
+        }
+        for (const k of subSkills) {
+          fine[k] = lp.operationStats[k] || { correct: 0, attempts: 0 };
+        }
+        lp.operationStats = { coarse, fine };
+      }
       // The saved profile is a complete serialized LearnerProfile — use it directly
       profileState = lp;
       SKILL.math.band = profileState.mathBand;
