@@ -1,5 +1,7 @@
 # NPC Interaction Menu + Dum Dum Economy Phase 1 + Kid NPCs
 
+**Status: IMPLEMENTED.** Shipped in PR #7. Reward logic now in Rust domain.
+
 ## Goal
 
 Replace the auto-trigger "Space to talk" with an interaction menu that shows options per NPC. Add the give mechanic. Add kid NPCs at Mommy's house. Extract reward logic into the domain.

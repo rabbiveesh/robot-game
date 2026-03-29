@@ -78,8 +78,11 @@
 
     console.log('[WASM] Domain loaded — all modules active');
   } catch (e) {
-    console.error('[WASM] Failed to load:', e);
-    console.warn('[WASM] Falling back to JS domain');
-    // WasmDomain stays undefined, adapter falls back to window.LearningDomain
+    document.body.innerHTML = `<div style="color:#F44336;padding:40px;font-family:monospace;">
+      <h1>WASM domain failed to load</h1>
+      <p>${e.message}</p>
+      <p>The game requires HTTPS or localhost. Try: <code>npx serve .</code></p>
+    </div>`;
+    throw e;
   }
 })();

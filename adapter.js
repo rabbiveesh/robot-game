@@ -2,31 +2,55 @@
 // WASM loads async via wasm-bridge.js. Adapter picks it up when available.
 
 (function () {
-  // Use WASM if loaded, fall back to JS domain bundles
-  function D() { return window.WasmDomain || window.LearningDomain; }
-  function CD() { return window.WasmDomain || window.ChallengeDomain; }
+  // Domain is WASM — no fallback
+  const W = window.WasmDomain;
 
-  // Wrappers that defer to whatever domain is available
-  function createProfile(overrides) { return D().createProfile(overrides); }
-  function learnerReducer(state, event) { return D().learnerReducer(state, event); }
-  function generateChallenge(profile, rng) { return D().generateChallenge(profile, rng); }
-  function detectFrustration(window, behaviors) { return D().detectFrustration(window, behaviors); }
-  function generateIntakeQuestion(band, idx, rng) { return D().generateIntakeQuestion(band, idx, rng); }
-  function processIntakeResults(answers, band) { return D().processIntakeResults(answers, band); }
-  function nextIntakeBand(band, correct, ceiling) { return D().nextIntakeBand(band, correct, ceiling); }
-  function accuracy(window) { return D().accuracy(window); }
-  function createWindow(entries) { return D().createWindow(entries); }
+  function createProfile(overrides) { return W.createProfile(overrides); }
+  function learnerReducer(state, event) { return W.learnerReducer(state, event); }
+  function generateChallenge(profile, rng) { return W.generateChallenge(profile, rng); }
+  function detectFrustration(win, behaviors) { return W.detectFrustration(win, behaviors); }
+  function generateIntakeQuestion(band, idx, rng) { return W.generateIntakeQuestion(band, idx, rng); }
+  function processIntakeResults(answers, band) { return W.processIntakeResults(answers, band); }
+  function nextIntakeBand(band, correct, ceiling) { return W.nextIntakeBand(band, correct, ceiling); }
+  function accuracy(win) { return W.accuracy(win); }
+  function createWindow(entries) { return W.createWindow(entries); }
 
+  // Challenge lifecycle — createChallengeState builds from challenge + context
   function createChallengeState(challenge, context) {
-    // WASM doesn't have createChallengeState yet (challenge_state is ported but
-    // the WASM export creates from JSON, not from challenge+context).
-    // Use JS ChallengeDomain for now.
-    if (window.ChallengeDomain) return window.ChallengeDomain.createChallengeState(challenge, context);
-    return null;
+    // Build the state struct that the Rust challenge_reducer expects
+    return {
+      phase: 'presented',
+      correct_answer: challenge.correctAnswer ?? challenge.correct_answer,
+      attempts: 0,
+      max_attempts: 2,
+      correct: null,
+      question: {
+        display: challenge.displayText ?? challenge.display_text ?? challenge.question,
+        speech: challenge.speechText ?? challenge.speech_text ?? challenge.question,
+      },
+      feedback: null,
+      reward: null,
+      render_hint: context.renderHint ?? {
+        cra_stage: 'abstract',
+        answer_mode: 'choice',
+        interaction_type: 'quiz',
+      },
+      hint_used: false,
+      hint_level: 0,
+      told_me: false,
+      voice: { listening: false, confirming: false, confirm_number: null, retries: 0, text: null },
+      // Keep the full challenge + context for the adapter to read
+      challenge,
+      context,
+    };
   }
   function challengeReducer(state, action) {
-    if (window.ChallengeDomain) return window.ChallengeDomain.challengeReducer(state, action);
-    return state;
+    // Use WASM reducer
+    const result = W.challengeReducer(state, action);
+    // Preserve challenge + context (not part of Rust state)
+    result.challenge = state.challenge;
+    result.context = state.context;
+    return result;
   }
 
   // ─── ADAPTIVE STATE ─────────────────────────────────────
