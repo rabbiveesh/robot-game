@@ -165,4 +165,71 @@ describe('WASM bridge integration — field names are camelCase', () => {
     expect(result.promoteThreshold).toBeDefined();
     expect(result.math_band).toBeUndefined();
   });
+
+  it('save/load round-trip preserves all profile data', () => {
+    // Create profile
+    let profile = JSON.parse(wasm.create_profile());
+
+    // Do some work — 3 correct answers to promote CRA
+    for (let i = 0; i < 3; i++) {
+      profile = JSON.parse(wasm.learner_reducer(
+        JSON.stringify(profile),
+        JSON.stringify({
+          type: 'PUZZLE_ATTEMPTED',
+          correct: true,
+          operation: 'add',
+          band: 1,
+          centerBand: 1,
+          responseTimeMs: 1500,
+          hintUsed: false,
+          toldMe: false,
+        }),
+      ));
+    }
+
+    // Verify state changed
+    expect(profile.streak).toBe(3);
+    expect(profile.rollingWindow.entries.length).toBe(3);
+    expect(profile.craStages.add).toBe('representational');
+
+    // Simulate save: serialize the profile (as the adapter does)
+    const saved = JSON.parse(JSON.stringify(profile));
+
+    // Simulate load: the saved profile IS the state (no createProfile needed)
+    const loaded = saved;
+
+    // Verify everything survived
+    expect(loaded.streak).toBe(3);
+    expect(loaded.rollingWindow.entries.length).toBe(3);
+    expect(loaded.craStages.add).toBe('representational');
+    expect(loaded.operationStats.coarse.add.correct).toBe(3);
+    expect(loaded.operationStats.coarse.add.attempts).toBe(3);
+
+    // Verify the loaded state can be re-serialized to the reducer
+    // (This is the actual save/load path: JSON → Rust LearnerProfile → JSON)
+    const rehydrated = JSON.parse(wasm.learner_reducer(
+      JSON.stringify(loaded),
+      JSON.stringify({ type: 'BEHAVIOR', signal: 'idle' }), // no-op event to test deserialization
+    ));
+    expect(rehydrated.streak).toBe(3); // preserved through no-op
+    expect(rehydrated.rollingWindow.entries.length).toBe(3); // preserved
+
+    const afterLoad = JSON.parse(wasm.learner_reducer(
+      JSON.stringify(loaded),
+      JSON.stringify({
+        type: 'PUZZLE_ATTEMPTED',
+        correct: true,
+        operation: 'add',
+        band: 1,
+        centerBand: 1,
+        responseTimeMs: 2000,
+        hintUsed: false,
+        toldMe: false,
+      }),
+    ));
+    // 4th correct at band 1 with 100% accuracy → promotion fires → streak resets
+    expect(afterLoad.mathBand).toBe(2); // promoted!
+    expect(afterLoad.streak).toBe(0); // reset on promotion
+    expect(afterLoad.rollingWindow.entries.length).toBe(4);
+  });
 });

@@ -435,10 +435,12 @@
     const data = slots[slotIndex];
     if (data && data.learnerProfile) {
       const lp = data.learnerProfile;
-      profileState = createProfile({
-        ...lp,
-        rollingWindow: createWindow(lp.rollingWindowEntries || []),
-      });
+      // Restore rolling window from saved entries
+      if (lp.rollingWindowEntries && !lp.rollingWindow) {
+        lp.rollingWindow = { entries: lp.rollingWindowEntries, maxSize: 20 };
+      }
+      // The saved profile is a complete serialized LearnerProfile — use it directly
+      profileState = lp;
       SKILL.math.band = profileState.mathBand;
       SKILL.math.streak = profileState.streak;
     } else {
