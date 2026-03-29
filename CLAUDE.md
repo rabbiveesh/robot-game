@@ -36,31 +36,40 @@ These are NOT optional. Every PR must respect these:
 
 ## Tech Stack
 
-- **Runtime**: Browser (vanilla JS, ES modules)
-- **Bundler**: Rollup
-- **Test runner**: Vitest
-- **State management**: Immutable state + reducer (domain layer). Mutable state (presentation layer — animation, camera, etc.)
-- **CI**: GitHub Actions → GitHub Pages (main branch only, game files only — no docs/tests/node_modules deployed)
+- **Domain**: Rust → WASM (wasm-bindgen + serde). All game logic.
+- **Domain tests**: `cargo test` (58 tests)
+- **Presentation**: Vanilla JS, Canvas 2D
+- **Infrastructure tests**: Vitest (speech recognition parser)
+- **Build**: wasm-pack (domain), rollup (infrastructure JS)
+- **CI**: GitHub Actions: cargo test + wasm-pack build + vitest + deploy to Pages
 
-## Project Layout (target — migration in progress)
+## Project Layout
 
 ```
-src/
-  domain/
-    learning/       # CORE — reducer, challenge gen, intake, frustration detection
-    quest/          # Quest state, templates, micro-quest generation
-    world/          # Map data, portals, zones
-    character/      # Player, companion, NPC, inventory
-  application/      # GameSession, InteractionService, QuestService
-  infrastructure/   # SaveManager, Claude API, SpeechService
-  presentation/     # Canvas rendering, sprites, UI, input
-test/
-  domain/learning/  # THE important tests
-  domain/quest/
-docs/               # Design specs (not deployed)
-```
+robot-buddy-domain/           # Rust crate → WASM
+  src/
+    lib.rs                    # WASM exports
+    types.rs                  # Shared enums (Operation, SubSkill, CraStage, Phase)
+    learning/                 # Profile reducer, challenge gen, frustration, intake
+    challenge/                # Lifecycle state machine
+    economy/                  # Rewards, gifts
+    bin/
+      simulate.rs             # CLI learning simulator
+      simulate_challenge.rs   # CLI challenge simulator
 
-The legacy flat files (sprites.js, world.js, etc.) coexist during migration. The game works at every intermediate state.
+src/presentation/             # JS renderers
+  renderers/
+    quiz-renderer.js
+    visuals/base10-blocks-visual.js
+  dev-zone.js
+
+src/infrastructure/           # JS browser APIs
+  speech-recognition.js
+
+# Legacy JS (game shell, being migrated)
+game.js, dialogue.js, sprites.js, world.js, characters.js
+adapter.js, wasm-bridge.js
+```
 
 ## Architecture Decision Records
 
@@ -79,14 +88,24 @@ ADRs document key design decisions, their context, and consequences. Read these 
 ## Commands
 
 ```bash
-npm test              # Run vitest
-npm run build         # Rollup bundle for production
-npm run dev           # Dev server with watch mode
+# Domain (Rust)
+cd robot-buddy-domain && cargo test           # 58 domain tests
+wasm-pack build robot-buddy-domain --target web --out-dir ../dist/wasm
+
+# Presentation (JS)
+npx vitest run                                # Infrastructure tests
+npm run build                                 # Rollup JS bundles
+
+# Simulate
+cargo run --manifest-path robot-buddy-domain/Cargo.toml --bin simulate -- --profile gifted
+
+# Dev
+npx serve .                                   # Local server (WASM needs HTTP)
 ```
 
 ## Presentation Layer Debt
 
-The legacy flat files (dialogue.js, game.js, world.js, sprites.js, characters.js) are the original prototype. They work but accumulate debt with every feature. The domain layer is clean (`src/domain/`); the presentation layer is not.
+The legacy flat files (dialogue.js, game.js, world.js, sprites.js, characters.js) are the original prototype. They work but accumulate debt with every feature. The domain is Rust (clean, tested, type-safe). The presentation is legacy JS (not clean).
 
 **DO NOT migrate the presentation layer as a standalone project.** Each feature triggers migration of the specific part it needs. See `docs/presentation-migration.md` for:
 - Which feature triggers which migration
@@ -98,11 +117,12 @@ The adapter (`adapter.js`) is the bridge and is intentionally ugly. It dies when
 
 ## For Implementers
 
-Read these specs before writing code (on `adaptive-learning-design` branch):
-1. `docs/architecture-spec.md` — start here for domain model and project layout
+Read these specs before writing code:
+1. `docs/architecture-spec.md` — start here. Rust domain + JS presentation.
 2. `docs/adaptive-learning-spec.md` — how the learning system works
-3. `docs/rpg-quest-spec.md` — how quests and story-embedded math work
+3. `docs/challenge-lifecycle-spec.md` — challenge state machine + CRA feedback loop
+4. `docs/rpg-quest-spec.md` — how quests and story-embedded math work (future)
 
-Before building any presentation feature, check `docs/presentation-migration.md` for whether it triggers a migration step.
+Before building any presentation feature, check `docs/presentation-migration.md`.
 
-The current MVP task is in `docs/mvp-adaptive-engine.md`.
+Domain changes go in `robot-buddy-domain/` (Rust). Run `cargo test` before committing. Presentation changes go in JS legacy files or `src/presentation/`.

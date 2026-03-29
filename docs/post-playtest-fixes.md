@@ -1,5 +1,7 @@
 # Post-Playtest Fixes — Implementation Spec
 
+**Status: MOSTLY DONE.** Items 1-8, 10 shipped. Item 9 (integration tests) deferred — domain tests are cargo test now. Remaining items superseded by the challenge lifecycle refactor and burn-the-bridge.
+
 Issues from real-kid playtesting sessions.
 
 ## 1. Voice Input Debug Mode
