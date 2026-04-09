@@ -1365,8 +1365,8 @@ function showInteractionMenu(target, playerName, time) {
   // Get available options via the economy domain
   const npc = target.type === 'npc' ? target.npc : { id: target.type, canReceiveGifts: target.type === 'robot' };
   const playerState = { dumDums: DUM_DUMS };
-  const options = typeof EconomyDomain !== 'undefined'
-    ? EconomyDomain.getInteractionOptions(npc, playerState)
+  const options = window.WasmDomain?.getInteractionOptions
+    ? window.WasmDomain.getInteractionOptions(npc, playerState)
     : [{ type: 'talk', label: 'Talk', key: '1' }];
 
   // Signs and chests auto-trigger (no menu)
@@ -1433,8 +1433,8 @@ async function triggerGive(target, time) {
   const npcId = target.type === 'robot' ? 'robot' : (target.npc?.id || 'robot');
   const npcName = target.type === 'robot' ? 'Sparky' : (target.npc?.name || 'Sparky');
 
-  if (typeof EconomyDomain === 'undefined') return;
-  const result = EconomyDomain.processGive(DUM_DUMS, npcId, TOTAL_GIFTS_GIVEN);
+  if (!window.WasmDomain?.processGive) return;
+  const result = window.WasmDomain.processGive(DUM_DUMS, npcId, TOTAL_GIFTS_GIVEN);
   if (!result) {
     GAME.state = 'DIALOGUE';
     startDialogue([{ speaker: 'Sparky', text: "We don't have any Dum Dums to give!" }], () => { GAME.state = 'PLAYING'; });

@@ -138,3 +138,13 @@ pub fn determine_reward(correct: bool) -> String {
         None => "null".to_string(),
     }
 }
+
+#[wasm_bindgen]
+pub fn get_interaction_options(npc_json: &str, player_state_json: &str) -> Result<String, JsValue> {
+    let npc: economy::interaction_options::NpcInfo = serde_json::from_str(npc_json)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let player_state: economy::interaction_options::PlayerState = serde_json::from_str(player_state_json)
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let options = economy::interaction_options::get_interaction_options(&npc, &player_state);
+    Ok(serde_json::to_string(&options).unwrap())
+}
