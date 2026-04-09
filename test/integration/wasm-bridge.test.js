@@ -284,6 +284,51 @@ describe('FrustrationResult — fields', () => {
   });
 });
 
+// ─── ECONOMY: INTERACTION OPTIONS + GIVE ────────────────
+
+describe('getInteractionOptions', () => {
+  it('returns Talk only when 0 dum dums', () => {
+    const opts = JSON.parse(wasm.get_interaction_options(
+      JSON.stringify({ id: 'robot' }),
+      JSON.stringify({ dumDums: 0 }),
+    ));
+    expect(opts.length).toBe(1);
+    expect(opts[0].type).toBe('talk');
+  });
+
+  it('returns Talk + Give when dum dums > 0', () => {
+    const opts = JSON.parse(wasm.get_interaction_options(
+      JSON.stringify({ id: 'robot' }),
+      JSON.stringify({ dumDums: 3 }),
+    ));
+    expect(opts.length).toBe(2);
+    expect(opts[1].type).toBe('give');
+    expect(opts[1].label).toBe('Give Dum Dum');
+  });
+
+  it('excludes Give when canReceiveGifts is false', () => {
+    const opts = JSON.parse(wasm.get_interaction_options(
+      JSON.stringify({ id: 'chest', canReceiveGifts: false }),
+      JSON.stringify({ dumDums: 5 }),
+    ));
+    expect(opts.length).toBe(1);
+  });
+});
+
+describe('processGive', () => {
+  it('decrements dum dums and tracks gifts', () => {
+    const result = JSON.parse(wasm.process_give(5, 'robot', '{}'));
+    expect(result.newDumDums).toBe(4);
+    expect(result.newTotalGifts.robot).toBe(1);
+    expect(result.milestone.reaction).toBe('first');
+  });
+
+  it('returns null when 0 dum dums', () => {
+    const result = wasm.process_give(0, 'robot', '{}');
+    expect(result).toBe('null');
+  });
+});
+
 // ─── ROUND-TRIP SAVE/LOAD ───────────────────────────────
 
 describe('Save/load round-trip', () => {

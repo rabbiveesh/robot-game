@@ -64,6 +64,16 @@
       createWindow(entries) {
         return { entries: entries || [], maxSize: 20 };
       },
+
+      // ── Economy ──
+      getInteractionOptions(npc, playerState) {
+        return JSON.parse(wasm.get_interaction_options(JSON.stringify(npc), JSON.stringify(playerState)));
+      },
+
+      processGive(dumDums, recipientId, totalGiftsGiven) {
+        const result = wasm.process_give(dumDums, recipientId, JSON.stringify(totalGiftsGiven));
+        return result === 'null' ? null : JSON.parse(result);
+      },
     };
 
     window._wasmReady = true;
