@@ -88,8 +88,8 @@ impl Sparky {
         self.entity.move_toward_target(dt);
 
         if !self.entity.moving && !self.follow_queue.is_empty() {
-            // Keep 2 tiles of distance (don't follow right on top of player)
-            if self.follow_queue.len() > 2 {
+            // Keep 1 tile of distance
+            if self.follow_queue.len() > 1 {
                 let (nx, ny) = self.follow_queue.remove(0);
                 let dx = nx as i32 - self.entity.tile_x as i32;
                 let dy = ny as i32 - self.entity.tile_y as i32;
