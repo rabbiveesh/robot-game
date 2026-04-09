@@ -173,8 +173,19 @@ async fn main() {
                 nx += 1; player.dir = Dir::Right; moved = true;
             }
 
-            let sparky_blocks = nx as usize == sparky.entity.tile_x && ny as usize == sparky.entity.tile_y;
+            // Sparky is semi-solid — blocks unless the player is trapped
             let npc_blocks = npcs.iter().any(|n| n.tile_x == nx as usize && n.tile_y == ny as usize);
+            let player_trapped = [(0i32,1i32),(0,-1),(1,0),(-1,0)].iter().all(|(dx,dy)| {
+                let cx = player.tile_x as i32 + dx;
+                let cy = player.tile_y as i32 + dy;
+                cx < 0 || cy < 0
+                    || cx as usize >= map.width || cy as usize >= map.height
+                    || map.is_solid(cx as usize, cy as usize)
+                    || npcs.iter().any(|n| n.tile_x == cx as usize && n.tile_y == cy as usize)
+                    || (cx as usize == sparky.entity.tile_x && cy as usize == sparky.entity.tile_y)
+            });
+            let sparky_blocks = !player_trapped
+                && nx as usize == sparky.entity.tile_x && ny as usize == sparky.entity.tile_y;
             if moved && nx >= 0 && ny >= 0
                 && (nx as usize) < map.width && (ny as usize) < map.height
                 && !map.is_solid(nx as usize, ny as usize)
