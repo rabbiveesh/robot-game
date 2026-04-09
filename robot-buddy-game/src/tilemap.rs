@@ -148,12 +148,20 @@ impl Map {
         }
     }
 
+    pub fn dream() -> Self {
+        let mut m = Self::overworld();
+        m.id = "dream";
+        m.render_mode = RenderMode::Dream;
+        m
+    }
+
     pub fn by_id(id: &str) -> Self {
         match id {
             "overworld" => Self::overworld(),
             "home" => Self::home(),
             "lab" => Self::lab(),
             "shop" => Self::shop(),
+            "dream" => Self::dream(),
             "doghouse" => Self::doghouse(),
             "grove" => Self::grove(),
             _ => Self::overworld(),
