@@ -120,7 +120,7 @@ impl DialogueBox {
 
         // "SPACE >" blink indicator
         if self.waiting_for_input {
-            let blink = (get_time() * 3.0).sin() > 0.0;
+            let blink = (get_time() * 6.0).sin() > 0.0;
             if blink {
                 draw_text("SPACE >", box_x + box_w - 100.0, box_y + box_h - 16.0, 16.0,
                     Color::from_rgba(150, 150, 150, 255));
