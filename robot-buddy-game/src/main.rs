@@ -2,6 +2,7 @@ use macroquad::prelude::*;
 
 mod tilemap;
 mod sprites;
+mod npc;
 
 use tilemap::{Map, TILE_SIZE};
 use sprites::Dir;
@@ -149,6 +150,8 @@ async fn main() {
     let mut sparky = Sparky::new(14, 13);
     let mut camera = GameCamera { x: 0.0, y: 0.0 };
     let mut game_time: f32 = 0.0;
+    let npcs = npc::npcs_for_map(map.id);
+    let mut interact_msg: Option<(String, f32)> = None; // (message, show_until)
 
     loop {
         let dt = get_frame_time();
@@ -171,14 +174,25 @@ async fn main() {
             }
 
             let sparky_blocks = nx as usize == sparky.entity.tile_x && ny as usize == sparky.entity.tile_y;
+            let npc_blocks = npcs.iter().any(|n| n.tile_x == nx as usize && n.tile_y == ny as usize);
             if moved && nx >= 0 && ny >= 0
                 && (nx as usize) < map.width && (ny as usize) < map.height
                 && !map.is_solid(nx as usize, ny as usize)
-                && !sparky_blocks
+                && !sparky_blocks && !npc_blocks
             {
                 // Record position for Sparky before moving
                 sparky.record_player_pos(player.tile_x, player.tile_y);
                 player.start_move(nx as usize, ny as usize);
+            }
+        }
+
+        // Space: interact with facing NPC/Sparky
+        if is_key_pressed(KeyCode::Space) && !player.moving {
+            if let Some(target) = npc::get_interact_target(player.tile_x, player.tile_y, player.dir, &npcs) {
+                interact_msg = Some((format!("{}: Hello!", target.name), game_time + 3.0));
+            } else if npc::is_facing_sparky(player.tile_x, player.tile_y, player.dir,
+                    sparky.entity.tile_x, sparky.entity.tile_y) {
+                interact_msg = Some(("Sparky: BEEP BOOP!".to_string(), game_time + 3.0));
             }
         }
 
@@ -196,34 +210,45 @@ async fn main() {
         clear_background(Color::from_rgba(26, 26, 46, 255));
         tilemap::draw_map(&map, camera.x, camera.y, GAME_W, GAME_H, game_time);
 
-        // Draw entities in Y-order for overlap
-        let mut renderables: Vec<(f32, Box<dyn Fn()>)> = vec![];
-        let py = player.y;
-        let pd = player.dir;
-        let pf = player.frame;
-        let px = player.x;
-        renderables.push((py, Box::new(move || {
-            sprites::player::draw_player_boy(px, py, pd, pf, 0.0);
-        })));
+        // Collect all renderables for Y-sorting
+        struct Renderable { y: f32, kind: u8, idx: usize }
+        let mut renderables: Vec<Renderable> = vec![];
 
-        let sy = sparky.entity.y;
-        let sx = sparky.entity.x;
-        let sd = sparky.entity.dir;
-        let sf = sparky.entity.frame;
-        let gt = game_time;
-        renderables.push((sy, Box::new(move || {
-            sprites::robot::draw_robot(sx, sy, sd, sf, gt);
-        })));
+        renderables.push(Renderable { y: player.y, kind: 0, idx: 0 }); // player
+        renderables.push(Renderable { y: sparky.entity.y, kind: 1, idx: 0 }); // sparky
+        for (i, n) in npcs.iter().enumerate() {
+            renderables.push(Renderable { y: n.pixel_y(), kind: 2, idx: i });
+        }
+        renderables.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap());
 
-        renderables.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        for (_, draw) in &renderables {
-            draw();
+        for r in &renderables {
+            match r.kind {
+                0 => sprites::player::draw_player_boy(player.x, player.y, player.dir, player.frame, game_time),
+                1 => sprites::robot::draw_robot(sparky.entity.x, sparky.entity.y, sparky.entity.dir, sparky.entity.frame, game_time),
+                2 => npcs[r.idx].draw(game_time),
+                _ => {}
+            }
         }
 
         // HUD
         set_default_camera();
         draw_text(&format!("FPS: {} | Tile: {},{}", get_fps(), player.tile_x, player.tile_y),
             10.0, 20.0, 20.0, WHITE);
+
+        // Interaction message
+        if let Some((ref msg, until)) = interact_msg {
+            if game_time < until {
+                let sw = screen_width();
+                let bw = sw * 0.8;
+                let bx = (sw - bw) / 2.0;
+                let by = screen_height() - 100.0;
+                draw_rectangle(bx, by, bw, 70.0, Color::from_rgba(20, 20, 40, 230));
+                draw_rectangle_lines(bx, by, bw, 70.0, 2.0, Color::from_rgba(0, 230, 118, 255));
+                draw_text(msg, bx + 20.0, by + 40.0, 24.0, WHITE);
+            } else {
+                interact_msg = None;
+            }
+        }
 
         next_frame().await
     }
