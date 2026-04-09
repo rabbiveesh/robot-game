@@ -3,13 +3,21 @@ use macroquad::prelude::*;
 mod tilemap;
 mod sprites;
 mod npc;
+mod ui;
 
 use tilemap::{Map, TILE_SIZE};
 use sprites::Dir;
+use ui::dialogue::{DialogueBox, DialogueLine};
 
 const GAME_W: f32 = 960.0;
 const GAME_H: f32 = 720.0;
 const MOVE_SPEED: f32 = 200.0;
+
+#[derive(PartialEq)]
+enum GameState {
+    Playing,
+    Dialogue,
+}
 
 struct Entity {
     x: f32,
@@ -151,64 +159,85 @@ async fn main() {
     let mut camera = GameCamera { x: 0.0, y: 0.0 };
     let mut game_time: f32 = 0.0;
     let npcs = npc::npcs_for_map(map.id);
-    let mut interact_msg: Option<(String, f32)> = None; // (message, show_until)
+    let mut dialogue = DialogueBox::new();
+    let mut state = GameState::Playing;
 
     loop {
         let dt = get_frame_time();
         game_time += dt;
 
-        // Player input
-        if !player.moving {
-            let mut nx = player.tile_x as i32;
-            let mut ny = player.tile_y as i32;
-            let mut moved = false;
+        // ─── INPUT ────────────────────────────────────
+        match state {
+            GameState::Playing => {
+                // Movement
+                if !player.moving {
+                    let mut nx = player.tile_x as i32;
+                    let mut ny = player.tile_y as i32;
+                    let mut moved = false;
 
-            if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
-                ny -= 1; player.dir = Dir::Up; moved = true;
-            } else if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
-                ny += 1; player.dir = Dir::Down; moved = true;
-            } else if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
-                nx -= 1; player.dir = Dir::Left; moved = true;
-            } else if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
-                nx += 1; player.dir = Dir::Right; moved = true;
+                    if is_key_down(KeyCode::Up) || is_key_down(KeyCode::W) {
+                        ny -= 1; player.dir = Dir::Up; moved = true;
+                    } else if is_key_down(KeyCode::Down) || is_key_down(KeyCode::S) {
+                        ny += 1; player.dir = Dir::Down; moved = true;
+                    } else if is_key_down(KeyCode::Left) || is_key_down(KeyCode::A) {
+                        nx -= 1; player.dir = Dir::Left; moved = true;
+                    } else if is_key_down(KeyCode::Right) || is_key_down(KeyCode::D) {
+                        nx += 1; player.dir = Dir::Right; moved = true;
+                    }
+
+                    let npc_blocks = npcs.iter().any(|n| n.tile_x == nx as usize && n.tile_y == ny as usize);
+                    let player_trapped = [(0i32,1i32),(0,-1),(1,0),(-1,0)].iter().all(|(dx,dy)| {
+                        let cx = player.tile_x as i32 + dx;
+                        let cy = player.tile_y as i32 + dy;
+                        cx < 0 || cy < 0
+                            || cx as usize >= map.width || cy as usize >= map.height
+                            || map.is_solid(cx as usize, cy as usize)
+                            || npcs.iter().any(|n| n.tile_x == cx as usize && n.tile_y == cy as usize)
+                            || (cx as usize == sparky.entity.tile_x && cy as usize == sparky.entity.tile_y)
+                    });
+                    let sparky_blocks = !player_trapped
+                        && nx as usize == sparky.entity.tile_x && ny as usize == sparky.entity.tile_y;
+                    if moved && nx >= 0 && ny >= 0
+                        && (nx as usize) < map.width && (ny as usize) < map.height
+                        && !map.is_solid(nx as usize, ny as usize)
+                        && !sparky_blocks && !npc_blocks
+                    {
+                        sparky.record_player_pos(player.tile_x, player.tile_y);
+                        player.start_move(nx as usize, ny as usize);
+                    }
+                }
+
+                // Space: interact
+                if is_key_pressed(KeyCode::Space) && !player.moving {
+                    if let Some(target) = npc::get_interact_target(
+                        player.tile_x, player.tile_y, player.dir, &npcs
+                    ) {
+                        let lines = npc_dialogue_lines(target);
+                        dialogue.start(lines);
+                        state = GameState::Dialogue;
+                    } else if npc::is_facing_sparky(
+                        player.tile_x, player.tile_y, player.dir,
+                        sparky.entity.tile_x, sparky.entity.tile_y,
+                    ) {
+                        dialogue.start(sparky_dialogue_lines());
+                        state = GameState::Dialogue;
+                    }
+                }
             }
-
-            // Sparky is semi-solid — blocks unless the player is trapped
-            let npc_blocks = npcs.iter().any(|n| n.tile_x == nx as usize && n.tile_y == ny as usize);
-            let player_trapped = [(0i32,1i32),(0,-1),(1,0),(-1,0)].iter().all(|(dx,dy)| {
-                let cx = player.tile_x as i32 + dx;
-                let cy = player.tile_y as i32 + dy;
-                cx < 0 || cy < 0
-                    || cx as usize >= map.width || cy as usize >= map.height
-                    || map.is_solid(cx as usize, cy as usize)
-                    || npcs.iter().any(|n| n.tile_x == cx as usize && n.tile_y == cy as usize)
-                    || (cx as usize == sparky.entity.tile_x && cy as usize == sparky.entity.tile_y)
-            });
-            let sparky_blocks = !player_trapped
-                && nx as usize == sparky.entity.tile_x && ny as usize == sparky.entity.tile_y;
-            if moved && nx >= 0 && ny >= 0
-                && (nx as usize) < map.width && (ny as usize) < map.height
-                && !map.is_solid(nx as usize, ny as usize)
-                && !sparky_blocks && !npc_blocks
-            {
-                // Record position for Sparky before moving
-                sparky.record_player_pos(player.tile_x, player.tile_y);
-                player.start_move(nx as usize, ny as usize);
+            GameState::Dialogue => {
+                if is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Enter) {
+                    dialogue.advance();
+                    if !dialogue.active {
+                        state = GameState::Playing;
+                    }
+                }
             }
         }
 
-        // Space: interact with facing NPC/Sparky
-        if is_key_pressed(KeyCode::Space) && !player.moving {
-            if let Some(target) = npc::get_interact_target(player.tile_x, player.tile_y, player.dir, &npcs) {
-                interact_msg = Some((format!("{}: Hello!", target.name), game_time + 3.0));
-            } else if npc::is_facing_sparky(player.tile_x, player.tile_y, player.dir,
-                    sparky.entity.tile_x, sparky.entity.tile_y) {
-                interact_msg = Some(("Sparky: BEEP BOOP!".to_string(), game_time + 3.0));
-            }
-        }
-
+        // ─── UPDATE ───────────────────────────────────
         player.move_toward_target(dt);
         sparky.update(dt, player.tile_x, player.tile_y);
+        dialogue.update(dt);
         camera.follow(player.x, player.y, &map, GAME_W, GAME_H);
 
         // ─── RENDER ─────────────────────────────────────
@@ -246,21 +275,70 @@ async fn main() {
         draw_text(&format!("FPS: {} | Tile: {},{}", get_fps(), player.tile_x, player.tile_y),
             10.0, 20.0, 20.0, WHITE);
 
-        // Interaction message
-        if let Some((ref msg, until)) = interact_msg {
-            if game_time < until {
-                let sw = screen_width();
-                let bw = sw * 0.8;
-                let bx = (sw - bw) / 2.0;
-                let by = screen_height() - 100.0;
-                draw_rectangle(bx, by, bw, 70.0, Color::from_rgba(20, 20, 40, 230));
-                draw_rectangle_lines(bx, by, bw, 70.0, 2.0, Color::from_rgba(0, 230, 118, 255));
-                draw_text(msg, bx + 20.0, by + 40.0, 24.0, WHITE);
-            } else {
-                interact_msg = None;
-            }
-        }
+        // Dialogue box
+        dialogue.draw();
 
         next_frame().await
     }
+}
+
+fn sparky_dialogue_lines() -> Vec<DialogueLine> {
+    let lines = [
+        "BEEP BOOP! Hi boss! I polished my antenna just for you!",
+        "BZZZT! I think a butterfly landed on my head! Is it still there?",
+        "Did you know robots dream about lollipops? I do! Every night!",
+        "Whoa! My circuits are tingling! That means adventure is near!",
+        "I tried to count all the flowers but I ran out of beeps!",
+        "Hey boss! Watch this! *spins around* WHOAAAA I'm dizzy!",
+        "Beep bop boop! That's robot for 'you're awesome!'",
+        "ALERT ALERT! Fun detected in this area! Beep boop!",
+    ];
+    let idx = macroquad::rand::gen_range(0, lines.len());
+    vec![DialogueLine { speaker: "Sparky".into(), text: lines[idx].into() }]
+}
+
+fn npc_dialogue_lines(npc: &npc::Npc) -> Vec<DialogueLine> {
+    let lines: &[&str] = match npc.id {
+        "mommy" => &[
+            "Hi sweetie! I'm so proud of you for exploring!",
+            "You and Sparky make the best team!",
+            "I love you! Keep being amazing!",
+        ],
+        "sage" | "sage_lab" => &[
+            "Ahhhh, young adventurer! The stars told me you'd come!",
+            "Welcome! I am Professor Gizmo, master of numbers!",
+            "The ancient scrolls speak of a hero... and I think it's YOU!",
+        ],
+        "kid_1" => &[
+            "Wanna see me do a cartwheel? Watch! ...okay I can't actually do one yet.",
+            "Sparky is SO COOL! I wish I had a robot friend!",
+            "Did you know frogs can jump SUPER far? Like, really far!",
+        ],
+        "kid_2" => &[
+            "Hi... um... do you like bugs? I found a really cool one.",
+            "Sparky beeped at me and I think that means he likes me!",
+            "Do you think clouds are soft? I think they're soft.",
+        ],
+        "shopkeeper" => &[
+            "Welcome to my shop! Everything costs Dum Dums!",
+            "I've got the finest wares in all of Robot Village!",
+        ],
+        "dream_sage" => &[
+            "You are dreaming... or are you? The numbers whisper here...",
+            "In dreams, 2 + 2 can be anything... but it's still 4.",
+        ],
+        "glitch_dog" => &[
+            "BORK BORK! sys.treat.exe... GOOD BOY overflow!",
+            "Woof! *static* I am... a good boy? BORK.dll loaded!",
+            "fetch(ball) returned: UNDEFINED... but I still love you!",
+        ],
+        "grove_spirit" => &[
+            "How... did you find this place? The trees have hidden it for ages...",
+            "It's dangerous to go alone... take this!",
+            "The leaves whisper your name... they say you are very clever.",
+        ],
+        _ => &["Hello there!"],
+    };
+    let idx = macroquad::rand::gen_range(0, lines.len());
+    vec![DialogueLine { speaker: npc.name.into(), text: lines[idx].into() }]
 }
