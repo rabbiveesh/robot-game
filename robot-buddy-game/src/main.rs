@@ -170,9 +170,11 @@ async fn main() {
                 nx += 1; player.dir = Dir::Right; moved = true;
             }
 
+            let sparky_blocks = nx as usize == sparky.entity.tile_x && ny as usize == sparky.entity.tile_y;
             if moved && nx >= 0 && ny >= 0
                 && (nx as usize) < map.width && (ny as usize) < map.height
                 && !map.is_solid(nx as usize, ny as usize)
+                && !sparky_blocks
             {
                 // Record position for Sparky before moving
                 sparky.record_player_pos(player.tile_x, player.tile_y);
