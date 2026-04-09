@@ -37,7 +37,9 @@ These are NOT optional. Every PR must respect these:
 
 8. **Fail gracefully.** Wrong answers have natural in-game consequences (Sparky's battery drains, door doesn't open, merchant says "hmm that's not right"). Never a red X, never "WRONG!", never punishment.
 
-9. **Every domain struct crossing the WASM boundary needs a boundary test.** Not optional. Not "we'll add it later." If you add a new struct to `lib.rs` exports, add the boundary test in the same PR. The Rust compiler guards the domain. The boundary tests guard the bridge. Neither alone is sufficient.
+9. **Every domain struct crossing the WASM boundary needs a boundary test.** Not optional. Not "we'll add it later." If you add a new struct to `lib.rs` exports, add the boundary test in the same PR. The Rust compiler guards the domain. The boundary tests guard the bridge. Neither alone is sufficient. (Dies when Macroquad migration completes — no boundary, no boundary tests needed.)
+
+10. **Tests express intent, not implementation.** Default to resilient tests that use helpers (`game.walk_to_npc("kid_1")`, `game.interact()`, `game.select_option("give")`, `game.answer_correctly()`). These break only when gameplay behavior changes. Use fragile tests (hardcoded coordinates, frame counts, pixel positions) ONLY when specifically protecting a layout or timing contract. If you're writing `game.walk_to(6, 5)` in a test, you need a comment explaining why the exact coordinates matter.
 
 ## Tech Stack
 
