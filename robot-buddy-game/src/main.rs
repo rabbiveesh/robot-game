@@ -126,7 +126,7 @@ async fn main() {
 
         // Set up world camera
         set_camera(&Camera2D {
-            zoom: vec2(2.0 / screen_width(), -2.0 / screen_height()),
+            zoom: vec2(2.0 / screen_width(), 2.0 / screen_height()),
             target: vec2(camera.x + GAME_W / 2.0, camera.y + GAME_H / 2.0),
             ..Default::default()
         });
