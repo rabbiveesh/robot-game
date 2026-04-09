@@ -84,21 +84,37 @@ impl Sparky {
         }
     }
 
-    fn update(&mut self, dt: f32) {
+    fn update(&mut self, dt: f32, player_tx: usize, player_ty: usize) {
         self.entity.move_toward_target(dt);
 
         if !self.entity.moving && !self.follow_queue.is_empty() {
-            // Keep 1 tile of distance
-            if self.follow_queue.len() > 1 {
-                let (nx, ny) = self.follow_queue.remove(0);
-                let dx = nx as i32 - self.entity.tile_x as i32;
-                let dy = ny as i32 - self.entity.tile_y as i32;
-                if dx < 0 { self.entity.dir = Dir::Left; }
-                else if dx > 0 { self.entity.dir = Dir::Right; }
-                else if dy < 0 { self.entity.dir = Dir::Up; }
-                else if dy > 0 { self.entity.dir = Dir::Down; }
-                self.entity.start_move(nx, ny);
+            // Don't move if already adjacent to player
+            let dx = (self.entity.tile_x as i32 - player_tx as i32).abs();
+            let dy = (self.entity.tile_y as i32 - player_ty as i32).abs();
+            if dx + dy <= 1 {
+                self.follow_queue.clear();
+                // Face the player
+                let fdx = player_tx as i32 - self.entity.tile_x as i32;
+                let fdy = player_ty as i32 - self.entity.tile_y as i32;
+                if fdx < 0 { self.entity.dir = Dir::Left; }
+                else if fdx > 0 { self.entity.dir = Dir::Right; }
+                else if fdy < 0 { self.entity.dir = Dir::Up; }
+                else if fdy > 0 { self.entity.dir = Dir::Down; }
+                return;
             }
+
+            let (nx, ny) = self.follow_queue.remove(0);
+            // Don't walk onto the player's current tile
+            if nx == player_tx && ny == player_ty {
+                return;
+            }
+            let dx = nx as i32 - self.entity.tile_x as i32;
+            let dy = ny as i32 - self.entity.tile_y as i32;
+            if dx < 0 { self.entity.dir = Dir::Left; }
+            else if dx > 0 { self.entity.dir = Dir::Right; }
+            else if dy < 0 { self.entity.dir = Dir::Up; }
+            else if dy > 0 { self.entity.dir = Dir::Down; }
+            self.entity.start_move(nx, ny);
         }
     }
 }
@@ -165,7 +181,7 @@ async fn main() {
         }
 
         player.move_toward_target(dt);
-        sparky.update(dt);
+        sparky.update(dt, player.tile_x, player.tile_y);
         camera.follow(player.x, player.y, &map, GAME_W, GAME_H);
 
         // ─── RENDER ─────────────────────────────────────
