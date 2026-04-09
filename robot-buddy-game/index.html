@@ -6,12 +6,12 @@
     <title>Robot Buddy Adventure</title>
     <style>
         * { margin: 0; padding: 0; }
-        body { background: #0a0a1a; overflow: hidden; }
-        canvas { display: block; margin: 0 auto; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a1a; }
+        canvas { width: 100vw; height: 100vh; display: block; }
     </style>
 </head>
 <body>
-    <canvas id="glcanvas"></canvas>
+    <canvas id="glcanvas" width="960" height="720"></canvas>
     <script src="mq_js_bundle.js"></script>
     <script>load("robot-buddy-game.wasm");</script>
 </body>
