@@ -24,29 +24,31 @@ async fn main() {
     let cam_y = GAME_H / 2.0;
 
     loop {
-        // Set up camera so 1 world unit = 1 pixel at our target resolution
-        set_camera(&Camera2D {
-            zoom: vec2(2.0 / screen_width(), -2.0 / screen_height()),
-            target: vec2(cam_x, cam_y),
-            ..Default::default()
-        });
+        // Scale tiles to fit the screen
+        let sw = screen_width();
+        let sh = screen_height();
+        let map_w = map.width as f32 * TILE_SIZE;
+        let map_h = map.height as f32 * TILE_SIZE;
+        let scale = (sw / map_w).min(sh / map_h);
+        let offset_x = (sw - map_w * scale) / 2.0;
+        let offset_y = (sh - map_h * scale) / 2.0;
+        let ts = TILE_SIZE * scale;
 
         clear_background(Color::from_rgba(26, 26, 46, 255));
 
-        // Draw the tile map
+        // Draw the tile map scaled to fit
         for row in 0..map.height {
             for col in 0..map.width {
                 let tile_id = map.tiles[row][col];
                 let color = tilemap::tile_color(tile_id);
-                let x = col as f32 * TILE_SIZE;
-                let y = row as f32 * TILE_SIZE;
-                draw_rectangle(x, y, TILE_SIZE, TILE_SIZE, color);
+                let x = offset_x + col as f32 * ts;
+                let y = offset_y + row as f32 * ts;
+                draw_rectangle(x, y, ts, ts, color);
             }
         }
 
-        // HUD: switch to screen-space for overlays
-        set_default_camera();
-        draw_text(&format!("FPS: {}", get_fps()), 10.0, 20.0, 20.0, WHITE);
+        draw_text(&format!("FPS: {} | {}x{}", get_fps(), sw as i32, sh as i32),
+            10.0, 20.0, 20.0, WHITE);
 
         next_frame().await
     }
