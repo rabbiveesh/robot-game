@@ -14,8 +14,33 @@
     <canvas id="glcanvas" tabindex="0" width="960" height="720"></canvas>
     <script src="mq_js_bundle.js"></script>
     <script>
+        // localStorage plugin for macroquad — called via extern "C" from Rust
+        miniquad_add_plugin({
+            register_plugin: function(importObject) {
+                importObject.env.ls_get_len = function(key_ptr, key_len) {
+                    var key = UTF8ToString(key_ptr, key_len);
+                    var val = localStorage.getItem(key);
+                    return val === null ? -1 : (new TextEncoder()).encode(val).length;
+                };
+                importObject.env.ls_get = function(key_ptr, key_len, buf_ptr, buf_len) {
+                    var key = UTF8ToString(key_ptr, key_len);
+                    var val = localStorage.getItem(key);
+                    if (val === null) return;
+                    var encoded = (new TextEncoder()).encode(val);
+                    var dst = new Uint8Array(wasm_memory.buffer, buf_ptr, buf_len);
+                    dst.set(encoded.subarray(0, buf_len));
+                };
+                importObject.env.ls_set = function(key_ptr, key_len, val_ptr, val_len) {
+                    var key = UTF8ToString(key_ptr, key_len);
+                    var val = UTF8ToString(val_ptr, val_len);
+                    localStorage.setItem(key, val);
+                };
+            },
+            name: "localStorage",
+            version: 1,
+        });
+
         load("robot-buddy-game.wasm");
-        // Focus canvas so it receives keyboard input
         document.getElementById("glcanvas").focus();
         document.addEventListener("click", () => document.getElementById("glcanvas").focus());
     </script>

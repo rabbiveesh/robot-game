@@ -1,3 +1,4 @@
 pub mod dialogue;
 pub mod challenge;
 pub mod visuals;
+pub mod title_screen;

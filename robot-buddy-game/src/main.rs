@@ -16,11 +16,14 @@ mod tilemap;
 mod sprites;
 mod npc;
 mod ui;
+mod save;
 
 use tilemap::{Map, TILE_SIZE};
 use sprites::Dir;
 use ui::dialogue::{DialogueBox, DialogueLine};
 use ui::challenge::{ChoiceBound, ScaffoldBounds};
+use ui::title_screen::{TitleAction, NewGameAction, NewGameForm};
+use save::{SaveData, Gender};
 
 const GAME_W: f32 = 960.0;
 const GAME_H: f32 = 720.0;
@@ -28,6 +31,8 @@ const MOVE_SPEED: f32 = 200.0;
 
 #[derive(PartialEq)]
 enum GameState {
+    Title,
+    NewGame,
     Playing,
     Dialogue,
     Challenge,
@@ -224,19 +229,116 @@ async fn main() {
     let mut sparky = Sparky::new(14, 13);
     let mut camera = GameCamera { x: 0.0, y: 0.0 };
     let mut game_time: f32 = 0.0;
+    let mut play_time: f32 = 0.0;
     let mut npcs = npc::npcs_for_map(map.id);
     let mut dialogue = DialogueBox::new();
-    let mut state = GameState::Playing;
+    let mut state = GameState::Title;
     let mut rng = SmallRng::seed_from_u64(macroquad::rand::rand() as u64);
     let mut active_challenge: Option<ActiveChallenge> = None;
-    let mut pending_challenge = false; // dialogue → challenge transition
+    let mut pending_challenge = false;
+    let mut sparky_push_timer: f32 = 0.0;
+
+    // Title/save state
+    let mut save_slots = save::load_all_slots();
+    let mut new_game_form: Option<NewGameForm> = None;
+    let mut active_slot: usize = 0;
+    let mut player_name = String::new();
+    let mut player_gender = Gender::Boy;
+    let mut dum_dums: u32 = 0;
+    let mut auto_save_timer: f32 = 0.0;
 
     loop {
         let dt = get_frame_time();
         game_time += dt;
 
-        // ─── INPUT ────────────────────────────────────
+        // ─── INPUT + RENDER (Title/NewGame are self-contained) ──
         match state {
+            GameState::Title => {
+                if let Some(action) = ui::title_screen::draw_title_screen(&save_slots, game_time) {
+                    match action {
+                        TitleAction::NewGame(slot) => {
+                            new_game_form = Some(NewGameForm::new(slot));
+                            state = GameState::NewGame;
+                        }
+                        TitleAction::LoadGame(slot) => {
+                            if let Some(ref save) = save_slots[slot] {
+                                load_from_save(save, &mut map, &mut player, &mut sparky,
+                                    &mut npcs, &mut player_name, &mut player_gender,
+                                    &mut dum_dums, &mut play_time);
+                                active_slot = slot;
+                                auto_save_timer = 0.0;
+
+                                // Welcome back dialogue
+                                dialogue.start(vec![
+                                    DialogueLine {
+                                        speaker: "Sparky".into(),
+                                        text: format!("BEEP BOOP! Welcome back, {}! I missed you!", save.name),
+                                    },
+                                ]);
+                                state = GameState::Dialogue;
+                            }
+                        }
+                        TitleAction::DeleteSlot(slot) => {
+                            save::delete_slot(slot);
+                            save_slots = save::load_all_slots();
+                        }
+                    }
+                }
+                next_frame().await;
+                continue;
+            }
+            GameState::NewGame => {
+                if let Some(ref mut form) = new_game_form {
+                    form.update(dt);
+                    form.handle_gender_click();
+                    if let Some(action) = form.draw() {
+                        match action {
+                            NewGameAction::Start => {
+                                let slot = form.slot;
+                                player_name = form.name.clone();
+                                player_gender = form.gender;
+                                dum_dums = 0;
+                                play_time = 0.0;
+                                active_slot = slot;
+
+                                // Reset game state
+                                map = Map::overworld();
+                                player = Entity::new(14, 12);
+                                sparky = Sparky::new(14, 13);
+                                npcs = npc::npcs_for_map(map.id);
+                                camera = GameCamera { x: 0.0, y: 0.0 };
+
+                                // Save immediately
+                                let save = gather_save_data(&player, &sparky, &map,
+                                    &player_name, player_gender, dum_dums, play_time);
+                                save::save_to_slot(slot, &save);
+                                save_slots = save::load_all_slots();
+                                auto_save_timer = 0.0;
+
+                                // Welcome dialogue
+                                dialogue.start(vec![
+                                    DialogueLine {
+                                        speaker: "Sparky".into(),
+                                        text: format!("BEEP BOOP! Hi {}! I'm Sparky, your robot buddy!", player_name),
+                                    },
+                                    DialogueLine {
+                                        speaker: "Sparky".into(),
+                                        text: "Let's go on an ADVENTURE! Talk to people by pressing SPACE!".into(),
+                                    },
+                                ]);
+                                new_game_form = None;
+                                state = GameState::Dialogue;
+                            }
+                            NewGameAction::Back => {
+                                new_game_form = None;
+                                state = GameState::Title;
+                            }
+                        }
+                    }
+                }
+                next_frame().await;
+                continue;
+            }
             GameState::Playing => {
                 // Movement
                 if !player.moving {
@@ -255,22 +357,21 @@ async fn main() {
                     }
 
                     let npc_blocks = npcs.iter().any(|n| n.tile_x == nx as usize && n.tile_y == ny as usize);
-                    let player_trapped = [(0i32,1i32),(0,-1),(1,0),(-1,0)].iter().all(|(dx,dy)| {
-                        let cx = player.tile_x as i32 + dx;
-                        let cy = player.tile_y as i32 + dy;
-                        cx < 0 || cy < 0
-                            || cx as usize >= map.width || cy as usize >= map.height
-                            || map.is_solid(cx as usize, cy as usize)
-                            || npcs.iter().any(|n| n.tile_x == cx as usize && n.tile_y == cy as usize)
-                            || (cx as usize == sparky.entity.tile_x && cy as usize == sparky.entity.tile_y)
-                    });
-                    let sparky_blocks = !player_trapped
+                    let pushing_sparky = moved
                         && nx as usize == sparky.entity.tile_x && ny as usize == sparky.entity.tile_y;
+                    if pushing_sparky {
+                        sparky_push_timer += dt;
+                    } else {
+                        sparky_push_timer = 0.0;
+                    }
+                    // Long-press (0.3s) lets you walk through Sparky
+                    let sparky_blocks = pushing_sparky && sparky_push_timer < 0.3;
                     if moved && nx >= 0 && ny >= 0
                         && (nx as usize) < map.width && (ny as usize) < map.height
                         && !map.is_solid(nx as usize, ny as usize)
                         && !sparky_blocks && !npc_blocks
                     {
+                        sparky_push_timer = 0.0;
                         sparky.record_player_pos(player.tile_x, player.tile_y);
                         player.start_move(nx as usize, ny as usize);
                     }
@@ -350,6 +451,17 @@ async fn main() {
         }
 
         // ─── UPDATE ───────────────────────────────────
+        play_time += dt;
+
+        // Auto-save every 30 seconds
+        auto_save_timer += dt;
+        if auto_save_timer >= 30.0 {
+            auto_save_timer = 0.0;
+            let save = gather_save_data(&player, &sparky, &map,
+                &player_name, player_gender, dum_dums, play_time);
+            save::save_to_slot(active_slot, &save);
+        }
+
         let arrived = player.move_toward_target(dt);
         sparky.update(dt, player.tile_x, player.tile_y);
         dialogue.update(dt);
@@ -535,6 +647,68 @@ fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Np
     }
     // Fallback: same tile as player
     (player_x, player_y)
+}
+
+fn gather_save_data(
+    player: &Entity, sparky: &Sparky, map: &Map,
+    name: &str, gender: Gender, dum_dums: u32, play_time: f32,
+) -> SaveData {
+    SaveData {
+        version: 1,
+        name: name.to_string(),
+        gender,
+        map_id: map.id.to_string(),
+        player_x: player.tile_x,
+        player_y: player.tile_y,
+        player_dir: match player.dir {
+            Dir::Up => 0,
+            Dir::Down => 1,
+            Dir::Left => 2,
+            Dir::Right => 3,
+        },
+        sparky_x: sparky.entity.tile_x,
+        sparky_y: sparky.entity.tile_y,
+        dum_dums,
+        play_time,
+        timestamp: 0, // set by save_to_slot
+    }
+}
+
+fn load_from_save(
+    save: &SaveData, map: &mut Map, player: &mut Entity, sparky: &mut Sparky,
+    npcs: &mut Vec<npc::Npc>, name: &mut String, gender: &mut Gender,
+    dum_dums: &mut u32, play_time: &mut f32,
+) {
+    *name = save.name.clone();
+    *gender = save.gender;
+    *dum_dums = save.dum_dums;
+    *play_time = save.play_time;
+
+    *map = Map::by_id(&save.map_id);
+    *npcs = npc::npcs_for_map(map.id);
+
+    player.tile_x = save.player_x;
+    player.tile_y = save.player_y;
+    player.x = save.player_x as f32 * TILE_SIZE;
+    player.y = save.player_y as f32 * TILE_SIZE;
+    player.target_x = player.x;
+    player.target_y = player.y;
+    player.moving = false;
+    player.dir = match save.player_dir {
+        0 => Dir::Up,
+        1 => Dir::Down,
+        2 => Dir::Left,
+        _ => Dir::Right,
+    };
+
+    sparky.entity.tile_x = save.sparky_x;
+    sparky.entity.tile_y = save.sparky_y;
+    sparky.entity.x = save.sparky_x as f32 * TILE_SIZE;
+    sparky.entity.y = save.sparky_y as f32 * TILE_SIZE;
+    sparky.entity.target_x = sparky.entity.x;
+    sparky.entity.target_y = sparky.entity.y;
+    sparky.entity.moving = false;
+    sparky.follow_queue.clear();
 }
 
 fn secret_entry_dialogue(map_id: &str) -> Vec<DialogueLine> {
