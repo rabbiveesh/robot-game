@@ -17,6 +17,7 @@ mod sprites;
 mod npc;
 mod ui;
 mod save;
+mod audio;
 
 use tilemap::{Map, TILE_SIZE};
 use sprites::Dir;
@@ -413,7 +414,9 @@ async fn main() {
                     if !dialogue.active {
                         if pending_challenge {
                             pending_challenge = false;
-                            active_challenge = Some(start_challenge(&mut rng));
+                            let ac = start_challenge(&mut rng);
+                            audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                            active_challenge = Some(ac);
                             state = GameState::Challenge;
                         } else {
                             state = GameState::Playing;
@@ -427,6 +430,7 @@ async fn main() {
                     // Keyboard input
                     if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge) {
                         ac.state = challenge_reducer(ac.state.clone(), action);
+                        speak_challenge_feedback(&ac.state);
                     } else if ac.state.phase == Phase::Complete
                         && (is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Enter))
                     {
@@ -441,6 +445,7 @@ async fn main() {
                             &ac.choice_bounds, &ac.scaffold,
                         ) {
                             ac.state = challenge_reducer(ac.state.clone(), action);
+                            speak_challenge_feedback(&ac.state);
                         } else if ac.state.phase == Phase::Complete {
                             dismiss = true;
                         }
@@ -727,6 +732,12 @@ fn load_from_save(
     sparky.entity.target_y = sparky.entity.y;
     sparky.entity.moving = false;
     sparky.follow_queue.clear();
+}
+
+fn speak_challenge_feedback(cs: &ChallengeState) {
+    if let Some(ref fb) = cs.feedback {
+        audio::tts::speak("Sparky", &fb.speech);
+    }
 }
 
 fn secret_entry_dialogue(map_id: &str) -> Vec<DialogueLine> {

@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use crate::audio;
 
 pub struct DialogueLine {
     pub speaker: String,
@@ -31,6 +32,10 @@ impl DialogueBox {
     }
 
     pub fn start(&mut self, lines: Vec<DialogueLine>) {
+        // Speak the first line
+        if let Some(line) = lines.first() {
+            audio::tts::speak(&line.speaker, &line.text);
+        }
         self.lines = lines;
         self.current_line = 0;
         self.char_index = 0;
@@ -58,10 +63,15 @@ impl DialogueBox {
         self.current_line += 1;
         if self.current_line >= self.lines.len() {
             self.active = false;
+            audio::tts::cancel();
             if let Some(cb) = self.on_complete.take() {
                 cb();
             }
             return;
+        }
+        // Speak the next line
+        if let Some(line) = self.lines.get(self.current_line) {
+            audio::tts::speak(&line.speaker, &line.text);
         }
         self.char_index = 0;
         self.char_timer = 0.0;
