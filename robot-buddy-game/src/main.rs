@@ -23,6 +23,7 @@ use sprites::Dir;
 use ui::dialogue::{DialogueBox, DialogueLine};
 use ui::challenge::{ChoiceBound, ScaffoldBounds};
 use ui::title_screen::{TitleAction, NewGameAction, NewGameForm};
+use ui::hud::{DumDumHud, DebugOverlay};
 use save::{SaveData, Gender};
 
 const GAME_W: f32 = 960.0;
@@ -246,6 +247,8 @@ async fn main() {
     let mut player_gender = Gender::Boy;
     let mut dum_dums: u32 = 0;
     let mut auto_save_timer: f32 = 0.0;
+    let mut dum_dum_hud = DumDumHud::new();
+    let mut debug_overlay = DebugOverlay::new();
 
     loop {
         let dt = get_frame_time();
@@ -444,11 +447,24 @@ async fn main() {
                     }
                 }
                 if dismiss {
+                    // Award dum dums if challenge had a reward
+                    if let Some(ref ac) = active_challenge {
+                        if let Some(ref reward) = ac.state.reward {
+                            dum_dums += reward.amount;
+                            dum_dum_hud.flash();
+                        }
+                    }
                     active_challenge = None;
                     state = GameState::Playing;
                 }
             }
         }
+
+        // P key: toggle debug overlay (any gameplay state)
+        if is_key_pressed(KeyCode::P) && state != GameState::Title && state != GameState::NewGame {
+            debug_overlay.toggle();
+        }
+        dum_dum_hud.update(dt);
 
         // ─── UPDATE ───────────────────────────────────
         // Only track time + auto-save during actual gameplay
@@ -549,10 +565,11 @@ async fn main() {
             }
         }
 
-        // HUD
+        // HUD (screen space)
         set_default_camera();
-        draw_text(&format!("FPS: {} | {} ({},{})", get_fps(), map.id, player.tile_x, player.tile_y),
-            10.0, 20.0, 20.0, WHITE);
+        ui::hud::draw_area_name(map.id, player.tile_x, player.tile_y);
+        dum_dum_hud.draw(dum_dums);
+        debug_overlay.draw(map.id, player.tile_x, player.tile_y, dum_dums, play_time);
 
         // Dialogue box
         dialogue.draw();
