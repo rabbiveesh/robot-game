@@ -1,4 +1,16 @@
 use macroquad::prelude::*;
+use ::rand::SeedableRng;
+use ::rand::rngs::SmallRng;
+
+use robot_buddy_domain::challenge::challenge_state::{
+    ChallengeState, DisplaySpeech, RenderHint, VoiceState,
+    challenge_reducer,
+};
+use robot_buddy_domain::learning::challenge_generator::{
+    Challenge, ChallengeProfile, generate_challenge,
+};
+use robot_buddy_domain::learning::operation_stats::OperationStats;
+use robot_buddy_domain::types::{Phase, CraStage};
 
 mod tilemap;
 mod sprites;
@@ -8,6 +20,7 @@ mod ui;
 use tilemap::{Map, TILE_SIZE};
 use sprites::Dir;
 use ui::dialogue::{DialogueBox, DialogueLine};
+use ui::challenge::{ChoiceBound, ScaffoldBounds};
 
 const GAME_W: f32 = 960.0;
 const GAME_H: f32 = 720.0;
@@ -17,6 +30,59 @@ const MOVE_SPEED: f32 = 200.0;
 enum GameState {
     Playing,
     Dialogue,
+    Challenge,
+}
+
+/// Active challenge data — the domain ChallengeState + the generated Challenge.
+struct ActiveChallenge {
+    state: ChallengeState,
+    challenge: Challenge,
+    choice_bounds: Vec<ChoiceBound>,
+    scaffold: ScaffoldBounds,
+}
+
+fn make_challenge_profile() -> ChallengeProfile {
+    ChallengeProfile {
+        math_band: 1,
+        spread_width: 0.5,
+        operation_stats: OperationStats::new(),
+    }
+}
+
+fn start_challenge(rng: &mut SmallRng) -> ActiveChallenge {
+    let profile = make_challenge_profile();
+    let challenge = generate_challenge(&profile, rng);
+    let cra = CraStage::Abstract; // default starting CRA
+
+    let cs = ChallengeState {
+        phase: Phase::Presented,
+        correct_answer: challenge.correct_answer,
+        attempts: 0,
+        max_attempts: 2,
+        correct: None,
+        question: DisplaySpeech {
+            display: challenge.display_text.clone(),
+            speech: challenge.speech_text.clone(),
+        },
+        feedback: None,
+        reward: None,
+        render_hint: RenderHint {
+            cra_stage: cra,
+            answer_mode: "choice".into(),
+            interaction_type: "quiz".into(),
+        },
+        hint_used: false,
+        hint_level: 0,
+        told_me: false,
+        voice: VoiceState::reset(),
+    };
+
+    ActiveChallenge {
+        state: cs,
+        challenge,
+        choice_bounds: vec![],
+        scaffold: ScaffoldBounds { show_me: None, tell_me: None },
+    }
 }
 
 struct Entity {
@@ -153,14 +219,17 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
-    let map = Map::overworld();
+    let mut map = Map::overworld();
     let mut player = Entity::new(14, 12);
     let mut sparky = Sparky::new(14, 13);
     let mut camera = GameCamera { x: 0.0, y: 0.0 };
     let mut game_time: f32 = 0.0;
-    let npcs = npc::npcs_for_map(map.id);
+    let mut npcs = npc::npcs_for_map(map.id);
     let mut dialogue = DialogueBox::new();
     let mut state = GameState::Playing;
+    let mut rng = SmallRng::seed_from_u64(macroquad::rand::rand() as u64);
+    let mut active_challenge: Option<ActiveChallenge> = None;
+    let mut pending_challenge = false; // dialogue → challenge transition
 
     loop {
         let dt = get_frame_time();
@@ -212,13 +281,23 @@ async fn main() {
                     if let Some(target) = npc::get_interact_target(
                         player.tile_x, player.tile_y, player.dir, &npcs
                     ) {
-                        let lines = npc_dialogue_lines(target);
-                        dialogue.start(lines);
-                        state = GameState::Dialogue;
+                        if !target.never_challenge {
+                            // Challenge-eligible NPC: dialogue then challenge
+                            let lines = npc_dialogue_lines(target);
+                            pending_challenge = true;
+                            dialogue.start(lines);
+                            state = GameState::Dialogue;
+                        } else {
+                            let lines = npc_dialogue_lines(target);
+                            dialogue.start(lines);
+                            state = GameState::Dialogue;
+                        }
                     } else if npc::is_facing_sparky(
                         player.tile_x, player.tile_y, player.dir,
                         sparky.entity.tile_x, sparky.entity.tile_y,
                     ) {
+                        // Sparky always challenges
+                        pending_challenge = true;
                         dialogue.start(sparky_dialogue_lines());
                         state = GameState::Dialogue;
                     }
@@ -228,16 +307,103 @@ async fn main() {
                 if is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Enter) {
                     dialogue.advance();
                     if !dialogue.active {
-                        state = GameState::Playing;
+                        if pending_challenge {
+                            pending_challenge = false;
+                            active_challenge = Some(start_challenge(&mut rng));
+                            state = GameState::Challenge;
+                        } else {
+                            state = GameState::Playing;
+                        }
                     }
+                }
+            }
+            GameState::Challenge => {
+                let mut dismiss = false;
+                if let Some(ref mut ac) = active_challenge {
+                    // Keyboard input
+                    if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge) {
+                        ac.state = challenge_reducer(ac.state.clone(), action);
+                    } else if ac.state.phase == Phase::Complete
+                        && (is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Enter))
+                    {
+                        dismiss = true;
+                    }
+
+                    // Mouse click input
+                    if !dismiss && is_mouse_button_pressed(MouseButton::Left) {
+                        let (mx, my) = mouse_position();
+                        if let Some(action) = ui::challenge::handle_click(
+                            mx, my, &ac.state, &ac.challenge,
+                            &ac.choice_bounds, &ac.scaffold,
+                        ) {
+                            ac.state = challenge_reducer(ac.state.clone(), action);
+                        } else if ac.state.phase == Phase::Complete {
+                            dismiss = true;
+                        }
+                    }
+                }
+                if dismiss {
+                    active_challenge = None;
+                    state = GameState::Playing;
                 }
             }
         }
 
         // ─── UPDATE ───────────────────────────────────
-        player.move_toward_target(dt);
+        let arrived = player.move_toward_target(dt);
         sparky.update(dt, player.tile_x, player.tile_y);
         dialogue.update(dt);
+
+        // Portal check — after player arrives at a new tile
+        if arrived && state == GameState::Playing {
+            if let Some(portal) = tilemap::check_portal(map.id, player.tile_x, player.tile_y) {
+                let secret = portal.secret;
+                let dest_map = portal.to_map;
+                let dest_x = portal.to_x;
+                let dest_y = portal.to_y;
+                let dest_dir = portal.dir;
+
+                // Swap map
+                map = Map::by_id(dest_map);
+                npcs = npc::npcs_for_map(map.id);
+
+                // Teleport player
+                player.tile_x = dest_x;
+                player.tile_y = dest_y;
+                player.x = dest_x as f32 * TILE_SIZE;
+                player.y = dest_y as f32 * TILE_SIZE;
+                player.target_x = player.x;
+                player.target_y = player.y;
+                player.moving = false;
+                player.dir = match dest_dir {
+                    0 => Dir::Up,
+                    1 => Dir::Down,
+                    2 => Dir::Left,
+                    _ => Dir::Right,
+                };
+
+                // Place Sparky adjacent to player
+                let sparky_pos = find_sparky_spot(dest_x, dest_y, &map, &npcs);
+                sparky.entity.tile_x = sparky_pos.0;
+                sparky.entity.tile_y = sparky_pos.1;
+                sparky.entity.x = sparky_pos.0 as f32 * TILE_SIZE;
+                sparky.entity.y = sparky_pos.1 as f32 * TILE_SIZE;
+                sparky.entity.target_x = sparky.entity.x;
+                sparky.entity.target_y = sparky.entity.y;
+                sparky.entity.moving = false;
+                sparky.follow_queue.clear();
+
+                // Secret area entry dialogue
+                if secret {
+                    let lines = secret_entry_dialogue(dest_map);
+                    if !lines.is_empty() {
+                        dialogue.start(lines);
+                        state = GameState::Dialogue;
+                    }
+                }
+            }
+        }
+
         camera.follow(player.x, player.y, &map, GAME_W, GAME_H);
 
         // ─── RENDER ─────────────────────────────────────
@@ -272,11 +438,18 @@ async fn main() {
 
         // HUD
         set_default_camera();
-        draw_text(&format!("FPS: {} | Tile: {},{}", get_fps(), player.tile_x, player.tile_y),
+        draw_text(&format!("FPS: {} | {} ({},{})", get_fps(), map.id, player.tile_x, player.tile_y),
             10.0, 20.0, 20.0, WHITE);
 
         // Dialogue box
         dialogue.draw();
+
+        // Challenge overlay
+        if let Some(ref mut ac) = active_challenge {
+            let (bounds, scaffold) = ui::challenge::draw_challenge(&ac.state, &ac.challenge, game_time);
+            ac.choice_bounds = bounds;
+            ac.scaffold = scaffold;
+        }
 
         next_frame().await
     }
@@ -341,4 +514,49 @@ fn npc_dialogue_lines(npc: &npc::Npc) -> Vec<DialogueLine> {
     };
     let idx = macroquad::rand::gen_range(0, lines.len());
     vec![DialogueLine { speaker: npc.name.into(), text: lines[idx].into() }]
+}
+
+/// Find the best adjacent tile for Sparky after a portal transition.
+fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Npc]) -> (usize, usize) {
+    // Try: below, above, right, left
+    let candidates = [
+        (player_x, player_y + 1),
+        (player_x, player_y.wrapping_sub(1)),
+        (player_x + 1, player_y),
+        (player_x.wrapping_sub(1), player_y),
+    ];
+    for (cx, cy) in candidates {
+        if cx < map.width && cy < map.height
+            && !map.is_solid(cx, cy)
+            && !npcs.iter().any(|n| n.tile_x == cx && n.tile_y == cy)
+        {
+            return (cx, cy);
+        }
+    }
+    // Fallback: same tile as player
+    (player_x, player_y)
+}
+
+fn secret_entry_dialogue(map_id: &str) -> Vec<DialogueLine> {
+    match map_id {
+        "dream" => vec![
+            DialogueLine { speaker: "Sparky".into(),
+                text: "BZZZT! Boss! My circuits feel all tingly! Everything looks... purple?".into() },
+            DialogueLine { speaker: "Sparky".into(),
+                text: "Are we... dreaming? The flowers are floating! BEEP BOOP this is WEIRD!".into() },
+        ],
+        "doghouse" => vec![
+            DialogueLine { speaker: "Sparky".into(),
+                text: "ERROR ERROR! Visual systems reporting... BORK?! What IS this place?!".into() },
+            DialogueLine { speaker: "Sparky".into(),
+                text: "My display is all glitchy! I see scan lines and... is that a DOG made of CODE?!".into() },
+        ],
+        "grove" => vec![
+            DialogueLine { speaker: "Sparky".into(),
+                text: "Whoa boss! We just walked RIGHT THROUGH those trees! How did we do that?!".into() },
+            DialogueLine { speaker: "Sparky".into(),
+                text: "This place is SO pretty! And SO secret! The trees are whispering!".into() },
+        ],
+        _ => vec![],
+    }
 }

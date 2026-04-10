@@ -2,6 +2,62 @@ use macroquad::prelude::*;
 
 pub const TILE_SIZE: f32 = 48.0;
 
+// ─── PORTALS ────────────────────────────────────────────
+
+#[derive(Clone, Copy)]
+pub struct Portal {
+    pub from_map: &'static str,
+    pub from_x: usize,
+    pub from_y: usize,
+    pub to_map: &'static str,
+    pub to_x: usize,
+    pub to_y: usize,
+    pub dir: u8, // 0=up, 1=down, 2=left, 3=right
+    pub secret: bool,
+}
+
+/// All portals in the game. Checked after each player move.
+pub fn all_portals() -> &'static [Portal] {
+    &[
+        // Home: overworld door → home interior, home door → overworld
+        Portal { from_map: "overworld", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: 0, secret: false },
+        Portal { from_map: "home", from_x: 4, from_y: 6, to_map: "overworld", to_x: 5, to_y: 8, dir: 1, secret: false },
+        // Lab: overworld east house → lab interior
+        Portal { from_map: "overworld", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: 0, secret: false },
+        Portal { from_map: "lab", from_x: 5, from_y: 7, to_map: "overworld", to_x: 22, to_y: 6, dir: 1, secret: false },
+        // Shop: overworld south house → shop interior
+        Portal { from_map: "overworld", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: 0, secret: false },
+        Portal { from_map: "shop", from_x: 4, from_y: 6, to_map: "overworld", to_x: 24, to_y: 18, dir: 1, secret: false },
+        // SECRET: Dream world — water tile past bridge
+        Portal { from_map: "overworld", from_x: 16, from_y: 14, to_map: "dream", to_x: 14, to_y: 13, dir: 1, secret: true },
+        Portal { from_map: "dream", from_x: 14, from_y: 14, to_map: "overworld", to_x: 15, to_y: 14, dir: 0, secret: false },
+        // SECRET: Doghouse land — roof tile behind home
+        Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: 1, secret: true },
+        Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: 1, secret: false },
+        // SECRET: Hidden grove — tree at top border
+        Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: 0, secret: true },
+        Portal { from_map: "grove", from_x: 5, from_y: 8, to_map: "overworld", to_x: 15, to_y: 1, dir: 1, secret: false },
+    ]
+}
+
+/// Check if the player is standing on a portal.
+pub fn check_portal(map_id: &str, col: usize, row: usize) -> Option<&'static Portal> {
+    all_portals().iter().find(|p| p.from_map == map_id && p.from_x == col && p.from_y == row)
+}
+
+/// Secret walkable tiles — normally solid tiles that portals make walkable.
+const SECRET_WALKABLE: &[(& str, usize, usize)] = &[
+    ("overworld", 16, 14), // water tile → dream portal
+    ("overworld", 5, 5),   // roof tile → doghouse portal
+    ("overworld", 15, 0),  // tree tile → grove portal
+];
+
+fn is_secret_walkable(map_id: &str, col: usize, row: usize) -> bool {
+    SECRET_WALKABLE.iter().any(|(m, x, y)| *m == map_id && *x == col && *y == row)
+}
+
+// ─── MAP ────────────────────────────────────────────────
+
 #[derive(Clone)]
 pub struct Map {
     pub id: &'static str,
@@ -24,6 +80,7 @@ impl Map {
 
     pub fn is_solid(&self, col: usize, row: usize) -> bool {
         if col >= self.width || row >= self.height { return true; }
+        if is_secret_walkable(self.id, col, row) { return false; }
         let id = self.tiles[row][col];
         matches!(id, 2 | 3 | 4 | 6 | 7 | 9 | 10 | 16 | 17 | 99)
     }
@@ -229,5 +286,49 @@ pub fn draw_map(map: &Map, cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, tim
             let y = row as f32 * TILE_SIZE;
             draw_rectangle(x, y, TILE_SIZE, TILE_SIZE, color);
         }
+    }
+
+    // Dream sparkle overlay
+    if map.render_mode == RenderMode::Dream {
+        draw_dream_sparkles(cam_x, cam_y, view_w, view_h, time);
+    }
+
+    // Glitch scanlines + screen tear
+    if map.render_mode == RenderMode::Glitch {
+        draw_glitch_overlay(cam_x, cam_y, view_w, view_h, time);
+    }
+}
+
+fn draw_dream_sparkles(cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, time: f32) {
+    for i in 0..30 {
+        let seed = i as f32 * 137.5; // golden angle spread
+        let sx = cam_x + ((seed * 7.3 + time * 15.0).sin() * 0.5 + 0.5) * view_w;
+        let sy = cam_y + ((seed * 13.1 + time * 10.0).cos() * 0.5 + 0.5) * view_h;
+        let alpha = ((time * 2.5 + seed).sin() * 0.5 + 0.5) as f32;
+        let size = 2.0 + ((time * 3.0 + seed * 0.5).sin().abs()) * 2.0;
+        if alpha > 0.2 {
+            let color = Color::new(1.0, 1.0, 0.9, alpha * 0.7);
+            draw_circle(sx, sy, size, color);
+        }
+    }
+}
+
+fn draw_glitch_overlay(cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, time: f32) {
+    // CRT scanlines — every 3 pixels
+    let scanline_color = Color::new(0.0, 0.0, 0.0, 0.15);
+    let mut y = cam_y;
+    while y < cam_y + view_h {
+        draw_line(cam_x, y, cam_x + view_w, y, 1.0, scanline_color);
+        y += 3.0;
+    }
+
+    // Occasional screen tear — horizontal displacement of a strip
+    let tear_cycle = (time * 0.7).sin();
+    if tear_cycle > 0.85 {
+        let tear_y = cam_y + view_h * 0.7 + (time * 50.0).sin() * 30.0;
+        let tear_h = 4.0;
+        let shift = (time * 100.0).sin() * 8.0;
+        draw_rectangle(cam_x + shift, tear_y, view_w, tear_h,
+            Color::new(0.0, 1.0, 0.5, 0.15));
     }
 }
