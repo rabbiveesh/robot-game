@@ -451,15 +451,16 @@ async fn main() {
         }
 
         // ─── UPDATE ───────────────────────────────────
-        play_time += dt;
-
-        // Auto-save every 30 seconds
-        auto_save_timer += dt;
-        if auto_save_timer >= 30.0 {
-            auto_save_timer = 0.0;
-            let save = gather_save_data(&player, &sparky, &map,
-                &player_name, player_gender, dum_dums, play_time);
-            save::save_to_slot(active_slot, &save);
+        // Only track time + auto-save during actual gameplay
+        if state != GameState::Title && state != GameState::NewGame {
+            play_time += dt;
+            auto_save_timer += dt;
+            if auto_save_timer >= 30.0 {
+                auto_save_timer = 0.0;
+                let save = gather_save_data(&player, &sparky, &map,
+                    &player_name, player_gender, dum_dums, play_time);
+                save::save_to_slot(active_slot, &save);
+            }
         }
 
         let arrived = player.move_toward_target(dt);

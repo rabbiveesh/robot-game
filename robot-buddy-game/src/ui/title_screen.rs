@@ -186,10 +186,8 @@ impl NewGameForm {
 
         // Text input
         if let Some(ch) = get_char_pressed() {
-            if self.name.len() < 20 && ch.is_alphanumeric() || ch == ' ' || ch == '-' {
-                if self.name.len() < 20 {
-                    self.name.push(ch);
-                }
+            if self.name.len() < 20 && (ch.is_alphanumeric() || ch == ' ' || ch == '-') {
+                self.name.push(ch);
             }
         }
         if is_key_pressed(KeyCode::Backspace) {
