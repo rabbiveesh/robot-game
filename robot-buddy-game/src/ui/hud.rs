@@ -131,51 +131,49 @@ impl DebugOverlay {
         if !self.visible { return; }
 
         let sw = screen_width();
-        let panel_w = 310.0;
-        let panel_h = 220.0;
+        let panel_w = 380.0;
+        let panel_h = 300.0;
         let x = sw - panel_w - 10.0;
         let y = 10.0;
 
         // Background
-        draw_rectangle(x, y, panel_w, panel_h, Color::new(0.0, 0.0, 0.0, 0.85));
+        draw_rectangle(x, y, panel_w, panel_h, Color::new(0.0, 0.0, 0.0, 0.88));
         draw_rectangle_lines(x, y, panel_w, panel_h, 2.0, Color::from_rgba(0, 230, 118, 255));
 
         let green = Color::from_rgba(0, 230, 118, 255);
-        let white = Color::from_rgba(200, 200, 200, 255);
+        let white = Color::from_rgba(210, 210, 210, 255);
         let gold = Color::from_rgba(255, 213, 79, 255);
-        let mut ly = y + 20.0;
-        let lx = x + 10.0;
-        let line_h = 18.0;
+        let mut ly = y + 26.0;
+        let lx = x + 14.0;
+        let line_h = 24.0;
 
-        draw_text("PARENT DEBUG", lx, ly, 14.0, green);
+        draw_text("PARENT DEBUG", lx, ly, 20.0, green);
+        ly += line_h + 4.0;
+
+        draw_text(&format!("Map: {}  Tile: ({}, {})", map_id, tx, ty), lx, ly, 16.0, white);
         ly += line_h;
 
-        draw_text(&format!("Map: {}  Tile: ({}, {})", map_id, tx, ty), lx, ly, 12.0, white);
+        draw_text(&format!("Area: {}", get_area_name(map_id, tx, ty)), lx, ly, 16.0, white);
         ly += line_h;
 
-        draw_text(&format!("Area: {}", get_area_name(map_id, tx, ty)), lx, ly, 12.0, white);
-        ly += line_h;
-
-        draw_text(&format!("Dum Dums: {}", dum_dums), lx, ly, 12.0, gold);
+        draw_text(&format!("Dum Dums: {}", dum_dums), lx, ly, 16.0, gold);
         ly += line_h;
 
         let mins = (play_time as u64) / 60;
         let secs = (play_time as u64) % 60;
-        draw_text(&format!("Play time: {}m {}s", mins, secs), lx, ly, 12.0, white);
-        ly += line_h;
+        draw_text(&format!("Play time: {}m {}s", mins, secs), lx, ly, 16.0, white);
+        ly += line_h + 8.0;
 
         // Placeholder for adaptive system (not wired yet)
-        ly += 6.0;
-        draw_text("-- Learner Profile --", lx, ly, 12.0, green);
+        draw_text("-- Learner Profile --", lx, ly, 16.0, green);
         ly += line_h;
-        draw_text("Band: 1 (Add <5)  Streak: 0", lx, ly, 12.0, white);
+        draw_text("Band: 1 (Add <5)  Streak: 0", lx, ly, 16.0, white);
         ly += line_h;
-        draw_text("Intake: pending", lx, ly, 12.0, Color::from_rgba(255, 183, 77, 255));
+        draw_text("Intake: pending", lx, ly, 16.0, Color::from_rgba(255, 183, 77, 255));
         ly += line_h;
-        draw_text("CRA: all concrete (placeholder)", lx, ly, 12.0, white);
-        ly += line_h + 6.0;
+        draw_text("CRA: all concrete (placeholder)", lx, ly, 16.0, white);
+        ly += line_h + 8.0;
 
-        draw_text("P to close  |  Profile wires in Step 10+", lx, ly, 11.0,
-            Color::from_rgba(100, 100, 120, 255));
+        draw_text("P to close", lx, ly, 14.0, Color::from_rgba(100, 100, 120, 255));
     }
 }
