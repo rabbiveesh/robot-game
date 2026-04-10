@@ -159,9 +159,15 @@ pub fn draw_title_screen(slots: &SaveSlots, time: f32) -> Option<TitleAction> {
 
 // ─── NEW GAME SCREEN ────────────────────────────────────
 
+pub const BAND_NAMES: &[&str] = &[
+    "Add <5", "+/- <10", "+/- <15", "+/- <20", "x1 x2",
+    "+/- <50", "+/- <100", "x1-5", "x1-12", "Divide",
+];
+
 pub struct NewGameForm {
     pub name: String,
     pub gender: Gender,
+    pub math_band: u8,
     pub slot: usize,
     cursor_blink: f32,
 }
@@ -176,6 +182,7 @@ impl NewGameForm {
         NewGameForm {
             name: String::new(),
             gender: Gender::Boy,
+            math_band: 1,
             slot,
             cursor_blink: 0.0,
         }
@@ -291,11 +298,36 @@ impl NewGameForm {
         let gtw = measure_text("Girl", None, 24, 1.0).width;
         draw_text("Girl", girl_x + btn_w / 2.0 - gtw / 2.0, btn_y + 33.0, 24.0, WHITE);
 
+        // Level picker
+        let level_label = "Starting math level:";
+        let llw = measure_text(level_label, None, 22, 1.0).width;
+        draw_text(level_label, sw / 2.0 - llw / 2.0, 390.0, 22.0, WHITE);
+
+        let band_name = BAND_NAMES.get((self.math_band - 1) as usize).unwrap_or(&"???");
+        let band_display = format!("<  {}  >", band_name);
+        let bdw = measure_text(&band_display, None, 22, 1.0).width;
+        draw_text(&band_display, sw / 2.0 - bdw / 2.0, 418.0, 22.0,
+            Color::from_rgba(255, 213, 79, 255));
+
+        // Left/right arrows for level
+        let arr_left_x = sw / 2.0 - bdw / 2.0 - 10.0;
+        let arr_right_x = sw / 2.0 + bdw / 2.0 + 10.0;
+        let arr_y = 405.0;
+        let arr_h = 20.0;
+        if clicked && mx >= arr_left_x - 20.0 && mx <= arr_left_x + 10.0
+            && my >= arr_y && my <= arr_y + arr_h {
+            // handled in handle_level_click
+        }
+        if clicked && mx >= arr_right_x - 10.0 && mx <= arr_right_x + 20.0
+            && my >= arr_y && my <= arr_y + arr_h {
+            // handled in handle_level_click
+        }
+
         // Start button
         let start_w = 260.0;
         let start_h = 50.0;
         let start_x = sw / 2.0 - start_w / 2.0;
-        let start_y = 420.0;
+        let start_y = 450.0;
         let start_hover = mx >= start_x && mx <= start_x + start_w
             && my >= start_y && my <= start_y + start_h;
         let can_start = !self.name.is_empty();
@@ -353,12 +385,32 @@ impl NewGameForm {
             }
         }
 
-        // Tab to toggle
+        // Tab to toggle gender
         if is_key_pressed(KeyCode::Tab) {
             self.gender = match self.gender {
                 Gender::Boy => Gender::Girl,
                 Gender::Girl => Gender::Boy,
             };
         }
+
+        // Level picker: click arrows or left/right keys
+        let band_name = BAND_NAMES.get((self.math_band - 1) as usize).unwrap_or(&"???");
+        let band_display = format!("<  {}  >", band_name);
+        let bdw = measure_text(&band_display, None, 22, 1.0).width;
+        let arr_left_x = sw / 2.0 - bdw / 2.0 - 10.0;
+        let arr_right_x = sw / 2.0 + bdw / 2.0 + 10.0;
+        let arr_y = 405.0;
+        let arr_h = 20.0;
+
+        if is_mouse_button_pressed(MouseButton::Left) {
+            if mx >= arr_left_x - 20.0 && mx <= sw / 2.0 && my >= arr_y && my <= arr_y + arr_h {
+                if self.math_band > 1 { self.math_band -= 1; }
+            }
+            if mx >= sw / 2.0 && mx <= arr_right_x + 20.0 && my >= arr_y && my <= arr_y + arr_h {
+                if self.math_band < 10 { self.math_band += 1; }
+            }
+        }
+        if is_key_pressed(KeyCode::Left) && self.math_band > 1 { self.math_band -= 1; }
+        if is_key_pressed(KeyCode::Right) && self.math_band < 10 { self.math_band += 1; }
     }
 }

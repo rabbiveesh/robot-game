@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 use ::rand::SeedableRng;
 use ::rand::rngs::SmallRng;
+use std::collections::HashMap;
 
 use robot_buddy_domain::challenge::challenge_state::{
     ChallengeState, DisplaySpeech, RenderHint, VoiceState,
@@ -10,6 +11,8 @@ use robot_buddy_domain::learning::challenge_generator::{
     Challenge, ChallengeProfile, generate_challenge,
 };
 use robot_buddy_domain::learning::operation_stats::OperationStats;
+use robot_buddy_domain::economy::give;
+use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
 use robot_buddy_domain::types::{Phase, CraStage};
 
 mod tilemap;
@@ -25,6 +28,7 @@ use ui::dialogue::{DialogueBox, DialogueLine};
 use ui::challenge::{ChoiceBound, ScaffoldBounds};
 use ui::title_screen::{TitleAction, NewGameAction, NewGameForm};
 use ui::hud::{DumDumHud, DebugOverlay};
+use ui::interaction_menu::MenuOption;
 use save::{SaveData, Gender};
 
 const GAME_W: f32 = 960.0;
@@ -36,6 +40,7 @@ enum GameState {
     Title,
     NewGame,
     Playing,
+    InteractionMenu,
     Dialogue,
     Challenge,
 }
@@ -48,16 +53,16 @@ struct ActiveChallenge {
     scaffold: ScaffoldBounds,
 }
 
-fn make_challenge_profile() -> ChallengeProfile {
+fn make_challenge_profile(band: u8) -> ChallengeProfile {
     ChallengeProfile {
-        math_band: 1,
+        math_band: band.max(1).min(10),
         spread_width: 0.5,
         operation_stats: OperationStats::new(),
     }
 }
 
-fn start_challenge(rng: &mut SmallRng) -> ActiveChallenge {
-    let profile = make_challenge_profile();
+fn start_challenge(rng: &mut SmallRng, band: u8) -> ActiveChallenge {
+    let profile = make_challenge_profile(band);
     let challenge = generate_challenge(&profile, rng);
     let cra = CraStage::Abstract; // default starting CRA
 
@@ -250,6 +255,12 @@ async fn main() {
     let mut auto_save_timer: f32 = 0.0;
     let mut dum_dum_hud = DumDumHud::new();
     let mut debug_overlay = DebugOverlay::new();
+    let mut gifts_given: HashMap<String, u32> = HashMap::new();
+    let mut menu_options: Vec<MenuOption> = vec![];
+    let mut menu_target_id: String = String::new(); // NPC id or "sparky" or "chest"
+    let mut menu_target_name: String = String::new();
+    let mut menu_can_challenge = false;
+    let mut math_band: u8 = 1;
 
     loop {
         let dt = get_frame_time();
@@ -268,7 +279,7 @@ async fn main() {
                             if let Some(ref save) = save_slots[slot] {
                                 load_from_save(save, &mut map, &mut player, &mut sparky,
                                     &mut npcs, &mut player_name, &mut player_gender,
-                                    &mut dum_dums, &mut play_time);
+                                    &mut math_band, &mut dum_dums, &mut play_time);
                                 active_slot = slot;
                                 auto_save_timer = 0.0;
 
@@ -301,6 +312,7 @@ async fn main() {
                                 let slot = form.slot;
                                 player_name = form.name.clone();
                                 player_gender = form.gender;
+                                math_band = form.math_band;
                                 dum_dums = 0;
                                 play_time = 0.0;
                                 active_slot = slot;
@@ -314,7 +326,7 @@ async fn main() {
 
                                 // Save immediately
                                 let save = gather_save_data(&player, &sparky, &map,
-                                    &player_name, player_gender, dum_dums, play_time);
+                                    &player_name, player_gender, math_band, dum_dums, play_time);
                                 save::save_to_slot(slot, &save);
                                 save_slots = save::load_all_slots();
                                 auto_save_timer = 0.0;
@@ -383,30 +395,86 @@ async fn main() {
 
                 // Space: interact
                 if is_key_pressed(KeyCode::Space) && !player.moving {
-                    if let Some(target) = npc::get_interact_target(
+                    // Check for chest tile in front
+                    let facing = facing_tile(player.tile_x, player.tile_y, player.dir);
+                    let facing_chest = facing.0 < map.width && facing.1 < map.height
+                        && map.tiles[facing.1][facing.0] == 13;
+
+                    if facing_chest {
+                        // Chest: auto-trigger challenge with intro dialogue
+                        menu_target_id = "chest".into();
+                        menu_target_name = "Sparky".into();
+                        dialogue.start(vec![DialogueLine {
+                            speaker: "Sparky".into(),
+                            text: "OOOOH a treasure chest! But it has a LOCK! We need to solve the puzzle to open it!".into(),
+                        }]);
+                        pending_challenge = true;
+                        state = GameState::Dialogue;
+                    } else if let Some(target) = npc::get_interact_target(
                         player.tile_x, player.tile_y, player.dir, &npcs
                     ) {
-                        if !target.never_challenge {
-                            // Challenge-eligible NPC: dialogue then challenge
+                        // Build interaction options from domain
+                        let npc_info = NpcInfo {
+                            id: target.id.to_string(),
+                            can_receive_gifts: Some(target.can_receive_gifts),
+                            has_shop: None,
+                        };
+                        let player_st = PlayerState { dum_dums };
+                        let opts = interaction_options::get_interaction_options(&npc_info, &player_st);
+
+                        menu_target_id = target.id.to_string();
+                        menu_target_name = target.name.to_string();
+                        menu_can_challenge = !target.never_challenge;
+
+                        // Single option (Talk only) → auto-trigger
+                        if opts.len() == 1 {
                             let lines = npc_dialogue_lines(target);
-                            pending_challenge = true;
+                            if menu_can_challenge {
+                                pending_challenge = true;
+                            }
                             dialogue.start(lines);
                             state = GameState::Dialogue;
                         } else {
-                            let lines = npc_dialogue_lines(target);
-                            dialogue.start(lines);
-                            state = GameState::Dialogue;
+                            menu_options = opts.iter().enumerate().map(|(i, o)| MenuOption {
+                                option_type: o.option_type.clone(),
+                                label: o.label.clone(),
+                                key: i + 1,
+                            }).collect();
+                            state = GameState::InteractionMenu;
                         }
                     } else if npc::is_facing_sparky(
                         player.tile_x, player.tile_y, player.dir,
                         sparky.entity.tile_x, sparky.entity.tile_y,
                     ) {
-                        // Sparky always challenges
-                        pending_challenge = true;
-                        dialogue.start(sparky_dialogue_lines());
-                        state = GameState::Dialogue;
+                        // Sparky interaction menu
+                        let npc_info = NpcInfo {
+                            id: "sparky".to_string(),
+                            can_receive_gifts: Some(true),
+                            has_shop: None,
+                        };
+                        let player_st = PlayerState { dum_dums };
+                        let opts = interaction_options::get_interaction_options(&npc_info, &player_st);
+                        menu_target_id = "sparky".into();
+                        menu_target_name = "Sparky".into();
+                        menu_can_challenge = true;
+
+                        if opts.len() == 1 {
+                            pending_challenge = true;
+                            dialogue.start(sparky_dialogue_lines());
+                            state = GameState::Dialogue;
+                        } else {
+                            menu_options = opts.iter().enumerate().map(|(i, o)| MenuOption {
+                                option_type: o.option_type.clone(),
+                                label: o.label.clone(),
+                                key: i + 1,
+                            }).collect();
+                            state = GameState::InteractionMenu;
+                        }
                     }
                 }
+            }
+            GameState::InteractionMenu => {
+                // Handled in render section (draw + input combined)
             }
             GameState::Dialogue => {
                 if is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Enter) {
@@ -414,7 +482,7 @@ async fn main() {
                     if !dialogue.active {
                         if pending_challenge {
                             pending_challenge = false;
-                            let ac = start_challenge(&mut rng);
+                            let ac = start_challenge(&mut rng, math_band);
                             audio::tts::speak("Sparky", &ac.challenge.speech_text);
                             active_challenge = Some(ac);
                             state = GameState::Challenge;
@@ -479,7 +547,7 @@ async fn main() {
             if auto_save_timer >= 30.0 {
                 auto_save_timer = 0.0;
                 let save = gather_save_data(&player, &sparky, &map,
-                    &player_name, player_gender, dum_dums, play_time);
+                    &player_name, player_gender, math_band, dum_dums, play_time);
                 save::save_to_slot(active_slot, &save);
             }
         }
@@ -563,7 +631,10 @@ async fn main() {
 
         for r in &renderables {
             match r.kind {
-                0 => sprites::player::draw_player_boy(player.x, player.y, player.dir, player.frame, game_time),
+                0 => match player_gender {
+                    Gender::Boy => sprites::player::draw_player_boy(player.x, player.y, player.dir, player.frame, game_time),
+                    Gender::Girl => sprites::player::draw_player_girl(player.x, player.y, player.dir, player.frame, game_time),
+                },
                 1 => sprites::robot::draw_robot(sparky.entity.x, sparky.entity.y, sparky.entity.dir, sparky.entity.frame, game_time),
                 2 => npcs[r.idx].draw(game_time),
                 _ => {}
@@ -575,6 +646,42 @@ async fn main() {
         ui::hud::draw_area_name(map.id, player.tile_x, player.tile_y);
         dum_dum_hud.draw(dum_dums);
         debug_overlay.draw(map.id, player.tile_x, player.tile_y, dum_dums, play_time);
+
+        // Interaction menu (draw + handle input here since it's screen-space)
+        if state == GameState::InteractionMenu {
+            if let Some(action) = ui::interaction_menu::draw_interaction_menu(&menu_options) {
+                match action {
+                    ui::interaction_menu::MenuAction::Select(opt_type) => match opt_type.as_str() {
+                        "talk" => {
+                            if menu_target_id == "sparky" {
+                                if menu_can_challenge { pending_challenge = true; }
+                                dialogue.start(sparky_dialogue_lines());
+                            } else if let Some(target) = npcs.iter().find(|n| n.id == menu_target_id) {
+                                if menu_can_challenge { pending_challenge = true; }
+                                dialogue.start(npc_dialogue_lines(target));
+                            }
+                            state = GameState::Dialogue;
+                        }
+                        "give" => {
+                            if let Some(result) = give::process_give(dum_dums, &menu_target_id, &gifts_given) {
+                                dum_dums = result.new_dum_dums;
+                                gifts_given = result.new_total_gifts;
+                                dum_dum_hud.flash();
+                                let reaction = give_reaction_dialogue(&menu_target_id, &menu_target_name, &result.milestone);
+                                dialogue.start(reaction);
+                                state = GameState::Dialogue;
+                            } else {
+                                state = GameState::Playing;
+                            }
+                        }
+                        _ => { state = GameState::Playing; }
+                    },
+                    ui::interaction_menu::MenuAction::Dismiss => {
+                        state = GameState::Playing;
+                    }
+                }
+            }
+        }
 
         // Dialogue box
         dialogue.draw();
@@ -674,7 +781,7 @@ fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Np
 
 fn gather_save_data(
     player: &Entity, sparky: &Sparky, map: &Map,
-    name: &str, gender: Gender, dum_dums: u32, play_time: f32,
+    name: &str, gender: Gender, band: u8, dum_dums: u32, play_time: f32,
 ) -> SaveData {
     SaveData {
         version: 1,
@@ -691,19 +798,21 @@ fn gather_save_data(
         },
         sparky_x: sparky.entity.tile_x,
         sparky_y: sparky.entity.tile_y,
+        math_band: band,
         dum_dums,
         play_time,
-        timestamp: 0, // set by save_to_slot
+        timestamp: 0,
     }
 }
 
 fn load_from_save(
     save: &SaveData, map: &mut Map, player: &mut Entity, sparky: &mut Sparky,
     npcs: &mut Vec<npc::Npc>, name: &mut String, gender: &mut Gender,
-    dum_dums: &mut u32, play_time: &mut f32,
+    band: &mut u8, dum_dums: &mut u32, play_time: &mut f32,
 ) {
     *name = save.name.clone();
     *gender = save.gender;
+    *band = save.math_band;
     *dum_dums = save.dum_dums;
     *play_time = save.play_time;
 
@@ -732,6 +841,41 @@ fn load_from_save(
     sparky.entity.target_y = sparky.entity.y;
     sparky.entity.moving = false;
     sparky.follow_queue.clear();
+}
+
+fn facing_tile(tx: usize, ty: usize, dir: Dir) -> (usize, usize) {
+    match dir {
+        Dir::Up => (tx, ty.wrapping_sub(1)),
+        Dir::Down => (tx, ty + 1),
+        Dir::Left => (tx.wrapping_sub(1), ty),
+        Dir::Right => (tx + 1, ty),
+    }
+}
+
+fn give_reaction_dialogue(
+    target_id: &str, target_name: &str,
+    milestone: &Option<robot_buddy_domain::economy::give::Milestone>,
+) -> Vec<DialogueLine> {
+    let text = if let Some(ms) = milestone {
+        match (target_id, ms.reaction.as_str()) {
+            ("sparky", "first") => "My FIRST Dum Dum?! This is the BEST DAY of my robot LIFE!".into(),
+            ("sparky", "spin") => "FIVE DUM DUMS! Watch me spin! *spins* WHOAAAA!".into(),
+            ("sparky", "accessory") => "TEN?! I'm wearing a bow tie now! Do I look fancy?!".into(),
+            ("sparky", "color_change") => "TWENTY! My chest light is changing color! BZZZT!".into(),
+            ("sparky", "ultimate") => "FIFTY DUM DUMS. Boss. I... I don't have words. BEEP.".into(),
+            (_, "first") => format!("My first Dum Dum! Thank you so much, you're the best!"),
+            _ => format!("WOW! You've given me {} Dum Dums! You're amazing!", ms.total),
+        }
+    } else {
+        match target_id {
+            "sparky" => {
+                let lines = ["MMMMM! *crunch* Circuits... BUZZING!", "Dum Dum Dum Dum! That's my favorite song!", "BZZZT! Sugar rush! BEEP BOOP BEEP!"];
+                lines[macroquad::rand::gen_range(0, lines.len())].into()
+            }
+            _ => "Thank you! You're so kind!".into(),
+        }
+    };
+    vec![DialogueLine { speaker: target_name.into(), text }]
 }
 
 fn speak_challenge_feedback(cs: &ChallengeState) {

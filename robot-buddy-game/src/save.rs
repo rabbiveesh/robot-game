@@ -12,6 +12,7 @@ pub struct SaveData {
     pub player_dir: u8,
     pub sparky_x: usize,
     pub sparky_y: usize,
+    pub math_band: u8,
     pub dum_dums: u32,
     pub play_time: f32,
     pub timestamp: u64,
@@ -35,6 +36,7 @@ impl SaveData {
             player_dir: 1, // down
             sparky_x: 14,
             sparky_y: 13,
+            math_band: 1,
             dum_dums: 0,
             play_time: 0.0,
             timestamp: current_timestamp(),
