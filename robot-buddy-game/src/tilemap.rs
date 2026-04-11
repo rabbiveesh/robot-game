@@ -30,7 +30,11 @@ pub fn all_portals() -> &'static [Portal] {
         Portal { from_map: "shop", from_x: 4, from_y: 6, to_map: "overworld", to_x: 24, to_y: 18, dir: 1, secret: false },
         // SECRET: Dream world — water tile past bridge
         Portal { from_map: "overworld", from_x: 16, from_y: 14, to_map: "dream", to_x: 14, to_y: 13, dir: 1, secret: true },
-        Portal { from_map: "dream", from_x: 14, from_y: 14, to_map: "overworld", to_x: 15, to_y: 14, dir: 0, secret: false },
+        Portal { from_map: "dream", from_x: 16, from_y: 14, to_map: "overworld", to_x: 13, to_y: 14, dir: 2, secret: false },
+        // Dream-mode mirrors of overworld portals (same doors work in dream)
+        Portal { from_map: "dream", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: 0, secret: false },
+        Portal { from_map: "dream", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: 0, secret: false },
+        Portal { from_map: "dream", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: 0, secret: false },
         // SECRET: Doghouse land — roof tile behind home
         Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: 1, secret: true },
         Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: 1, secret: false },
@@ -46,10 +50,11 @@ pub fn check_portal(map_id: &str, col: usize, row: usize) -> Option<&'static Por
 }
 
 /// Secret walkable tiles — normally solid tiles that portals make walkable.
-const SECRET_WALKABLE: &[(& str, usize, usize)] = &[
+const SECRET_WALKABLE: &[(&str, usize, usize)] = &[
     ("overworld", 16, 14), // water tile → dream portal
     ("overworld", 5, 5),   // roof tile → doghouse portal
     ("overworld", 15, 0),  // tree tile → grove portal
+    ("dream", 16, 14),     // water tile → dream exit portal
 ];
 
 fn is_secret_walkable(map_id: &str, col: usize, row: usize) -> bool {
@@ -82,7 +87,7 @@ impl Map {
         if col >= self.width || row >= self.height { return true; }
         if is_secret_walkable(self.id, col, row) { return false; }
         let id = self.tiles[row][col];
-        matches!(id, 2 | 3 | 4 | 6 | 7 | 9 | 10 | 16 | 17 | 99)
+        matches!(id, 2 | 3 | 4 | 6 | 7 | 9 | 10 | 11 | 13 | 16 | 17 | 99)
     }
 
     pub fn overworld() -> Self {
@@ -237,10 +242,10 @@ pub fn tile_color(tile_id: u8, mode: RenderMode, time: f32) -> Color {
         // Dreamy palette — muted purples and blues
         return match tile_id {
             0 => Color::from_rgba(106, 90, 205, 255),  // lavender grass
-            1 => Color::from_rgba(180, 170, 200, 255),  // misty path
-            2 => Color::from_rgba(100, 100, 180, 255),  // deep water
-            4 => Color::from_rgba(72, 61, 139, 255),    // dark purple trees
-            5 => Color::from_rgba(186, 140, 220, 255),  // purple flowers
+            1 => Color::from_rgba(180, 160, 200, 255),  // misty path
+            2 => Color::from_rgba(50, 50, 140, 255),    // deep dream water (dark indigo)
+            4 => Color::from_rgba(106, 90, 205, 255),   // trees (dream grass base)
+            5 => Color::from_rgba(106, 90, 205, 255),   // flowers (dream grass base)
             _ => tile_color_normal(tile_id),
         };
     }
@@ -251,21 +256,21 @@ pub fn tile_color(tile_id: u8, mode: RenderMode, time: f32) -> Color {
 fn tile_color_normal(tile_id: u8) -> Color {
     match tile_id {
         0 => Color::from_rgba(76, 175, 80, 255),     // grass
-        1 => Color::from_rgba(189, 189, 189, 255),    // path
+        1 => Color::from_rgba(222, 184, 135, 255),    // path (sandy)
         2 => Color::from_rgba(66, 165, 245, 255),     // water
         3 => Color::from_rgba(121, 85, 72, 255),      // wall
-        4 => Color::from_rgba(27, 94, 32, 255),       // tree
-        5 => Color::from_rgba(139, 195, 74, 255),     // flower
-        6 => Color::from_rgba(161, 136, 127, 255),    // house wall
-        7 => Color::from_rgba(183, 28, 28, 255),      // roof
-        8 => Color::from_rgba(93, 64, 55, 255),       // door
-        9 => Color::from_rgba(120, 144, 156, 255),    // window
-        10 => Color::from_rgba(255, 183, 77, 255),    // shop awning
-        11 => Color::from_rgba(156, 39, 176, 255),    // sign
-        12 => Color::from_rgba(255, 235, 59, 255),    // bridge
-        13 => Color::from_rgba(255, 215, 0, 255),     // chest
-        14 => Color::from_rgba(141, 110, 99, 255),    // wood floor
-        15 => Color::from_rgba(188, 170, 164, 255),   // rug
+        4 => Color::from_rgba(76, 175, 80, 255),       // tree (grass base)
+        5 => Color::from_rgba(76, 175, 80, 255),       // flower (grass base)
+        6 => Color::from_rgba(255, 204, 128, 255),    // house wall (warm cream)
+        7 => Color::from_rgba(211, 47, 47, 255),      // roof
+        8 => Color::from_rgba(255, 204, 128, 255),    // door (base = house wall)
+        9 => Color::from_rgba(255, 204, 128, 255),    // window (base = house wall)
+        10 => Color::from_rgba(76, 175, 80, 255),     // fence (grass base)
+        11 => Color::from_rgba(76, 175, 80, 255),     // sign (grass base)
+        12 => Color::from_rgba(66, 165, 245, 255),    // bridge (water base)
+        13 => Color::from_rgba(76, 175, 80, 255),     // chest (grass base)
+        14 => Color::from_rgba(161, 136, 127, 255),    // wood floor
+        15 => Color::from_rgba(161, 136, 127, 255),   // rug (floor base)
         16 => Color::from_rgba(78, 52, 46, 255),      // table
         17 => Color::from_rgba(62, 39, 35, 255),      // shelf
         _ => Color::from_rgba(50, 50, 50, 255),       // unknown
@@ -285,6 +290,7 @@ pub fn draw_map(map: &Map, cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, tim
             let x = col as f32 * TILE_SIZE;
             let y = row as f32 * TILE_SIZE;
             draw_rectangle(x, y, TILE_SIZE, TILE_SIZE, color);
+            draw_tile_detail(tile_id, x, y, time, map.render_mode);
         }
     }
 
@@ -296,6 +302,303 @@ pub fn draw_map(map: &Map, cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, tim
     // Glitch scanlines + screen tear
     if map.render_mode == RenderMode::Glitch {
         draw_glitch_overlay(cam_x, cam_y, view_w, view_h, time);
+    }
+}
+
+/// Stable pseudo-random for per-tile variation (same as old JS seededRandom)
+fn seeded_random(x: f32, y: f32, seed: i32) -> f32 {
+    let mut h = (x as i32).wrapping_mul(374761393)
+        .wrapping_add((y as i32).wrapping_mul(668265263))
+        .wrapping_add(seed.wrapping_mul(1274126177));
+    h = (h ^ (h >> 13)).wrapping_mul(1274126177);
+    (h & 0x7fffffff) as f32 / 0x7fffffff as f32
+}
+
+fn draw_tile_detail(tile_id: u8, x: f32, y: f32, time: f32, mode: RenderMode) {
+    // Skip details for glitch tiles
+    if mode == RenderMode::Glitch && tile_id >= 95 { return; }
+
+    match tile_id {
+        0 => draw_grass_detail(x, y),
+        1 => draw_path_detail(x, y),
+        2 => draw_water_detail(x, y, time, mode),
+        3 => draw_wall_detail(x, y),
+        4 => draw_tree_detail(x, y, time, mode),
+        5 => draw_flower_detail(x, y, time),
+        6 => draw_house_wall_detail(x, y),
+        7 => draw_roof_detail(x, y),
+        8 => draw_door_detail(x, y),
+        9 => draw_window_detail(x, y),
+        10 => draw_fence_detail(x, y),
+        11 => draw_sign_detail(x, y),
+        12 => draw_bridge_detail(x, y),
+        13 => draw_chest_detail(x, y, time),
+        14 => draw_floor_detail(x, y),
+        15 => draw_rug_detail(x, y),
+        16 => draw_table_detail(x, y),
+        17 => draw_bookshelf_detail(x, y),
+        _ => {}
+    }
+}
+
+fn draw_grass_detail(x: f32, y: f32) {
+    let darker = Color::from_rgba(67, 160, 71, 255);
+    for i in 0..4 {
+        let rx = seeded_random(x, y, i * 3) * (TILE_SIZE - 6.0) + 3.0;
+        let ry = seeded_random(x, y, i * 3 + 1) * (TILE_SIZE - 6.0) + 3.0;
+        draw_rectangle(x + rx, y + ry, 3.0, 3.0, darker);
+    }
+}
+
+fn draw_path_detail(x: f32, y: f32) {
+    // Subtle pebbles on sandy path
+    let pebble = Color::from_rgba(200, 169, 110, 255);
+    for i in 0..3 {
+        let rx = seeded_random(x, y, i * 7) * (TILE_SIZE - 8.0) + 4.0;
+        let ry = seeded_random(x, y, i * 7 + 1) * (TILE_SIZE - 8.0) + 4.0;
+        draw_circle(x + rx, y + ry, 2.0, pebble);
+    }
+}
+
+fn draw_water_detail(x: f32, y: f32, time: f32, mode: RenderMode) {
+    // Animated wave lines
+    let wave_color = if mode == RenderMode::Dream {
+        Color::from_rgba(140, 140, 220, 180)
+    } else {
+        Color::from_rgba(100, 181, 246, 200)
+    };
+    for row in 0..3 {
+        let base_y = y + 10.0 + row as f32 * 14.0;
+        let mut prev_x = x;
+        let mut prev_y = base_y + ((x) * 0.1 + time * 2.0 + row as f32).sin() * 3.0;
+        let mut px = 4.0;
+        while px <= TILE_SIZE {
+            let wave = ((x + px) * 0.1 + time * 2.0 + row as f32).sin() * 3.0;
+            let cur_x = x + px;
+            let cur_y = base_y + wave;
+            draw_line(prev_x, prev_y, cur_x, cur_y, 1.5, wave_color);
+            prev_x = cur_x;
+            prev_y = cur_y;
+            px += 4.0;
+        }
+    }
+}
+
+fn draw_wall_detail(x: f32, y: f32) {
+    // Brick pattern
+    let mortar = Color::from_rgba(109, 76, 65, 255);
+    for row in 0..3 {
+        let by = y + row as f32 * 16.0;
+        draw_rectangle_lines(x, by, TILE_SIZE, 16.0, 1.0, mortar);
+        let offset = if row % 2 == 0 { 0.0 } else { TILE_SIZE / 2.0 };
+        draw_line(x + TILE_SIZE / 2.0 + offset, by, x + TILE_SIZE / 2.0 + offset, by + 16.0, 1.0, mortar);
+    }
+}
+
+fn draw_tree_detail(x: f32, y: f32, time: f32, mode: RenderMode) {
+    let sway = (time * 1.5 + x * 0.3).sin() * 1.5;
+    // Trunk
+    draw_rectangle(x + 19.0, y + 28.0, 10.0, 18.0, Color::from_rgba(109, 76, 65, 255));
+    // Canopy
+    let (c1, c2) = if mode == RenderMode::Dream {
+        (Color::from_rgba(90, 75, 160, 255), Color::from_rgba(100, 85, 170, 255))
+    } else {
+        (Color::from_rgba(46, 125, 50, 255), Color::from_rgba(56, 142, 60, 255))
+    };
+    draw_circle(x + 24.0 + sway, y + 20.0, 16.0, c1);
+    draw_circle(x + 18.0 + sway, y + 24.0, 11.0, c2);
+    draw_circle(x + 30.0 + sway, y + 24.0, 11.0, c2);
+}
+
+fn draw_flower_detail(x: f32, y: f32, time: f32) {
+    // Grass tufts underneath
+    draw_grass_detail(x, y);
+    let colors = [
+        Color::from_rgba(255, 107, 107, 255),
+        Color::from_rgba(255, 217, 61, 255),
+        Color::from_rgba(224, 64, 251, 255),
+    ];
+    let stem = Color::from_rgba(56, 142, 60, 255);
+    let center = Color::from_rgba(255, 249, 196, 255);
+    for i in 0..3 {
+        let fx = x + 8.0 + seeded_random(x, y, i * 5) * 28.0;
+        let fy = y + 8.0 + seeded_random(x, y, i * 5 + 1) * 28.0;
+        let sway = (time * 2.0 + i as f32 * 2.0).sin() * 1.5;
+        // Stem
+        draw_line(fx, fy + 6.0, fx + sway, fy - 2.0, 2.0, stem);
+        // Petals
+        draw_circle(fx + sway, fy - 4.0, 4.0, colors[i as usize % 3]);
+        // Center
+        draw_circle(fx + sway, fy - 4.0, 1.5, center);
+    }
+}
+
+fn draw_house_wall_detail(x: f32, y: f32) {
+    // Orange border
+    draw_rectangle_lines(x + 1.0, y + 1.0, TILE_SIZE - 2.0, TILE_SIZE - 2.0, 2.0,
+        Color::from_rgba(239, 108, 0, 255));
+}
+
+fn draw_roof_detail(x: f32, y: f32) {
+    // Shingle lines
+    let shingle = Color::from_rgba(183, 28, 28, 255);
+    for i in 0..3 {
+        let ly = y + 12.0 + i as f32 * 14.0;
+        draw_line(x, ly, x + TILE_SIZE, ly, 1.0, shingle);
+    }
+}
+
+fn draw_door_detail(x: f32, y: f32) {
+    // House wall base (already drawn as tile color = door brown, so draw house wall underneath)
+    draw_rectangle(x, y, TILE_SIZE, TILE_SIZE, Color::from_rgba(255, 204, 128, 255));
+    draw_rectangle_lines(x + 1.0, y + 1.0, TILE_SIZE - 2.0, TILE_SIZE - 2.0, 2.0,
+        Color::from_rgba(239, 108, 0, 255));
+    // Door
+    draw_rectangle(x + 14.0, y + 10.0, 20.0, 38.0, Color::from_rgba(93, 64, 55, 255));
+    draw_rectangle(x + 16.0, y + 12.0, 16.0, 34.0, Color::from_rgba(141, 110, 99, 255));
+    // Doorknob
+    draw_circle(x + 28.0, y + 30.0, 3.0, Color::from_rgba(255, 213, 79, 255));
+}
+
+fn draw_window_detail(x: f32, y: f32) {
+    // House wall border already drawn. Add window.
+    draw_rectangle_lines(x + 1.0, y + 1.0, TILE_SIZE - 2.0, TILE_SIZE - 2.0, 2.0,
+        Color::from_rgba(239, 108, 0, 255));
+    // Window pane
+    draw_rectangle(x + 12.0, y + 12.0, 24.0, 20.0, Color::from_rgba(129, 212, 250, 255));
+    draw_rectangle_lines(x + 12.0, y + 12.0, 24.0, 20.0, 2.0, Color::from_rgba(239, 108, 0, 255));
+    // Crossbar
+    draw_line(x + 24.0, y + 12.0, x + 24.0, y + 32.0, 2.0, Color::from_rgba(239, 108, 0, 255));
+    draw_line(x + 12.0, y + 22.0, x + 36.0, y + 22.0, 2.0, Color::from_rgba(239, 108, 0, 255));
+}
+
+fn draw_fence_detail(x: f32, y: f32) {
+    // Grass underneath
+    draw_grass_detail(x, y);
+    let post = Color::from_rgba(161, 136, 127, 255);
+    let dark = Color::from_rgba(141, 110, 99, 255);
+    // Posts
+    draw_rectangle(x + 4.0, y + 12.0, 6.0, 30.0, post);
+    draw_rectangle(x + 38.0, y + 12.0, 6.0, 30.0, post);
+    // Rails
+    draw_rectangle(x + 2.0, y + 16.0, 44.0, 5.0, post);
+    draw_rectangle(x + 2.0, y + 30.0, 44.0, 5.0, post);
+    // Pointed tops
+    draw_triangle(vec2(x + 4.0, y + 12.0), vec2(x + 7.0, y + 6.0), vec2(x + 10.0, y + 12.0), dark);
+    draw_triangle(vec2(x + 38.0, y + 12.0), vec2(x + 41.0, y + 6.0), vec2(x + 44.0, y + 12.0), dark);
+}
+
+fn draw_sign_detail(x: f32, y: f32) {
+    // Grass base underneath
+    draw_grass_detail(x, y);
+    // Post
+    draw_rectangle(x + 21.0, y + 22.0, 6.0, 24.0, Color::from_rgba(141, 110, 99, 255));
+    // Sign board
+    draw_rectangle(x + 8.0, y + 8.0, 32.0, 18.0, Color::from_rgba(255, 204, 128, 255));
+    draw_rectangle_lines(x + 8.0, y + 8.0, 32.0, 18.0, 2.0, Color::from_rgba(109, 76, 65, 255));
+    // "!" on sign
+    draw_text("!", x + 21.0, y + 23.0, 16.0, Color::from_rgba(211, 47, 47, 255));
+}
+
+fn draw_bridge_detail(x: f32, y: f32) {
+    // Wooden planks over water
+    draw_rectangle(x + 4.0, y, 40.0, TILE_SIZE, Color::from_rgba(161, 136, 127, 255));
+    // Plank lines
+    let plank = Color::from_rgba(141, 110, 99, 255);
+    for i in 0..4 {
+        let ly = y + i as f32 * 12.0 + 12.0;
+        draw_line(x + 4.0, ly, x + 44.0, ly, 1.0, plank);
+    }
+    // Rails
+    let rail = Color::from_rgba(109, 76, 65, 255);
+    draw_rectangle(x + 2.0, y, 4.0, TILE_SIZE, rail);
+    draw_rectangle(x + 42.0, y, 4.0, TILE_SIZE, rail);
+}
+
+fn draw_chest_detail(x: f32, y: f32, time: f32) {
+    // Grass base
+    draw_grass_detail(x, y);
+    // Chest body
+    draw_rectangle(x + 10.0, y + 20.0, 28.0, 20.0, Color::from_rgba(141, 110, 99, 255));
+    // Chest lid
+    draw_rectangle(x + 8.0, y + 14.0, 32.0, 12.0, Color::from_rgba(161, 136, 127, 255));
+    // Metal band
+    draw_rectangle(x + 10.0, y + 18.0, 28.0, 3.0, Color::from_rgba(255, 213, 79, 255));
+    // Lock
+    draw_circle(x + 24.0, y + 28.0, 4.0, Color::from_rgba(255, 213, 79, 255));
+    // Sparkle
+    let sparkle = (time * 3.0).sin() * 0.5 + 0.5;
+    draw_circle(x + 32.0, y + 12.0, 3.0, Color::new(1.0, 0.922, 0.231, sparkle));
+}
+
+fn draw_floor_detail(x: f32, y: f32) {
+    // Wood plank lines
+    let plank = Color::from_rgba(141, 110, 99, 255);
+    for i in 0..3 {
+        let ly = y + i as f32 * 16.0 + 8.0;
+        draw_line(x, ly, x + TILE_SIZE, ly, 1.0, plank);
+    }
+    // Vertical seam
+    let seam = if seeded_random(x, y, 99) < 0.5 { 20.0 } else { 28.0 };
+    draw_line(x + seam, y, x + seam, y + TILE_SIZE, 1.0, plank);
+}
+
+fn draw_rug_detail(x: f32, y: f32) {
+    // Floor underneath
+    draw_floor_detail(x, y);
+    // Rug
+    draw_rectangle(x + 2.0, y + 2.0, TILE_SIZE - 4.0, TILE_SIZE - 4.0,
+        Color::from_rgba(198, 40, 40, 255));
+    // Gold border pattern
+    draw_rectangle_lines(x + 6.0, y + 6.0, TILE_SIZE - 12.0, TILE_SIZE - 12.0, 2.0,
+        Color::from_rgba(255, 213, 79, 255));
+    // Center diamond
+    let gold = Color::from_rgba(255, 213, 79, 255);
+    let cx = x + TILE_SIZE / 2.0;
+    let cy = y + TILE_SIZE / 2.0;
+    draw_triangle(vec2(cx, y + 12.0), vec2(x + TILE_SIZE - 12.0, cy), vec2(cx, y + TILE_SIZE - 12.0), gold);
+    draw_triangle(vec2(cx, y + 12.0), vec2(x + 12.0, cy), vec2(cx, y + TILE_SIZE - 12.0), gold);
+}
+
+fn draw_table_detail(x: f32, y: f32) {
+    // Floor underneath
+    draw_floor_detail(x, y);
+    // Table top
+    draw_rectangle(x + 4.0, y + 8.0, TILE_SIZE - 8.0, TILE_SIZE - 16.0,
+        Color::from_rgba(109, 76, 65, 255));
+    draw_rectangle_lines(x + 4.0, y + 8.0, TILE_SIZE - 8.0, TILE_SIZE - 16.0, 2.0,
+        Color::from_rgba(93, 64, 55, 255));
+    // Items on table
+    draw_rectangle(x + 14.0, y + 14.0, 10.0, 8.0, Color::from_rgba(129, 212, 250, 255));
+    draw_rectangle(x + 26.0, y + 16.0, 8.0, 6.0, Color::from_rgba(224, 224, 224, 255));
+}
+
+fn draw_bookshelf_detail(x: f32, y: f32) {
+    // Shelf frame
+    draw_rectangle(x + 2.0, y + 2.0, TILE_SIZE - 4.0, TILE_SIZE - 4.0,
+        Color::from_rgba(141, 110, 99, 255));
+    // Shelves
+    let shelf = Color::from_rgba(109, 76, 65, 255);
+    draw_rectangle(x + 2.0, y + 20.0, TILE_SIZE - 4.0, 3.0, shelf);
+    draw_rectangle(x + 2.0, y + 38.0, TILE_SIZE - 4.0, 3.0, shelf);
+    // Books (top shelf)
+    let book_colors = [
+        Color::from_rgba(244, 67, 54, 255),
+        Color::from_rgba(33, 150, 243, 255),
+        Color::from_rgba(76, 175, 80, 255),
+        Color::from_rgba(255, 152, 0, 255),
+        Color::from_rgba(156, 39, 176, 255),
+    ];
+    for i in 0..5 {
+        let bw = 5.0 + seeded_random(x, y, i * 2) * 3.0;
+        let bx = x + 5.0 + i as f32 * 8.0;
+        draw_rectangle(bx, y + 5.0, bw, 15.0, book_colors[i as usize % 5]);
+    }
+    // Books (bottom shelf)
+    for i in 0..4 {
+        let bw = 6.0 + seeded_random(x, y, i * 3 + 10) * 3.0;
+        let bx = x + 6.0 + i as f32 * 9.0;
+        draw_rectangle(bx, y + 24.0, bw, 13.0, book_colors[(i as usize + 3) % 5]);
     }
 }
 

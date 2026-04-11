@@ -51,6 +51,7 @@ struct ActiveChallenge {
     challenge: Challenge,
     choice_bounds: Vec<ChoiceBound>,
     scaffold: ScaffoldBounds,
+    complete_timer: f32, // counts up from 0 when Phase::Complete + correct
 }
 
 fn make_challenge_profile(band: u8) -> ChallengeProfile {
@@ -94,6 +95,7 @@ fn start_challenge(rng: &mut SmallRng, band: u8) -> ActiveChallenge {
         challenge,
         choice_bounds: vec![],
         scaffold: ScaffoldBounds { show_me: None, tell_me: None },
+        complete_timer: 0.0,
     }
 }
 
@@ -261,6 +263,7 @@ async fn main() {
     let mut menu_target_name: String = String::new();
     let mut menu_can_challenge = false;
     let mut math_band: u8 = 1;
+    let mut dreaming = false; // persists dream overlay across map transitions
 
     loop {
         let dt = get_frame_time();
@@ -380,8 +383,8 @@ async fn main() {
                     } else {
                         sparky_push_timer = 0.0;
                     }
-                    // Long-press (0.3s) lets you walk through Sparky
-                    let sparky_blocks = pushing_sparky && sparky_push_timer < 0.3;
+                    // Brief hold (0.12s) lets you walk through Sparky — tap just turns
+                    let sparky_blocks = pushing_sparky && sparky_push_timer < 0.12;
                     if moved && nx >= 0 && ny >= 0
                         && (nx as usize) < map.width && (ny as usize) < map.height
                         && !map.is_solid(nx as usize, ny as usize)
@@ -429,7 +432,7 @@ async fn main() {
                         // Single option (Talk only) → auto-trigger
                         if opts.len() == 1 {
                             let lines = npc_dialogue_lines(target);
-                            if menu_can_challenge {
+                            if menu_can_challenge && macroquad::rand::gen_range(0.0, 1.0) < 0.4 {
                                 pending_challenge = true;
                             }
                             dialogue.start(lines);
@@ -459,7 +462,9 @@ async fn main() {
                         menu_can_challenge = true;
 
                         if opts.len() == 1 {
-                            pending_challenge = true;
+                            if macroquad::rand::gen_range(0.0, 1.0) < 0.5 {
+                                pending_challenge = true;
+                            }
                             dialogue.start(sparky_dialogue_lines());
                             state = GameState::Dialogue;
                         } else {
@@ -495,6 +500,14 @@ async fn main() {
             GameState::Challenge => {
                 let mut dismiss = false;
                 if let Some(ref mut ac) = active_challenge {
+                    // Auto-dismiss timer for correct answers
+                    if ac.state.phase == Phase::Complete && ac.state.correct == Some(true) {
+                        ac.complete_timer += dt;
+                        if ac.complete_timer >= 2.5 {
+                            dismiss = true;
+                        }
+                    }
+
                     // Keyboard input
                     if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge) {
                         ac.state = challenge_reducer(ac.state.clone(), action);
@@ -565,8 +578,20 @@ async fn main() {
                 let dest_y = portal.to_y;
                 let dest_dir = portal.dir;
 
+                // Track dream state across transitions
+                if dest_map == "dream" {
+                    dreaming = true;
+                } else if portal.from_map == "dream" && dest_map == "overworld" {
+                    // Exiting dream back to overworld ends the dream
+                    dreaming = false;
+                }
+
                 // Swap map
                 map = Map::by_id(dest_map);
+                // Apply dream overlay if dreaming (affects non-dream maps too)
+                if dreaming && map.render_mode == tilemap::RenderMode::Normal {
+                    map.render_mode = tilemap::RenderMode::Dream;
+                }
                 npcs = npc::npcs_for_map(map.id);
 
                 // Teleport player
@@ -654,10 +679,14 @@ async fn main() {
                     ui::interaction_menu::MenuAction::Select(opt_type) => match opt_type.as_str() {
                         "talk" => {
                             if menu_target_id == "sparky" {
-                                if menu_can_challenge { pending_challenge = true; }
+                                if menu_can_challenge && macroquad::rand::gen_range(0.0, 1.0) < 0.5 {
+                                    pending_challenge = true;
+                                }
                                 dialogue.start(sparky_dialogue_lines());
                             } else if let Some(target) = npcs.iter().find(|n| n.id == menu_target_id) {
-                                if menu_can_challenge { pending_challenge = true; }
+                                if menu_can_challenge && macroquad::rand::gen_range(0.0, 1.0) < 0.4 {
+                                    pending_challenge = true;
+                                }
                                 dialogue.start(npc_dialogue_lines(target));
                             }
                             state = GameState::Dialogue;

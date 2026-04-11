@@ -90,17 +90,23 @@ fn draw_dots(a: i32, b: i32, op: &str, cx: f32, cy: f32) {
             }
 
             let label_y = cy + ((a - 1) / 10 + 1) as f32 * (step + gap) + 12.0;
-            let label = format!("{} \u{2212} {} = count the blue ones!", a, b);
+            let label = format!("{} - {} = count the blue ones!", a, b);
             let lw = measure_text(&label, None, 16, 1.0).width;
             draw_text(&label, cx - lw / 2.0, label_y, 16.0, BLUE_A);
         }
         "\u{00d7}" | "*" => {
             // a groups of b dots
-            let groups = a.min(6);
+            let max_w = 500.0;
+            let groups = a.min(8);
             let per_group = b.min(10);
             let group_gap = 30.0;
-            let group_w = per_group as f32 * step + group_gap;
-            let total_w = groups as f32 * group_w - group_gap;
+            let naive_w = groups as f32 * (per_group as f32 * step + group_gap) - group_gap;
+            let scale = if naive_w > max_w { max_w / naive_w } else { 1.0 };
+            let s_dot_r = dot_r * scale;
+            let s_step = step * scale;
+            let s_group_gap = group_gap * scale;
+            let s_group_w = per_group as f32 * s_step + s_group_gap;
+            let total_w = groups as f32 * s_group_w - s_group_gap;
             let start_x = cx - total_w / 2.0;
 
             let label = format!("{} groups of {}", a, b);
@@ -108,21 +114,28 @@ fn draw_dots(a: i32, b: i32, op: &str, cx: f32, cy: f32) {
             draw_text(&label, cx - lw / 2.0, cy - 8.0, 14.0, HINT_GRAY);
 
             for g in 0..groups {
-                let gx = start_x + g as f32 * group_w;
+                let gx = start_x + g as f32 * s_group_w;
                 let color = if g % 2 == 0 { BLUE_A } else { YELLOW_B };
                 for d in 0..per_group {
-                    let dx = gx + d as f32 * step + dot_r;
-                    let dy = cy + 10.0 + dot_r;
-                    draw_circle(dx, dy, dot_r, color);
+                    let dx = gx + d as f32 * s_step + s_dot_r;
+                    let dy = cy + 10.0 + s_dot_r;
+                    draw_circle(dx, dy, s_dot_r, color);
                 }
             }
         }
         "\u{00f7}" | "/" => {
             // a split into b groups of answer
-            let groups = b.min(6);
+            let max_w = 500.0;
+            let groups = b.min(8);
             let per_group = (a / b.max(1)).min(12);
-            let group_w = per_group as f32 * step + 10.0;
-            let total_w = (groups as f32 * group_w).min(500.0);
+            // Scale down dot size if content would overflow
+            let naive_group_w = per_group as f32 * step + 10.0;
+            let naive_total = groups as f32 * naive_group_w;
+            let scale = if naive_total > max_w { max_w / naive_total } else { 1.0 };
+            let s_dot_r = dot_r * scale;
+            let s_step = step * scale;
+            let s_group_w = per_group as f32 * s_step + 10.0 * scale;
+            let total_w = groups as f32 * s_group_w;
             let start_x = cx - total_w / 2.0;
 
             let label = format!("{} split into {} groups", a, b);
@@ -130,21 +143,22 @@ fn draw_dots(a: i32, b: i32, op: &str, cx: f32, cy: f32) {
             draw_text(&label, cx - lw / 2.0, cy - 8.0, 14.0, HINT_GRAY);
 
             for g in 0..groups {
-                let gx = start_x + g as f32 * group_w;
+                let gx = start_x + g as f32 * s_group_w;
                 // Group outline
-                draw_rectangle_lines(gx, cy + 2.0, group_w - 8.0, dot_r * 2.0 + 8.0, 1.0,
+                draw_rectangle_lines(gx, cy + 2.0, s_group_w - 4.0 * scale, s_dot_r * 2.0 + 8.0 * scale, 1.0,
                     Color::new(0.329, 0.431, 0.478, 1.0));
                 let color = if g % 2 == 0 { BLUE_A } else { YELLOW_B };
                 for d in 0..per_group {
-                    let dx = gx + 5.0 + d as f32 * step + dot_r;
-                    let dy = cy + 7.0 + dot_r;
-                    draw_circle(dx, dy, dot_r, color);
+                    let dx = gx + 4.0 * scale + d as f32 * s_step + s_dot_r;
+                    let dy = cy + 4.0 * scale + s_dot_r + 2.0;
+                    draw_circle(dx, dy, s_dot_r, color);
                 }
                 // Group count label
                 let count_str = format!("{}", per_group);
-                let cw = measure_text(&count_str, None, 11, 1.0).width;
-                draw_text(&count_str, gx + (group_w - 8.0) / 2.0 - cw / 2.0,
-                    cy + dot_r * 2.0 + 22.0, 11.0, HINT_GRAY);
+                let font_size = (11.0 * scale).max(9.0);
+                let cw = measure_text(&count_str, None, font_size as u16, 1.0).width;
+                draw_text(&count_str, gx + (s_group_w - 4.0 * scale) / 2.0 - cw / 2.0,
+                    cy + s_dot_r * 2.0 + 18.0 * scale + 4.0, font_size, HINT_GRAY);
             }
         }
         _ => {}
@@ -289,13 +303,19 @@ fn draw_base10_blocks(a: i32, b: i32, op: &str, answer: i32, cx: f32, cy: f32) {
             }
         }
         "\u{00f7}" | "/" => {
-            let groups = b.min(6);
+            let max_w = 500.0;
+            let groups = b.min(8);
             let per_group = answer.min(12);
             let dot_r = 5.0;
             let dot_gap = 3.0;
             let step = dot_r * 2.0 + dot_gap;
-            let group_w = per_group as f32 * step + 10.0;
-            let total_w = (groups as f32 * group_w).min(500.0);
+            let naive_group_w = per_group as f32 * step + 10.0;
+            let naive_total = groups as f32 * naive_group_w;
+            let scale = if naive_total > max_w { max_w / naive_total } else { 1.0 };
+            let s_dot_r = dot_r * scale;
+            let s_step = step * scale;
+            let s_group_w = per_group as f32 * s_step + 10.0 * scale;
+            let total_w = groups as f32 * s_group_w;
             let start_x = cx - total_w / 2.0;
 
             let label = format!("{} split into {} groups", a, b);
@@ -303,19 +323,20 @@ fn draw_base10_blocks(a: i32, b: i32, op: &str, answer: i32, cx: f32, cy: f32) {
             draw_text(&label, cx - lw / 2.0, cy - 8.0, 14.0, HINT_GRAY);
 
             for g in 0..groups {
-                let gx = start_x + g as f32 * group_w;
-                draw_rectangle_lines(gx, cy + 2.0, group_w - 8.0, dot_r * 2.0 + 8.0, 1.0,
+                let gx = start_x + g as f32 * s_group_w;
+                draw_rectangle_lines(gx, cy + 2.0, s_group_w - 4.0 * scale, s_dot_r * 2.0 + 8.0 * scale, 1.0,
                     Color::new(0.329, 0.431, 0.478, 1.0));
                 let color = if g % 2 == 0 { BLUE_A } else { YELLOW_B };
                 for d in 0..per_group {
-                    let dx = gx + 5.0 + d as f32 * step + dot_r;
-                    let dy = cy + 7.0 + dot_r;
-                    draw_circle(dx, dy, dot_r, color);
+                    let dx = gx + 4.0 * scale + d as f32 * s_step + s_dot_r;
+                    let dy = cy + 4.0 * scale + s_dot_r + 2.0;
+                    draw_circle(dx, dy, s_dot_r, color);
                 }
                 let count_str = format!("{}", per_group);
-                let cw = measure_text(&count_str, None, 11, 1.0).width;
-                draw_text(&count_str, gx + (group_w - 8.0) / 2.0 - cw / 2.0,
-                    cy + dot_r * 2.0 + 22.0, 11.0, HINT_GRAY);
+                let font_size = (11.0 * scale).max(9.0);
+                let cw = measure_text(&count_str, None, font_size as u16, 1.0).width;
+                draw_text(&count_str, gx + (s_group_w - 4.0 * scale) / 2.0 - cw / 2.0,
+                    cy + s_dot_r * 2.0 + 18.0 * scale + 4.0, font_size, HINT_GRAY);
             }
         }
         _ => {}
@@ -324,6 +345,13 @@ fn draw_base10_blocks(a: i32, b: i32, op: &str, answer: i32, cx: f32, cy: f32) {
 
 fn draw_op_symbol(x: f32, y: f32, symbol: &str, num_a: i32, num_b: i32) {
     let h = content_height(num_a).max(content_height(num_b));
-    let sw = measure_text(symbol, None, 28, 1.0).width;
-    draw_text(symbol, x - sw / 2.0, y + h / 2.0 + 4.0, 28.0, WHITE);
+    let cy = y + h / 2.0 + 4.0;
+    // Draw minus as a line since the default font may lack U+2212
+    if symbol == "\u{2212}" || symbol == "-" {
+        let half_w = 8.0;
+        draw_line(x - half_w, cy - 4.0, x + half_w, cy - 4.0, 3.0, WHITE);
+    } else {
+        let sw = measure_text(symbol, None, 28, 1.0).width;
+        draw_text(symbol, x - sw / 2.0, cy, 28.0, WHITE);
+    }
 }

@@ -6,6 +6,7 @@ use crate::tilemap::TILE_SIZE;
 pub enum SpriteType {
     Mommy,
     Sage,
+    Shopkeeper,
     Dog,
     Kid1,
     Kid2,
@@ -30,6 +31,7 @@ impl Npc {
         match self.sprite {
             SpriteType::Mommy => sprites::npcs::draw_mommy(x, y, time),
             SpriteType::Sage => sprites::npcs::draw_sage(x, y, time),
+            SpriteType::Shopkeeper => sprites::npcs::draw_shopkeeper(x, y, time),
             SpriteType::Dog => sprites::npcs::draw_dog(x, y, time),
             SpriteType::Kid1 => sprites::npcs::draw_kid(x, y,
                 Color::from_rgba(255, 112, 67, 255),  // orange hair
@@ -68,7 +70,7 @@ pub fn npcs_for_map(map_id: &str) -> Vec<Npc> {
         ],
         "shop" => vec![
             Npc { id: "shopkeeper", name: "Bolt the Shopkeeper", tile_x: 5, tile_y: 2,
-                sprite: SpriteType::Sage, can_receive_gifts: true, never_challenge: false },
+                sprite: SpriteType::Shopkeeper, can_receive_gifts: true, never_challenge: false },
         ],
         "dream" => vec![
             Npc { id: "dream_sage", name: "???", tile_x: 15, tile_y: 8,

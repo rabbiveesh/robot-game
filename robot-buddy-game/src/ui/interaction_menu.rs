@@ -15,8 +15,8 @@ pub fn draw_interaction_menu(options: &[MenuOption]) -> Option<MenuAction> {
     let sw = screen_width();
     let sh = screen_height();
 
-    let btn_w = 140.0;
-    let btn_h = 38.0;
+    let btn_w = 160.0;
+    let btn_h = 44.0;
     let gap = 10.0;
     let total_w = options.len() as f32 * btn_w + (options.len() as f32 - 1.0) * gap;
     let start_x = sw / 2.0 - total_w / 2.0;
@@ -42,8 +42,8 @@ pub fn draw_interaction_menu(options: &[MenuOption]) -> Option<MenuAction> {
         draw_rectangle_lines(bx, y, btn_w, btn_h, 1.5, Color::new(1.0, 1.0, 1.0, 0.3));
 
         let label = format!("[{}] {}", opt.key, opt.label);
-        let tw = measure_text(&label, None, 16, 1.0).width;
-        draw_text(&label, bx + btn_w / 2.0 - tw / 2.0, y + 25.0, 16.0, WHITE);
+        let tw = measure_text(&label, None, 20, 1.0).width;
+        draw_text(&label, bx + btn_w / 2.0 - tw / 2.0, y + 28.0, 20.0, WHITE);
 
         // Click
         if clicked && hover {

@@ -35,6 +35,13 @@ const PRAISE_COLOR: Color = Color::new(1.0, 0.835, 0.310, 1.0);    // #FFD54F
 const GREEN_ANS: Color = Color::new(0.412, 0.941, 0.682, 1.0);     // #69F0AE
 const HINT_GRAY: Color = Color::new(0.471, 0.565, 0.604, 1.0);     // #78909C
 
+/// Replace Unicode math symbols with ASCII equivalents that render in macroquad's default font.
+fn sanitize_math_text(text: &str) -> String {
+    text.replace('\u{2212}', "-")  // minus sign → hyphen-minus
+        .replace('\u{00d7}', "x")  // multiplication sign → letter x
+        .replace('\u{00f7}', "/")  // division sign → slash
+}
+
 fn round_rect(x: f32, y: f32, w: f32, h: f32, r: f32, color: Color) {
     // Center rect + corner circles for rounded appearance
     draw_rectangle(x + r, y, w - 2.0 * r, h, color);
@@ -70,11 +77,11 @@ pub fn draw_challenge(cs: &ChallengeState, challenge: &Challenge, time: f32) -> 
     round_rect(panel_x, panel_y, panel_w, panel_h, 16.0, DARK_BG);
     round_rect_lines(panel_x, panel_y, panel_w, panel_h, 16.0, 4.0, GOLD);
 
-    // Question
-    let q_text = &cs.question.display;
+    // Question (replace Unicode math symbols that may not be in default font)
+    let q_text = sanitize_math_text(&cs.question.display);
     let q_size = 30.0;
-    let q_w = measure_text(q_text, None, q_size as u16, 1.0).width;
-    draw_text(q_text, panel_x + panel_w / 2.0 - q_w / 2.0, panel_y + 60.0, q_size, WHITE);
+    let q_w = measure_text(&q_text, None, q_size as u16, 1.0).width;
+    draw_text(&q_text, panel_x + panel_w / 2.0 - q_w / 2.0, panel_y + 60.0, q_size, WHITE);
 
     // CRA visual hint (if show-me was used)
     let mut hint_offset = 0.0;
@@ -123,7 +130,7 @@ pub fn draw_challenge(cs: &ChallengeState, challenge: &Challenge, time: f32) -> 
 
         // Key hint (1, 2, 3)
         let key_label = format!("{}", i + 1);
-        draw_text(&key_label, bx + 8.0, by + 18.0, 14.0, Color::new(1.0, 1.0, 1.0, 0.4));
+        draw_text(&key_label, bx + 8.0, by + 20.0, 16.0, Color::new(1.0, 1.0, 1.0, 0.4));
 
         let answer: i32 = choice.text.parse().unwrap_or(0);
         choice_bounds.push(ChoiceBound {
@@ -137,16 +144,16 @@ pub fn draw_challenge(cs: &ChallengeState, challenge: &Challenge, time: f32) -> 
     let mut scaffold = ScaffoldBounds { show_me: None, tell_me: None };
     if cs.phase == Phase::Presented || cs.phase == Phase::Feedback {
         let scaff_y = btn_y + btn_h + 12.0;
-        let scaff_btn_w = 90.0;
-        let scaff_btn_h = 30.0;
+        let scaff_btn_w = 110.0;
+        let scaff_btn_h = 36.0;
         let scaff_gap = 10.0;
 
         // Show Me (only if not already at Concrete)
         if cs.render_hint.cra_stage != CraStage::Concrete {
             let sm_x = panel_x + panel_w / 2.0 - scaff_btn_w - scaff_gap / 2.0;
             round_rect(sm_x, scaff_y, scaff_btn_w, scaff_btn_h, 6.0, SCAFFOLD_BG);
-            let sm_tw = measure_text("Show me", None, 13, 1.0).width;
-            draw_text("Show me", sm_x + scaff_btn_w / 2.0 - sm_tw / 2.0, scaff_y + scaff_btn_h / 2.0 + 4.0, 13.0, SCAFFOLD_TXT);
+            let sm_tw = measure_text("Show me", None, 16, 1.0).width;
+            draw_text("Show me", sm_x + scaff_btn_w / 2.0 - sm_tw / 2.0, scaff_y + scaff_btn_h / 2.0 + 5.0, 16.0, SCAFFOLD_TXT);
             scaffold.show_me = Some((sm_x, scaff_y, scaff_btn_w, scaff_btn_h));
         }
 
@@ -157,8 +164,8 @@ pub fn draw_challenge(cs: &ChallengeState, challenge: &Challenge, time: f32) -> 
             panel_x + panel_w / 2.0 - scaff_btn_w / 2.0
         };
         round_rect(tm_x, scaff_y, scaff_btn_w, scaff_btn_h, 6.0, SCAFFOLD_DIM);
-        let tm_tw = measure_text("Tell me", None, 13, 1.0).width;
-        draw_text("Tell me", tm_x + scaff_btn_w / 2.0 - tm_tw / 2.0, scaff_y + scaff_btn_h / 2.0 + 4.0, 13.0, SCAFFOLD_TXT_DIM);
+        let tm_tw = measure_text("Tell me", None, 16, 1.0).width;
+        draw_text("Tell me", tm_x + scaff_btn_w / 2.0 - tm_tw / 2.0, scaff_y + scaff_btn_h / 2.0 + 5.0, 16.0, SCAFFOLD_TXT_DIM);
         scaffold.tell_me = Some((tm_x, scaff_y, scaff_btn_w, scaff_btn_h));
     }
 
@@ -174,11 +181,11 @@ pub fn draw_challenge(cs: &ChallengeState, challenge: &Challenge, time: f32) -> 
 
         // Dismiss hint (for both correct and post-teaching)
         let dismiss = "Press SPACE to continue";
-        let dw = measure_text(dismiss, None, 14, 1.0).width;
+        let dw = measure_text(dismiss, None, 18, 1.0).width;
         let blink = (get_time() * 4.0).sin() > 0.0;
         if blink {
             let dismiss_y = if cs.correct == Some(true) { btn_y + btn_h + 85.0 } else { btn_y + btn_h + 55.0 };
-            draw_text(dismiss, panel_x + panel_w / 2.0 - dw / 2.0, dismiss_y, 14.0, HINT_GRAY);
+            draw_text(dismiss, panel_x + panel_w / 2.0 - dw / 2.0, dismiss_y, 18.0, HINT_GRAY);
         }
     }
 
@@ -197,12 +204,13 @@ fn draw_teaching_phase(cs: &ChallengeState, challenge: &Challenge, time: f32, sw
 
     // Header
     let header = if cs.told_me { "Here's how it works!" } else { "Let's figure it out!" };
-    let hw = measure_text(header, None, 16, 1.0).width;
-    draw_text(header, panel_x + panel_w / 2.0 - hw / 2.0, panel_y + 30.0, 16.0, ORANGE);
+    let hw = measure_text(header, None, 20, 1.0).width;
+    draw_text(header, panel_x + panel_w / 2.0 - hw / 2.0, panel_y + 30.0, 20.0, ORANGE);
 
     // Question
-    let qw = measure_text(&cs.question.display, None, 24, 1.0).width;
-    draw_text(&cs.question.display, panel_x + panel_w / 2.0 - qw / 2.0, panel_y + 65.0, 24.0, WHITE);
+    let q_text = sanitize_math_text(&cs.question.display);
+    let qw = measure_text(&q_text, None, 24, 1.0).width;
+    draw_text(&q_text, panel_x + panel_w / 2.0 - qw / 2.0, panel_y + 65.0, 24.0, WHITE);
 
     // Visual walkthrough (always concrete in teaching)
     let viz_cx = panel_x + panel_w / 2.0;
@@ -222,8 +230,8 @@ fn draw_teaching_phase(cs: &ChallengeState, challenge: &Challenge, time: f32, sw
 
     // Dismiss hint
     let dismiss = "Press SPACE or click to continue";
-    let dw = measure_text(dismiss, None, 14, 1.0).width;
-    draw_text(dismiss, panel_x + panel_w / 2.0 - dw / 2.0, panel_y + panel_h - 15.0, 14.0, HINT_GRAY);
+    let dw = measure_text(dismiss, None, 18, 1.0).width;
+    draw_text(dismiss, panel_x + panel_w / 2.0 - dw / 2.0, panel_y + panel_h - 15.0, 18.0, HINT_GRAY);
 
     (vec![], ScaffoldBounds { show_me: None, tell_me: None })
 }

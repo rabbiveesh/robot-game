@@ -73,6 +73,39 @@ pub fn draw_sage(x: f32, y: f32, _time: f32) {
     );
 }
 
+pub fn draw_shopkeeper(x: f32, y: f32, _time: f32) {
+    let cx = x + TS / 2.0;
+    let cy = y + TS / 2.0 + 4.0;
+
+    // Shadow
+    draw_ellipse(cx, y + TS - 4.0, 12.0, 5.0, 0.0, Color::from_rgba(0, 0, 0, 40));
+
+    // Apron / robe (pink)
+    draw_rectangle(cx - 11.0, cy - 4.0, 22.0, 22.0, Color::from_rgba(233, 30, 99, 255));
+
+    // Head
+    draw_circle(cx, cy - 8.0, 9.0, Color::from_rgba(255, 204, 128, 255));
+
+    // Shopkeeper hat (pink beret-style, no wizard point)
+    let hat = Color::from_rgba(233, 30, 99, 255);
+    draw_rectangle(cx - 10.0, cy - 18.0, 20.0, 8.0, hat);
+    draw_rectangle(cx - 12.0, cy - 12.0, 24.0, 4.0, hat);
+    // Coin emblem on hat
+    draw_circle(cx, cy - 15.0, 4.0, Color::from_rgba(255, 213, 79, 255));
+    draw_text("$", cx - 3.0, cy - 12.0, 10.0, Color::from_rgba(233, 30, 99, 255));
+
+    // Eyes
+    let eye = Color::from_rgba(51, 51, 51, 255);
+    draw_rectangle(cx - 5.0, cy - 10.0, 3.0, 3.0, eye);
+    draw_rectangle(cx + 2.0, cy - 10.0, 3.0, 3.0, eye);
+
+    // Smile (wider, friendlier)
+    draw_line(cx - 4.0, cy - 3.0, cx + 4.0, cy - 3.0, 1.5, Color::from_rgba(51, 51, 51, 255));
+    // Mustache
+    draw_line(cx - 6.0, cy - 5.0, cx - 1.0, cy - 4.0, 1.5, Color::from_rgba(78, 52, 46, 255));
+    draw_line(cx + 1.0, cy - 4.0, cx + 6.0, cy - 5.0, 1.5, Color::from_rgba(78, 52, 46, 255));
+}
+
 pub fn draw_kid(x: f32, y: f32, hair_color: Color, shirt_color: Color, pigtails: bool, time: f32) {
     let cx = x + TS / 2.0;
     let cy = y + TS / 2.0 + 6.0;
