@@ -309,20 +309,6 @@ impl NewGameForm {
         draw_text(&band_display, sw / 2.0 - bdw / 2.0, 418.0, 22.0,
             Color::from_rgba(255, 213, 79, 255));
 
-        // Left/right arrows for level
-        let arr_left_x = sw / 2.0 - bdw / 2.0 - 10.0;
-        let arr_right_x = sw / 2.0 + bdw / 2.0 + 10.0;
-        let arr_y = 405.0;
-        let arr_h = 20.0;
-        if clicked && mx >= arr_left_x - 20.0 && mx <= arr_left_x + 10.0
-            && my >= arr_y && my <= arr_y + arr_h {
-            // handled in handle_level_click
-        }
-        if clicked && mx >= arr_right_x - 10.0 && mx <= arr_right_x + 20.0
-            && my >= arr_y && my <= arr_y + arr_h {
-            // handled in handle_level_click
-        }
-
         // Start button
         let start_w = 260.0;
         let start_h = 50.0;
@@ -366,7 +352,7 @@ impl NewGameForm {
         action
     }
 
-    pub fn handle_gender_click(&mut self) {
+    pub fn handle_form_clicks(&mut self) {
         let sw = screen_width();
         let btn_w = 120.0;
         let gap = 20.0;

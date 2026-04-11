@@ -282,7 +282,8 @@ async fn main() {
                             if let Some(ref save) = save_slots[slot] {
                                 load_from_save(save, &mut map, &mut player, &mut sparky,
                                     &mut npcs, &mut player_name, &mut player_gender,
-                                    &mut math_band, &mut dum_dums, &mut play_time);
+                                    &mut math_band, &mut dum_dums, &mut play_time,
+                                    &mut gifts_given);
                                 active_slot = slot;
                                 auto_save_timer = 0.0;
 
@@ -308,7 +309,7 @@ async fn main() {
             GameState::NewGame => {
                 if let Some(ref mut form) = new_game_form {
                     form.update(dt);
-                    form.handle_gender_click();
+                    form.handle_form_clicks();
                     if let Some(action) = form.draw() {
                         match action {
                             NewGameAction::Start => {
@@ -329,7 +330,8 @@ async fn main() {
 
                                 // Save immediately
                                 let save = gather_save_data(&player, &sparky, &map,
-                                    &player_name, player_gender, math_band, dum_dums, play_time);
+                                    &player_name, player_gender, math_band, dum_dums, play_time,
+                                    &gifts_given);
                                 save::save_to_slot(slot, &save);
                                 save_slots = save::load_all_slots();
                                 auto_save_timer = 0.0;
@@ -401,7 +403,7 @@ async fn main() {
                     // Check for chest tile in front
                     let facing = facing_tile(player.tile_x, player.tile_y, player.dir);
                     let facing_chest = facing.0 < map.width && facing.1 < map.height
-                        && map.tiles[facing.1][facing.0] == 13;
+                        && map.tiles[facing.1][facing.0] == tilemap::Tile::Chest;
 
                     if facing_chest {
                         // Chest: auto-trigger challenge with intro dialogue
@@ -560,7 +562,8 @@ async fn main() {
             if auto_save_timer >= 30.0 {
                 auto_save_timer = 0.0;
                 let save = gather_save_data(&player, &sparky, &map,
-                    &player_name, player_gender, math_band, dum_dums, play_time);
+                    &player_name, player_gender, math_band, dum_dums, play_time,
+                    &gifts_given);
                 save::save_to_slot(active_slot, &save);
             }
         }
@@ -576,7 +579,6 @@ async fn main() {
                 let dest_map = portal.to_map;
                 let dest_x = portal.to_x;
                 let dest_y = portal.to_y;
-                let dest_dir = portal.dir;
 
                 // Track dream state across transitions
                 if dest_map == "dream" {
@@ -602,12 +604,7 @@ async fn main() {
                 player.target_x = player.x;
                 player.target_y = player.y;
                 player.moving = false;
-                player.dir = match dest_dir {
-                    0 => Dir::Up,
-                    1 => Dir::Down,
-                    2 => Dir::Left,
-                    _ => Dir::Right,
-                };
+                player.dir = portal.dir;
 
                 // Place Sparky adjacent to player
                 let sparky_pos = find_sparky_spot(dest_x, dest_y, &map, &npcs);
@@ -811,6 +808,7 @@ fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Np
 fn gather_save_data(
     player: &Entity, sparky: &Sparky, map: &Map,
     name: &str, gender: Gender, band: u8, dum_dums: u32, play_time: f32,
+    gifts_given: &HashMap<String, u32>,
 ) -> SaveData {
     SaveData {
         version: 1,
@@ -819,18 +817,14 @@ fn gather_save_data(
         map_id: map.id.to_string(),
         player_x: player.tile_x,
         player_y: player.tile_y,
-        player_dir: match player.dir {
-            Dir::Up => 0,
-            Dir::Down => 1,
-            Dir::Left => 2,
-            Dir::Right => 3,
-        },
+        player_dir: player.dir,
         sparky_x: sparky.entity.tile_x,
         sparky_y: sparky.entity.tile_y,
         math_band: band,
         dum_dums,
         play_time,
         timestamp: 0,
+        gifts_given: gifts_given.clone(),
     }
 }
 
@@ -838,12 +832,14 @@ fn load_from_save(
     save: &SaveData, map: &mut Map, player: &mut Entity, sparky: &mut Sparky,
     npcs: &mut Vec<npc::Npc>, name: &mut String, gender: &mut Gender,
     band: &mut u8, dum_dums: &mut u32, play_time: &mut f32,
+    gifts_given: &mut HashMap<String, u32>,
 ) {
     *name = save.name.clone();
     *gender = save.gender;
     *band = save.math_band;
     *dum_dums = save.dum_dums;
     *play_time = save.play_time;
+    *gifts_given = save.gifts_given.clone();
 
     *map = Map::by_id(&save.map_id);
     *npcs = npc::npcs_for_map(map.id);
@@ -855,12 +851,7 @@ fn load_from_save(
     player.target_x = player.x;
     player.target_y = player.y;
     player.moving = false;
-    player.dir = match save.player_dir {
-        0 => Dir::Up,
-        1 => Dir::Down,
-        2 => Dir::Left,
-        _ => Dir::Right,
-    };
+    player.dir = save.player_dir;
 
     sparky.entity.tile_x = save.sparky_x;
     sparky.entity.tile_y = save.sparky_y;

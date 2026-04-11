@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use crate::sprites::Dir;
 
 /// Persistent save data for one slot.
 #[derive(Clone, Serialize, Deserialize)]
@@ -9,13 +11,30 @@ pub struct SaveData {
     pub map_id: String,
     pub player_x: usize,
     pub player_y: usize,
-    pub player_dir: u8,
+    #[serde(deserialize_with = "deserialize_dir")]
+    pub player_dir: Dir,
     pub sparky_x: usize,
     pub sparky_y: usize,
     pub math_band: u8,
     pub dum_dums: u32,
     pub play_time: f32,
     pub timestamp: u64,
+    #[serde(default)]
+    pub gifts_given: HashMap<String, u32>,
+}
+
+/// Deserialize Dir from either the enum name ("Up") or legacy u8 (0).
+fn deserialize_dir<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Dir, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum DirOrU8 {
+        Dir(Dir),
+        Legacy(u8),
+    }
+    match DirOrU8::deserialize(d)? {
+        DirOrU8::Dir(dir) => Ok(dir),
+        DirOrU8::Legacy(v) => Ok(Dir::from_u8(v)),
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -33,13 +52,14 @@ impl SaveData {
             map_id: "overworld".into(),
             player_x: 14,
             player_y: 12,
-            player_dir: 1, // down
+            player_dir: Dir::Down,
             sparky_x: 14,
             sparky_y: 13,
             math_band: 1,
             dum_dums: 0,
             play_time: 0.0,
             timestamp: current_timestamp(),
+            gifts_given: HashMap::new(),
         }
     }
 

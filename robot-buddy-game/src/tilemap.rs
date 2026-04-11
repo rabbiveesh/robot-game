@@ -1,5 +1,36 @@
 use macroquad::prelude::*;
 
+use crate::sprites::Dir;
+
+#[derive(Clone, Copy, PartialEq)]
+#[repr(u8)]
+pub enum Tile {
+    Grass = 0,
+    Path = 1,
+    Water = 2,
+    Wall = 3,
+    Tree = 4,
+    Flower = 5,
+    HouseWall = 6,
+    Roof = 7,
+    Door = 8,
+    Window = 9,
+    Fence = 10,
+    Sign = 11,
+    Bridge = 12,
+    Chest = 13,
+    WoodFloor = 14,
+    Rug = 15,
+    Table = 16,
+    Bookshelf = 17,
+    // Glitch-only tiles (doghouse)
+    Glitch95 = 95,
+    Glitch96 = 96,
+    Glitch97 = 97,
+    Glitch98 = 98,
+    GlitchWall = 99,
+}
+
 pub const TILE_SIZE: f32 = 48.0;
 
 // ─── PORTALS ────────────────────────────────────────────
@@ -12,7 +43,7 @@ pub struct Portal {
     pub to_map: &'static str,
     pub to_x: usize,
     pub to_y: usize,
-    pub dir: u8, // 0=up, 1=down, 2=left, 3=right
+    pub dir: Dir,
     pub secret: bool,
 }
 
@@ -20,27 +51,27 @@ pub struct Portal {
 pub fn all_portals() -> &'static [Portal] {
     &[
         // Home: overworld door → home interior, home door → overworld
-        Portal { from_map: "overworld", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: 0, secret: false },
-        Portal { from_map: "home", from_x: 4, from_y: 6, to_map: "overworld", to_x: 5, to_y: 8, dir: 1, secret: false },
+        Portal { from_map: "overworld", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false },
+        Portal { from_map: "home", from_x: 4, from_y: 6, to_map: "overworld", to_x: 5, to_y: 8, dir: Dir::Down, secret: false },
         // Lab: overworld east house → lab interior
-        Portal { from_map: "overworld", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: 0, secret: false },
-        Portal { from_map: "lab", from_x: 5, from_y: 7, to_map: "overworld", to_x: 22, to_y: 6, dir: 1, secret: false },
+        Portal { from_map: "overworld", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false },
+        Portal { from_map: "lab", from_x: 5, from_y: 7, to_map: "overworld", to_x: 22, to_y: 6, dir: Dir::Down, secret: false },
         // Shop: overworld south house → shop interior
-        Portal { from_map: "overworld", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: 0, secret: false },
-        Portal { from_map: "shop", from_x: 4, from_y: 6, to_map: "overworld", to_x: 24, to_y: 18, dir: 1, secret: false },
+        Portal { from_map: "overworld", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false },
+        Portal { from_map: "shop", from_x: 4, from_y: 6, to_map: "overworld", to_x: 24, to_y: 18, dir: Dir::Down, secret: false },
         // SECRET: Dream world — water tile past bridge
-        Portal { from_map: "overworld", from_x: 16, from_y: 14, to_map: "dream", to_x: 14, to_y: 13, dir: 1, secret: true },
-        Portal { from_map: "dream", from_x: 16, from_y: 14, to_map: "overworld", to_x: 13, to_y: 14, dir: 2, secret: false },
+        Portal { from_map: "overworld", from_x: 16, from_y: 14, to_map: "dream", to_x: 14, to_y: 13, dir: Dir::Down, secret: true },
+        Portal { from_map: "dream", from_x: 16, from_y: 14, to_map: "overworld", to_x: 13, to_y: 14, dir: Dir::Left, secret: false },
         // Dream-mode mirrors of overworld portals (same doors work in dream)
-        Portal { from_map: "dream", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: 0, secret: false },
-        Portal { from_map: "dream", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: 0, secret: false },
-        Portal { from_map: "dream", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: 0, secret: false },
+        Portal { from_map: "dream", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false },
+        Portal { from_map: "dream", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false },
+        Portal { from_map: "dream", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false },
         // SECRET: Doghouse land — roof tile behind home
-        Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: 1, secret: true },
-        Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: 1, secret: false },
+        Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true },
+        Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: Dir::Down, secret: false },
         // SECRET: Hidden grove — tree at top border
-        Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: 0, secret: true },
-        Portal { from_map: "grove", from_x: 5, from_y: 8, to_map: "overworld", to_x: 15, to_y: 1, dir: 1, secret: false },
+        Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true },
+        Portal { from_map: "grove", from_x: 5, from_y: 8, to_map: "overworld", to_x: 15, to_y: 1, dir: Dir::Down, secret: false },
     ]
 }
 
@@ -68,7 +99,7 @@ pub struct Map {
     pub id: &'static str,
     pub width: usize,
     pub height: usize,
-    pub tiles: Vec<Vec<u8>>,
+    pub tiles: Vec<Vec<Tile>>,
     pub render_mode: RenderMode,
 }
 
@@ -86,126 +117,147 @@ impl Map {
     pub fn is_solid(&self, col: usize, row: usize) -> bool {
         if col >= self.width || row >= self.height { return true; }
         if is_secret_walkable(self.id, col, row) { return false; }
-        let id = self.tiles[row][col];
-        matches!(id, 2 | 3 | 4 | 6 | 7 | 9 | 10 | 11 | 13 | 16 | 17 | 99)
+        let tile = self.tiles[row][col];
+        matches!(tile, Tile::Water | Tile::Wall | Tile::Tree | Tile::HouseWall | Tile::Roof | Tile::Window | Tile::Fence | Tile::Sign | Tile::Chest | Tile::Table | Tile::Bookshelf | Tile::GlitchWall)
     }
 
+    #[allow(non_snake_case)]
     pub fn overworld() -> Self {
+        use Tile::*;
+        let (Gr, Pa, Wa, Tr, Fl) = (Grass, Path, Water, Tree, Flower);
+        let (HW, Rf, Dr, Wi, Fc, Sg) = (HouseWall, Roof, Door, Window, Fence, Sign);
+        let (Br, Ch) = (Bridge, Chest);
         Map {
             id: "overworld", width: 30, height: 25, render_mode: RenderMode::Normal,
             tiles: vec![
-                vec![4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],
-                vec![4,4,4,0,0,5,0,0,4,4,4,0,0,0,1,1,0,0,4,4,4,0,0,5,0,0,0,4,4,4],
-                vec![4,0,0,0,5,0,0,0,0,4,0,0,5,0,1,1,0,5,0,4,0,0,0,0,5,0,0,0,0,4],
-                vec![4,0,5,0,0,0,0,5,0,0,0,0,0,0,1,1,0,0,0,0,0,7,7,7,7,0,0,5,0,4],
-                vec![4,0,0,0,0,0,0,0,0,0,5,0,0,0,1,1,0,0,0,0,0,6,9,6,6,0,0,0,0,4],
-                vec![4,0,0,0,7,7,7,0,0,0,0,0,0,1,1,1,1,0,0,5,0,6,8,6,6,0,0,0,0,4],
-                vec![4,0,0,0,6,9,6,0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,1,0,0,0,0,0,0,4],
-                vec![4,0,0,0,6,8,6,0,0,0,0,0,0,1,0,0,1,1,1,1,1,1,1,0,0,0,5,0,0,4],
-                vec![4,0,5,0,0,1,0,0,0,0,0,5,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4],
-                vec![4,0,0,0,0,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,13,0,0,0,4],
-                vec![4,0,0,0,0,1,1,1,1,1,1,1,1,1,0,0,0,0,0,10,10,10,0,0,0,0,0,0,0,4],
-                vec![4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,0,0,0,0,5,0,0,0,0,4],
-                vec![4,0,5,0,0,11,0,0,0,5,0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0,0,5,0,4],
-                vec![4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,2,2,2,2,0,0,0,0,0,0,0,0,4],
-                vec![4,0,0,0,0,0,0,5,0,0,0,0,1,1,12,12,2,2,2,2,0,0,0,0,0,0,5,0,0,4],
-                vec![4,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,2,2,0,0,0,0,7,7,7,0,0,0,4],
-                vec![4,0,0,5,0,0,0,0,0,0,0,0,1,0,0,5,0,0,0,0,0,0,0,6,9,6,0,0,0,4],
-                vec![4,0,0,0,0,0,0,0,5,0,0,0,1,0,0,0,0,0,0,0,5,0,0,6,8,6,0,0,0,4],
-                vec![4,0,0,0,0,5,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,5,0,4],
-                vec![4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4],
-                vec![4,0,5,0,0,0,0,0,5,0,0,0,0,5,0,0,0,5,0,0,0,0,5,0,0,0,0,5,0,4],
-                vec![4,0,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0,0,0,0,0,0,0,4],
-                vec![4,0,0,0,0,0,13,0,0,0,5,0,0,0,0,0,0,0,0,0,0,0,0,0,5,0,0,0,0,4],
-                vec![4,4,0,0,0,4,4,4,0,0,4,4,0,0,0,0,0,0,4,4,0,0,4,4,4,0,0,0,4,4],
-                vec![4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],
+                vec![Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr],
+                vec![Tr,Tr,Tr,Gr,Gr,Fl,Gr,Gr,Tr,Tr,Tr,Gr,Gr,Gr,Pa,Pa,Gr,Gr,Tr,Tr,Tr,Gr,Gr,Fl,Gr,Gr,Gr,Tr,Tr,Tr],
+                vec![Tr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Tr,Gr,Gr,Fl,Gr,Pa,Pa,Gr,Fl,Gr,Tr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Fl,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Gr,Pa,Pa,Gr,Gr,Gr,Gr,Gr,Rf,Rf,Rf,Rf,Gr,Gr,Fl,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Pa,Pa,Gr,Gr,Gr,Gr,Gr,HW,Wi,HW,HW,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Rf,Rf,Rf,Gr,Gr,Gr,Gr,Gr,Gr,Pa,Pa,Pa,Pa,Gr,Gr,Fl,Gr,HW,Dr,HW,HW,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,HW,Wi,HW,Gr,Gr,Gr,Gr,Gr,Gr,Pa,Gr,Gr,Pa,Gr,Gr,Gr,Gr,Gr,Pa,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,HW,Dr,HW,Gr,Gr,Gr,Gr,Gr,Gr,Pa,Gr,Gr,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Gr,Gr,Gr,Fl,Gr,Gr,Tr],
+                vec![Tr,Gr,Fl,Gr,Gr,Pa,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Pa,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Pa,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Pa,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Ch,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Gr,Gr,Gr,Gr,Gr,Fc,Fc,Fc,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Wa,Wa,Wa,Wa,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Fl,Gr,Gr,Sg,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Wa,Wa,Wa,Wa,Wa,Wa,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Wa,Wa,Wa,Wa,Wa,Wa,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Pa,Pa,Br,Br,Wa,Wa,Wa,Wa,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Pa,Gr,Gr,Gr,Gr,Wa,Wa,Gr,Gr,Gr,Gr,Rf,Rf,Rf,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Pa,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Gr,Gr,HW,Wi,HW,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Pa,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,HW,Dr,HW,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Gr,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Gr,Gr,Fl,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Fl,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Ch,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Tr,Gr,Gr,Gr,Tr,Tr,Tr,Gr,Gr,Tr,Tr,Gr,Gr,Gr,Gr,Gr,Gr,Tr,Tr,Gr,Gr,Tr,Tr,Tr,Gr,Gr,Gr,Tr,Tr],
+                vec![Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr],
             ],
         }
     }
 
+    #[allow(non_snake_case)]
     pub fn home() -> Self {
+        use Tile::*;
+        let (Wl, WF, Rg, Tb, Bs, Dr) = (Wall, WoodFloor, Rug, Table, Bookshelf, Door);
         Map {
             id: "home", width: 10, height: 8, render_mode: RenderMode::Normal,
             tiles: vec![
-                vec![3,3,3,3,3,3,3,3,3,3],
-                vec![3,14,14,14,14,14,14,14,14,3],
-                vec![3,14,15,15,15,14,14,17,14,3],
-                vec![3,14,15,16,15,14,14,17,14,3],
-                vec![3,14,15,15,15,14,14,14,14,3],
-                vec![3,14,14,14,14,14,14,14,14,3],
-                vec![3,14,14,14,8,14,14,14,14,3],
-                vec![3,3,3,3,3,3,3,3,3,3],
+                vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,Rg,Rg,Rg,WF,WF,Bs,WF,Wl],
+                vec![Wl,WF,Rg,Tb,Rg,WF,WF,Bs,WF,Wl],
+                vec![Wl,WF,Rg,Rg,Rg,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,Dr,WF,WF,WF,WF,Wl],
+                vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
             ],
         }
     }
 
+    #[allow(non_snake_case)]
     pub fn lab() -> Self {
+        use Tile::*;
+        let (Wl, WF, Rg, Tb, Bs, Dr, Ch) = (Wall, WoodFloor, Rug, Table, Bookshelf, Door, Chest);
         Map {
             id: "lab", width: 12, height: 9, render_mode: RenderMode::Normal,
             tiles: vec![
-                vec![3,3,3,3,3,3,3,3,3,3,3,3],
-                vec![3,14,14,17,17,14,14,17,17,14,14,3],
-                vec![3,14,14,14,14,14,14,14,14,14,14,3],
-                vec![3,14,16,14,14,14,14,14,14,16,14,3],
-                vec![3,14,14,14,15,15,15,15,14,14,14,3],
-                vec![3,14,14,14,15,13,13,15,14,14,14,3],
-                vec![3,14,14,14,14,14,14,14,14,14,14,3],
-                vec![3,14,14,14,14,8,14,14,14,14,14,3],
-                vec![3,3,3,3,3,3,3,3,3,3,3,3],
+                vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
+                vec![Wl,WF,WF,Bs,Bs,WF,WF,Bs,Bs,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,Tb,WF,WF,WF,WF,WF,WF,Tb,WF,Wl],
+                vec![Wl,WF,WF,WF,Rg,Rg,Rg,Rg,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,Rg,Ch,Ch,Rg,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,Dr,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
             ],
         }
     }
 
+    #[allow(non_snake_case)]
     pub fn shop() -> Self {
+        use Tile::*;
+        let (Wl, WF, Rg, Tb, Bs, Dr) = (Wall, WoodFloor, Rug, Table, Bookshelf, Door);
         Map {
             id: "shop", width: 10, height: 8, render_mode: RenderMode::Normal,
             tiles: vec![
-                vec![3,3,3,3,3,3,3,3,3,3],
-                vec![3,14,17,17,14,14,17,17,14,3],
-                vec![3,14,14,14,14,14,14,14,14,3],
-                vec![3,14,14,16,16,16,16,14,14,3],
-                vec![3,14,14,14,14,14,14,14,14,3],
-                vec![3,14,14,15,15,15,15,14,14,3],
-                vec![3,14,14,14,8,14,14,14,14,3],
-                vec![3,3,3,3,3,3,3,3,3,3],
+                vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
+                vec![Wl,WF,Bs,Bs,WF,WF,Bs,Bs,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,Tb,Tb,Tb,Tb,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,Rg,Rg,Rg,Rg,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,Dr,WF,WF,WF,WF,Wl],
+                vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
             ],
         }
     }
 
+    #[allow(non_snake_case)]
     pub fn doghouse() -> Self {
+        use Tile::*;
+        let (GW, WF, Rg, Tb, Ch, Dr) = (GlitchWall, WoodFloor, Rug, Table, Chest, Door);
+        let (G5, G6, G7, G8) = (Glitch95, Glitch96, Glitch97, Glitch98);
         Map {
             id: "doghouse", width: 16, height: 12, render_mode: RenderMode::Glitch,
             tiles: vec![
-                vec![99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99],
-                vec![99,14,98,98,97,14,96,96,14,95,95,14,98,14,14,99],
-                vec![99,98,14,14,14,97,14,14,96,14,14,95,14,14,98,99],
-                vec![99,14,14,14,14,14,14,14,14,14,14,14,14,14,14,99],
-                vec![99,97,14,14,16,14,14,14,14,14,14,16,14,14,97,99],
-                vec![99,14,14,14,14,14,15,15,15,14,14,14,14,14,14,99],
-                vec![99,96,14,14,14,14,15,13,15,14,14,14,14,14,96,99],
-                vec![99,14,14,14,14,14,15,15,15,14,14,14,14,14,14,99],
-                vec![99,95,14,14,14,14,14,14,14,14,14,14,14,14,95,99],
-                vec![99,14,14,14,14,14,14,14,14,14,14,14,14,14,14,99],
-                vec![99,14,98,14,14,97,14,8,14,96,14,14,95,14,14,99],
-                vec![99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99],
+                vec![GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW],
+                vec![GW,WF,G8,G8,G7,WF,G6,G6,WF,G5,G5,WF,G8,WF,WF,GW],
+                vec![GW,G8,WF,WF,WF,G7,WF,WF,G6,WF,WF,G5,WF,WF,G8,GW],
+                vec![GW,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,GW],
+                vec![GW,G7,WF,WF,Tb,WF,WF,WF,WF,WF,WF,Tb,WF,WF,G7,GW],
+                vec![GW,WF,WF,WF,WF,WF,Rg,Rg,Rg,WF,WF,WF,WF,WF,WF,GW],
+                vec![GW,G6,WF,WF,WF,WF,Rg,Ch,Rg,WF,WF,WF,WF,WF,G6,GW],
+                vec![GW,WF,WF,WF,WF,WF,Rg,Rg,Rg,WF,WF,WF,WF,WF,WF,GW],
+                vec![GW,G5,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,G5,GW],
+                vec![GW,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,GW],
+                vec![GW,WF,G8,WF,WF,G7,WF,Dr,WF,G6,WF,WF,G5,WF,WF,GW],
+                vec![GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW],
             ],
         }
     }
 
+    #[allow(non_snake_case)]
     pub fn grove() -> Self {
+        use Tile::*;
+        let (Gr, Pa, Tr, Fl, Ch) = (Grass, Path, Tree, Flower, Chest);
         Map {
             id: "grove", width: 12, height: 10, render_mode: RenderMode::Normal,
             tiles: vec![
-                vec![4,4,4,4,4,4,4,4,4,4,4,4],
-                vec![4,5,0,0,5,0,0,5,0,0,5,4],
-                vec![4,0,0,5,0,0,0,0,5,0,0,4],
-                vec![4,0,5,0,0,13,13,0,0,5,0,4],
-                vec![4,5,0,0,0,5,5,0,0,0,5,4],
-                vec![4,0,0,0,5,0,0,5,0,0,0,4],
-                vec![4,0,5,0,0,0,0,0,0,5,0,4],
-                vec![4,5,0,0,0,0,0,0,0,0,5,4],
-                vec![4,0,0,5,0,1,0,5,0,0,0,4],
-                vec![4,4,4,4,4,4,4,4,4,4,4,4],
+                vec![Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr],
+                vec![Tr,Fl,Gr,Gr,Fl,Gr,Gr,Fl,Gr,Gr,Fl,Tr],
+                vec![Tr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Tr],
+                vec![Tr,Gr,Fl,Gr,Gr,Ch,Ch,Gr,Gr,Fl,Gr,Tr],
+                vec![Tr,Fl,Gr,Gr,Gr,Fl,Fl,Gr,Gr,Gr,Fl,Tr],
+                vec![Tr,Gr,Gr,Gr,Fl,Gr,Gr,Fl,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Tr],
+                vec![Tr,Fl,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Tr],
+                vec![Tr,Gr,Gr,Fl,Gr,Pa,Gr,Fl,Gr,Gr,Gr,Tr],
+                vec![Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr],
             ],
         }
     }
@@ -232,48 +284,48 @@ impl Map {
 }
 
 /// Tile color. Glitch mode uses shifting colors for high IDs.
-pub fn tile_color(tile_id: u8, mode: RenderMode, time: f32) -> Color {
-    if mode == RenderMode::Glitch && tile_id >= 95 {
-        let shift = ((time * 3.0 + tile_id as f32 * 0.7).sin() * 127.0 + 128.0) as u8;
+pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
+    if mode == RenderMode::Glitch && matches!(tile, Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98 | Tile::GlitchWall) {
+        let shift = ((time * 3.0 + (tile as u8) as f32 * 0.7).sin() * 127.0 + 128.0) as u8;
         return Color::from_rgba(shift, 255 - shift, shift / 2, 255);
     }
 
     if mode == RenderMode::Dream {
         // Dreamy palette — muted purples and blues
-        return match tile_id {
-            0 => Color::from_rgba(106, 90, 205, 255),  // lavender grass
-            1 => Color::from_rgba(180, 160, 200, 255),  // misty path
-            2 => Color::from_rgba(50, 50, 140, 255),    // deep dream water (dark indigo)
-            4 => Color::from_rgba(106, 90, 205, 255),   // trees (dream grass base)
-            5 => Color::from_rgba(106, 90, 205, 255),   // flowers (dream grass base)
-            _ => tile_color_normal(tile_id),
+        return match tile {
+            Tile::Grass    => Color::from_rgba(106, 90, 205, 255),  // lavender grass
+            Tile::Path     => Color::from_rgba(180, 160, 200, 255), // misty path
+            Tile::Water    => Color::from_rgba(50, 50, 140, 255),   // deep dream water (dark indigo)
+            Tile::Tree     => Color::from_rgba(106, 90, 205, 255),  // trees (dream grass base)
+            Tile::Flower   => Color::from_rgba(106, 90, 205, 255),  // flowers (dream grass base)
+            _ => tile_color_normal(tile),
         };
     }
 
-    tile_color_normal(tile_id)
+    tile_color_normal(tile)
 }
 
-fn tile_color_normal(tile_id: u8) -> Color {
-    match tile_id {
-        0 => Color::from_rgba(76, 175, 80, 255),     // grass
-        1 => Color::from_rgba(222, 184, 135, 255),    // path (sandy)
-        2 => Color::from_rgba(66, 165, 245, 255),     // water
-        3 => Color::from_rgba(121, 85, 72, 255),      // wall
-        4 => Color::from_rgba(76, 175, 80, 255),       // tree (grass base)
-        5 => Color::from_rgba(76, 175, 80, 255),       // flower (grass base)
-        6 => Color::from_rgba(255, 204, 128, 255),    // house wall (warm cream)
-        7 => Color::from_rgba(211, 47, 47, 255),      // roof
-        8 => Color::from_rgba(255, 204, 128, 255),    // door (base = house wall)
-        9 => Color::from_rgba(255, 204, 128, 255),    // window (base = house wall)
-        10 => Color::from_rgba(76, 175, 80, 255),     // fence (grass base)
-        11 => Color::from_rgba(76, 175, 80, 255),     // sign (grass base)
-        12 => Color::from_rgba(66, 165, 245, 255),    // bridge (water base)
-        13 => Color::from_rgba(76, 175, 80, 255),     // chest (grass base)
-        14 => Color::from_rgba(161, 136, 127, 255),    // wood floor
-        15 => Color::from_rgba(161, 136, 127, 255),   // rug (floor base)
-        16 => Color::from_rgba(78, 52, 46, 255),      // table
-        17 => Color::from_rgba(62, 39, 35, 255),      // shelf
-        _ => Color::from_rgba(50, 50, 50, 255),       // unknown
+fn tile_color_normal(tile: Tile) -> Color {
+    match tile {
+        Tile::Grass     => Color::from_rgba(76, 175, 80, 255),     // grass
+        Tile::Path      => Color::from_rgba(222, 184, 135, 255),   // path (sandy)
+        Tile::Water     => Color::from_rgba(66, 165, 245, 255),    // water
+        Tile::Wall      => Color::from_rgba(121, 85, 72, 255),     // wall
+        Tile::Tree      => Color::from_rgba(76, 175, 80, 255),     // tree (grass base)
+        Tile::Flower    => Color::from_rgba(76, 175, 80, 255),     // flower (grass base)
+        Tile::HouseWall => Color::from_rgba(255, 204, 128, 255),   // house wall (warm cream)
+        Tile::Roof      => Color::from_rgba(211, 47, 47, 255),     // roof
+        Tile::Door      => Color::from_rgba(255, 204, 128, 255),   // door (base = house wall)
+        Tile::Window    => Color::from_rgba(255, 204, 128, 255),   // window (base = house wall)
+        Tile::Fence     => Color::from_rgba(76, 175, 80, 255),     // fence (grass base)
+        Tile::Sign      => Color::from_rgba(76, 175, 80, 255),     // sign (grass base)
+        Tile::Bridge    => Color::from_rgba(66, 165, 245, 255),    // bridge (water base)
+        Tile::Chest     => Color::from_rgba(76, 175, 80, 255),     // chest (grass base)
+        Tile::WoodFloor => Color::from_rgba(161, 136, 127, 255),   // wood floor
+        Tile::Rug       => Color::from_rgba(161, 136, 127, 255),   // rug (floor base)
+        Tile::Table     => Color::from_rgba(78, 52, 46, 255),      // table
+        Tile::Bookshelf => Color::from_rgba(62, 39, 35, 255),      // shelf
+        _               => Color::from_rgba(50, 50, 50, 255),      // unknown / glitch
     }
 }
 
@@ -285,12 +337,12 @@ pub fn draw_map(map: &Map, cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, tim
 
     for row in start_row..end_row.min(map.height) {
         for col in start_col..end_col.min(map.width) {
-            let tile_id = map.tiles[row][col];
-            let color = tile_color(tile_id, map.render_mode, time);
+            let tile = map.tiles[row][col];
+            let color = tile_color(tile, map.render_mode, time);
             let x = col as f32 * TILE_SIZE;
             let y = row as f32 * TILE_SIZE;
             draw_rectangle(x, y, TILE_SIZE, TILE_SIZE, color);
-            draw_tile_detail(tile_id, x, y, time, map.render_mode);
+            draw_tile_detail(tile, x, y, time, map.render_mode);
         }
     }
 
@@ -314,30 +366,30 @@ fn seeded_random(x: f32, y: f32, seed: i32) -> f32 {
     (h & 0x7fffffff) as f32 / 0x7fffffff as f32
 }
 
-fn draw_tile_detail(tile_id: u8, x: f32, y: f32, time: f32, mode: RenderMode) {
+fn draw_tile_detail(tile: Tile, x: f32, y: f32, time: f32, mode: RenderMode) {
     // Skip details for glitch tiles
-    if mode == RenderMode::Glitch && tile_id >= 95 { return; }
+    if mode == RenderMode::Glitch && matches!(tile, Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98 | Tile::GlitchWall) { return; }
 
-    match tile_id {
-        0 => draw_grass_detail(x, y),
-        1 => draw_path_detail(x, y),
-        2 => draw_water_detail(x, y, time, mode),
-        3 => draw_wall_detail(x, y),
-        4 => draw_tree_detail(x, y, time, mode),
-        5 => draw_flower_detail(x, y, time),
-        6 => draw_house_wall_detail(x, y),
-        7 => draw_roof_detail(x, y),
-        8 => draw_door_detail(x, y),
-        9 => draw_window_detail(x, y),
-        10 => draw_fence_detail(x, y),
-        11 => draw_sign_detail(x, y),
-        12 => draw_bridge_detail(x, y),
-        13 => draw_chest_detail(x, y, time),
-        14 => draw_floor_detail(x, y),
-        15 => draw_rug_detail(x, y),
-        16 => draw_table_detail(x, y),
-        17 => draw_bookshelf_detail(x, y),
-        _ => {}
+    match tile {
+        Tile::Grass     => draw_grass_detail(x, y),
+        Tile::Path      => draw_path_detail(x, y),
+        Tile::Water     => draw_water_detail(x, y, time, mode),
+        Tile::Wall      => draw_wall_detail(x, y),
+        Tile::Tree      => draw_tree_detail(x, y, time, mode),
+        Tile::Flower    => draw_flower_detail(x, y, time),
+        Tile::HouseWall => draw_house_wall_detail(x, y),
+        Tile::Roof      => draw_roof_detail(x, y),
+        Tile::Door      => draw_door_detail(x, y),
+        Tile::Window    => draw_window_detail(x, y),
+        Tile::Fence     => draw_fence_detail(x, y),
+        Tile::Sign      => draw_sign_detail(x, y),
+        Tile::Bridge    => draw_bridge_detail(x, y),
+        Tile::Chest     => draw_chest_detail(x, y, time),
+        Tile::WoodFloor => draw_floor_detail(x, y),
+        Tile::Rug       => draw_rug_detail(x, y),
+        Tile::Table     => draw_table_detail(x, y),
+        Tile::Bookshelf => draw_bookshelf_detail(x, y),
+        _               => {}
     }
 }
 
