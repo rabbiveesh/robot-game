@@ -61,6 +61,25 @@
             version: 1,
         });
 
+        // File download plugin — triggered from Rust for session export
+        miniquad_add_plugin({
+            register_plugin: function(importObject) {
+                importObject.env.download_file = function(data_ptr, data_len, name_ptr, name_len) {
+                    var data = UTF8ToString(data_ptr, data_len);
+                    var name = UTF8ToString(name_ptr, name_len);
+                    var blob = new Blob([data], { type: 'application/json' });
+                    var url = URL.createObjectURL(blob);
+                    var a = document.createElement('a');
+                    a.href = url;
+                    a.download = name;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                };
+            },
+            name: "download",
+            version: 1,
+        });
+
         load("robot-buddy-game.wasm");
         document.getElementById("glcanvas").focus();
         document.addEventListener("click", () => document.getElementById("glcanvas").focus());

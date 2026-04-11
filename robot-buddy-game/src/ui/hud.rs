@@ -127,12 +127,14 @@ impl DebugOverlay {
         self.visible = !self.visible;
     }
 
-    pub fn draw(&self, map_id: &str, tx: usize, ty: usize, dum_dums: u32, play_time: f32) {
-        if !self.visible { return; }
+    /// Draw the debug overlay. Returns true if the Export button was clicked.
+    pub fn draw(&self, map_id: &str, tx: usize, ty: usize, dum_dums: u32, play_time: f32,
+                math_band: u8, challenges: usize, correct: usize) -> bool {
+        if !self.visible { return false; }
 
         let sw = screen_width();
         let panel_w = 380.0;
-        let panel_h = 300.0;
+        let panel_h = 340.0;
         let x = sw - panel_w - 10.0;
         let y = 10.0;
 
@@ -162,18 +164,42 @@ impl DebugOverlay {
         let mins = (play_time as u64) / 60;
         let secs = (play_time as u64) % 60;
         draw_text(&format!("Play time: {}m {}s", mins, secs), lx, ly, 16.0, white);
+        ly += line_h;
+
+        let band_label = super::title_screen::BAND_NAMES.get((math_band - 1) as usize).unwrap_or(&"???");
+        draw_text(&format!("Band: {} ({})", math_band, band_label), lx, ly, 16.0, white);
+        ly += line_h;
+
+        let accuracy = if challenges > 0 {
+            format!("{:.0}%", correct as f64 / challenges as f64 * 100.0)
+        } else {
+            "n/a".into()
+        };
+        draw_text(&format!("Session: {}/{} correct ({})", correct, challenges, accuracy),
+            lx, ly, 16.0, white);
         ly += line_h + 8.0;
 
-        // Placeholder for adaptive system (not wired yet)
-        draw_text("-- Learner Profile --", lx, ly, 16.0, green);
-        ly += line_h;
-        draw_text("Band: 1 (Add <5)  Streak: 0", lx, ly, 16.0, white);
-        ly += line_h;
-        draw_text("Intake: pending", lx, ly, 16.0, Color::from_rgba(255, 183, 77, 255));
-        ly += line_h;
-        draw_text("CRA: all concrete (placeholder)", lx, ly, 16.0, white);
-        ly += line_h + 8.0;
+        // Export button
+        let btn_w = 130.0;
+        let btn_h = 28.0;
+        let btn_x = lx;
+        let btn_y = ly;
+        let (mx, my) = mouse_position();
+        let hover = mx >= btn_x && mx <= btn_x + btn_w && my >= btn_y && my <= btn_y + btn_h;
+        let btn_color = if hover {
+            Color::from_rgba(0, 200, 100, 255)
+        } else {
+            Color::from_rgba(0, 160, 80, 255)
+        };
+        draw_rectangle(btn_x, btn_y, btn_w, btn_h, btn_color);
+        let etw = measure_text("Export Session", None, 16, 1.0).width;
+        draw_text("Export Session", btn_x + btn_w / 2.0 - etw / 2.0, btn_y + 19.0, 16.0, WHITE);
 
-        draw_text("P to close", lx, ly, 14.0, Color::from_rgba(100, 100, 120, 255));
+        let clicked = is_mouse_button_pressed(MouseButton::Left) && hover;
+        ly += btn_h + 10.0;
+
+        draw_text("P close  |  E export", lx, ly, 14.0, Color::from_rgba(100, 100, 120, 255));
+
+        clicked
     }
 }

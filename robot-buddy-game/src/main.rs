@@ -21,6 +21,7 @@ mod npc;
 mod ui;
 mod save;
 mod audio;
+mod session;
 
 use tilemap::{Map, TILE_SIZE};
 use sprites::Dir;
@@ -264,6 +265,7 @@ async fn main() {
     let mut menu_can_challenge = false;
     let mut math_band: u8 = 1;
     let mut dreaming = false; // persists dream overlay across map transitions
+    let mut session_log = session::SessionLog::new();
 
     loop {
         let dt = get_frame_time();
@@ -535,8 +537,23 @@ async fn main() {
                     }
                 }
                 if dismiss {
-                    // Award dum dums if challenge had a reward
                     if let Some(ref ac) = active_challenge {
+                        // Log challenge to session
+                        session_log.record_challenge(session::ChallengeRecord {
+                            question: ac.challenge.display_text.clone(),
+                            correct_answer: ac.challenge.correct_answer,
+                            player_answer: None, // could track this with more state
+                            correct: ac.state.correct == Some(true),
+                            operation: ac.challenge.numbers.op.clone(),
+                            band: ac.challenge.band,
+                            sampled_band: ac.challenge.sampled_band,
+                            hint_used: ac.state.hint_used,
+                            told_me: ac.state.told_me,
+                            attempts: ac.state.attempts,
+                            source: menu_target_id.clone(),
+                            play_time_at_event: play_time,
+                        });
+                        // Award dum dums if challenge had a reward
                         if let Some(ref reward) = ac.state.reward {
                             dum_dums += reward.amount;
                             dum_dum_hud.flash();
@@ -667,7 +684,20 @@ async fn main() {
         set_default_camera();
         ui::hud::draw_area_name(map.id, player.tile_x, player.tile_y);
         dum_dum_hud.draw(dum_dums);
-        debug_overlay.draw(map.id, player.tile_x, player.tile_y, dum_dums, play_time);
+        let export_clicked = debug_overlay.draw(
+            map.id, player.tile_x, player.tile_y, dum_dums, play_time,
+            math_band, session_log.challenge_count(), session_log.correct_count(),
+        );
+        // Export session: button click or E key while overlay is visible
+        if export_clicked || (debug_overlay.visible && is_key_pressed(KeyCode::E)) {
+            let json = session::build_export(
+                &player_name, &session_log, &gifts_given,
+                dum_dums, play_time, math_band, map.id,
+            );
+            let filename = format!("robot-buddy-session-{}.json",
+                play_time as u64);
+            session::download_json(&json, &filename);
+        }
 
         // Interaction menu (draw + handle input here since it's screen-space)
         if state == GameState::InteractionMenu {
@@ -690,6 +720,12 @@ async fn main() {
                         }
                         "give" => {
                             if let Some(result) = give::process_give(dum_dums, &menu_target_id, &gifts_given) {
+                                session_log.record_give(session::GiveRecord {
+                                    recipient_id: menu_target_id.clone(),
+                                    recipient_name: menu_target_name.clone(),
+                                    dum_dums_before: dum_dums,
+                                    play_time_at_event: play_time,
+                                });
                                 dum_dums = result.new_dum_dums;
                                 gifts_given = result.new_total_gifts;
                                 dum_dum_hud.flash();
