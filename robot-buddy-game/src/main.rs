@@ -982,25 +982,25 @@ async fn main() {
             tilemap::draw_map(&map, camera.x, camera.y, GAME_W, GAME_H, game_time);
 
             // Collect all renderables for Y-sorting
-            enum SpriteKind { Player, Sparky, Npc(usize) }
-            struct Renderable { y: f32, kind: SpriteKind }
+            enum SpriteKind<'a> { Player, Sparky, Npc(&'a npc::Npc) }
+            struct Renderable<'a> { y: f32, kind: SpriteKind<'a> }
             let mut renderables: Vec<Renderable> = vec![];
 
             renderables.push(Renderable { y: player.y, kind: SpriteKind::Player });
             renderables.push(Renderable { y: sparky.entity.y, kind: SpriteKind::Sparky });
-            for (i, n) in npcs.iter().enumerate() {
-                renderables.push(Renderable { y: n.pixel_y(), kind: SpriteKind::Npc(i) });
+            for n in &npcs {
+                renderables.push(Renderable { y: n.pixel_y(), kind: SpriteKind::Npc(n) });
             }
             renderables.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap());
 
             for r in &renderables {
-                match r.kind {
+                match &r.kind {
                     SpriteKind::Player => match player_gender {
                         Gender::Boy => sprites::player::draw_player_boy(player.x, player.y, player.dir, player.frame, game_time),
                         Gender::Girl => sprites::player::draw_player_girl(player.x, player.y, player.dir, player.frame, game_time),
                     },
                     SpriteKind::Sparky => sprites::robot::draw_robot(sparky.entity.x, sparky.entity.y, sparky.entity.dir, sparky.entity.frame, game_time),
-                    SpriteKind::Npc(i) => npcs[i].draw(game_time),
+                    SpriteKind::Npc(n) => n.draw(game_time),
                 }
             }
 
