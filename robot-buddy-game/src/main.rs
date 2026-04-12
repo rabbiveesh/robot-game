@@ -16,6 +16,9 @@ use robot_buddy_domain::learning::learner_profile::{
 use robot_buddy_domain::learning::frustration_detector::{
     BehaviorSignal, detect_frustration,
 };
+use robot_buddy_domain::learning::intake_assessor::{
+    IntakeAnswer, generate_intake_question, process_intake_results, next_intake_band,
+};
 use robot_buddy_domain::economy::give;
 use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
 use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel};
@@ -45,10 +48,46 @@ const MOVE_SPEED: f32 = 200.0;
 enum GameState {
     Title,
     NewGame,
+    Intake,
     Playing,
     InteractionMenu,
     Dialogue,
     Challenge,
+}
+
+const INTAKE_QUESTION_COUNT: usize = 5;
+
+/// Tracks state during the intake assessment quiz.
+struct IntakeState {
+    question_index: usize,
+    current_band: u8,
+    configured_band: u8,   // parent-selected band from title screen (ceiling hint)
+    answers: Vec<IntakeAnswer>,
+    challenge: Option<ActiveChallenge>,
+    phase: IntakePhase,
+    text_skipped_count: usize,
+}
+
+#[derive(PartialEq)]
+enum IntakePhase {
+    Intro,       // Sparky explains what's about to happen
+    Question,    // Active challenge being answered
+    Transition,  // Brief pause between questions
+    Complete,    // All questions done, processing results
+}
+
+impl IntakeState {
+    fn new(configured_band: u8) -> Self {
+        IntakeState {
+            question_index: 0,
+            current_band: configured_band.max(1).min(10),
+            configured_band,
+            answers: Vec::new(),
+            challenge: None,
+            phase: IntakePhase::Intro,
+            text_skipped_count: 0,
+        }
+    }
 }
 
 /// Active challenge data — the domain ChallengeState + the generated Challenge.
@@ -93,6 +132,41 @@ fn start_challenge(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32)
         reward: None,
         render_hint: RenderHint {
             cra_stage: cra,
+            answer_mode: "choice".into(),
+            interaction_type: "quiz".into(),
+        },
+        hint_used: false,
+        hint_level: 0,
+        told_me: false,
+        voice: VoiceState::reset(),
+    };
+
+    ActiveChallenge {
+        state: cs,
+        challenge,
+        choice_bounds: vec![],
+        scaffold: ScaffoldBounds { show_me: None, tell_me: None },
+        complete_timer: 0.0,
+        start_time: game_time,
+    }
+}
+
+/// Start a challenge for the intake assessment (simpler than normal challenges — no CRA, no scaffolding).
+fn start_intake_challenge(challenge: Challenge, _band: u8, game_time: f32) -> ActiveChallenge {
+    let cs = ChallengeState {
+        phase: Phase::Presented,
+        correct_answer: challenge.correct_answer,
+        attempts: 0,
+        max_attempts: 2,
+        correct: None,
+        question: DisplaySpeech {
+            display: challenge.display_text.clone(),
+            speech: challenge.speech_text.clone(),
+        },
+        feedback: None,
+        reward: None,
+        render_hint: RenderHint {
+            cra_stage: CraStage::Abstract, // intake always Abstract — assessing raw ability
             answer_mode: "choice".into(),
             interaction_type: "quiz".into(),
         },
@@ -277,6 +351,7 @@ async fn main() {
     let mut menu_can_challenge = false;
     let mut profile = LearnerProfile::new();
     let mut behavior_signals: Vec<BehaviorSignal> = vec![];
+    let mut intake: Option<IntakeState> = None;
     let mut dreaming = false; // persists dream overlay across map transitions
     let mut session_log = session::SessionLog::new();
 
@@ -302,14 +377,26 @@ async fn main() {
                                 active_slot = slot;
                                 auto_save_timer = 0.0;
 
-                                // Welcome back dialogue
-                                dialogue.start(vec![
-                                    DialogueLine {
-                                        speaker: "Sparky".into(),
-                                        text: format!("BEEP BOOP! Welcome back, {}! I missed you!", save.name),
-                                    },
-                                ]);
-                                state = GameState::Dialogue;
+                                if !profile.intake_completed {
+                                    // Incomplete intake — restart it
+                                    intake = Some(IntakeState::new(profile.math_band));
+                                    dialogue.start(vec![
+                                        DialogueLine {
+                                            speaker: "Sparky".into(),
+                                            text: "BEEP BOOP! Let's finish those warm-up puzzles real quick!".into(),
+                                        },
+                                    ]);
+                                    state = GameState::Intake;
+                                } else {
+                                    // Welcome back dialogue
+                                    dialogue.start(vec![
+                                        DialogueLine {
+                                            speaker: "Sparky".into(),
+                                            text: format!("BEEP BOOP! Welcome back, {}! I missed you!", save.name),
+                                        },
+                                    ]);
+                                    state = GameState::Dialogue;
+                                }
                             }
                         }
                         TitleAction::DeleteSlot(slot) => {
@@ -353,7 +440,8 @@ async fn main() {
                                 save_slots = save::load_all_slots();
                                 auto_save_timer = 0.0;
 
-                                // Welcome dialogue
+                                // Start intake assessment
+                                intake = Some(IntakeState::new(form.math_band));
                                 dialogue.start(vec![
                                     DialogueLine {
                                         speaker: "Sparky".into(),
@@ -361,11 +449,15 @@ async fn main() {
                                     },
                                     DialogueLine {
                                         speaker: "Sparky".into(),
-                                        text: "Let's go on an ADVENTURE! Talk to people by pressing SPACE!".into(),
+                                        text: "Before we go on our adventure, let me see what kind of math puzzles you like!".into(),
+                                    },
+                                    DialogueLine {
+                                        speaker: "Sparky".into(),
+                                        text: "Don't worry, there's no wrong answers here! Just try your best! BEEP BOOP!".into(),
                                     },
                                 ]);
                                 new_game_form = None;
-                                state = GameState::Dialogue;
+                                state = GameState::Intake;
                             }
                             NewGameAction::Back => {
                                 new_game_form = None;
@@ -376,6 +468,143 @@ async fn main() {
                 }
                 next_frame().await;
                 continue;
+            }
+            GameState::Intake => {
+                if let Some(ref mut iq) = intake {
+                    match iq.phase {
+                        IntakePhase::Intro => {
+                            // Dialogue is playing the intro; advance it
+                            if is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Enter) {
+                                if dialogue.is_typewriting() {
+                                    iq.text_skipped_count += 1;
+                                }
+                                dialogue.advance();
+                                if !dialogue.active {
+                                    // Intro done — generate first question
+                                    let challenge = generate_intake_question(
+                                        iq.current_band, iq.question_index, &mut rng,
+                                    );
+                                    let ac = start_intake_challenge(challenge, iq.current_band, game_time);
+                                    audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                                    iq.challenge = Some(ac);
+                                    iq.phase = IntakePhase::Question;
+                                }
+                            }
+                        }
+                        IntakePhase::Question => {
+                            let mut dismiss = false;
+                            if let Some(ref mut ac) = iq.challenge {
+                                // Auto-dismiss for correct answers
+                                if ac.state.phase == Phase::Complete && ac.state.correct == Some(true) {
+                                    ac.complete_timer += dt;
+                                    if ac.complete_timer >= 2.0 {
+                                        dismiss = true;
+                                    }
+                                }
+
+                                // Keyboard input
+                                if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge) {
+                                    ac.state = challenge_reducer(ac.state.clone(), action);
+                                    speak_challenge_feedback(&ac.state);
+                                } else if ac.state.phase == Phase::Complete
+                                    && (is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Enter))
+                                {
+                                    dismiss = true;
+                                }
+
+                                // Mouse input
+                                if !dismiss && is_mouse_button_pressed(MouseButton::Left) {
+                                    let (mx, my) = mouse_position();
+                                    if let Some(action) = ui::challenge::handle_click(
+                                        mx, my, &ac.state, &ac.challenge,
+                                        &ac.choice_bounds, &ac.scaffold,
+                                    ) {
+                                        ac.state = challenge_reducer(ac.state.clone(), action);
+                                        speak_challenge_feedback(&ac.state);
+                                    } else if ac.state.phase == Phase::Complete {
+                                        dismiss = true;
+                                    }
+                                }
+                            }
+
+                            if dismiss {
+                                if let Some(ref ac) = iq.challenge {
+                                    let was_correct = ac.state.correct == Some(true);
+                                    let response_ms = ((game_time - ac.start_time) as f64 * 1000.0).min(30000.0);
+
+                                    // Record answer for intake processing
+                                    iq.answers.push(IntakeAnswer {
+                                        band: iq.current_band,
+                                        correct: was_correct,
+                                        response_time_ms: Some(response_ms),
+                                        skipped_text: false, // text skipping tracked separately
+                                    });
+
+                                    // Adapt band for next question
+                                    let ceiling = (iq.configured_band as u16 + 2).min(10) as u8;
+                                    iq.current_band = next_intake_band(iq.current_band, was_correct, ceiling);
+                                    iq.question_index += 1;
+                                }
+                                iq.challenge = None;
+
+                                if iq.question_index >= INTAKE_QUESTION_COUNT {
+                                    iq.phase = IntakePhase::Complete;
+                                } else {
+                                    iq.phase = IntakePhase::Transition;
+                                }
+                            }
+                        }
+                        IntakePhase::Transition => {
+                            // Generate next question immediately
+                            let challenge = generate_intake_question(
+                                iq.current_band, iq.question_index, &mut rng,
+                            );
+                            let ac = start_intake_challenge(challenge, iq.current_band, game_time);
+                            audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                            iq.challenge = Some(ac);
+                            iq.phase = IntakePhase::Question;
+                        }
+                        IntakePhase::Complete => {
+                            // Mark text-skipped answers
+                            let skipped = iq.text_skipped_count >= 2;
+                            for a in iq.answers.iter_mut() {
+                                a.skipped_text = skipped;
+                            }
+
+                            // Process results
+                            let result = process_intake_results(
+                                &iq.answers,
+                                Some(iq.configured_band),
+                            );
+
+                            // Fire IntakeCompleted event
+                            profile = learner_reducer(profile, LearnerEvent::IntakeCompleted {
+                                math_band: result.math_band,
+                                pace: result.pace,
+                                scaffolding: result.scaffolding,
+                                promote_threshold: result.promote_threshold,
+                                stretch_threshold: result.stretch_threshold,
+                                text_speed: result.text_speed,
+                            });
+
+                            // Show completion dialogue
+                            dialogue.start(vec![
+                                DialogueLine {
+                                    speaker: "Sparky".into(),
+                                    text: "BEEP BOOP! All done! That was AWESOME!".into(),
+                                },
+                                DialogueLine {
+                                    speaker: "Sparky".into(),
+                                    text: format!("I know just the right puzzles for you now! Let's go on our ADVENTURE!"),
+                                },
+                            ]);
+
+                            // Clean up intake state
+                            intake = None;
+                            state = GameState::Dialogue;
+                        }
+                    }
+                }
             }
             GameState::Playing => {
                 // Movement
@@ -714,40 +943,70 @@ async fn main() {
         camera.follow(player.x, player.y, &map, GAME_W, GAME_H);
 
         // ─── RENDER ─────────────────────────────────────
-        set_camera(&Camera2D {
-            zoom: vec2(2.0 / screen_width(), 2.0 / screen_height()),
-            target: vec2(camera.x + GAME_W / 2.0, camera.y + GAME_H / 2.0),
-            ..Default::default()
-        });
+        if state == GameState::Intake {
+            // Intake: simple background + Sparky + progress indicator
+            clear_background(Color::from_rgba(26, 26, 46, 255));
+            set_default_camera();
 
-        clear_background(Color::from_rgba(26, 26, 46, 255));
-        tilemap::draw_map(&map, camera.x, camera.y, GAME_W, GAME_H, game_time);
+            // Draw Sparky centered at top
+            let sparky_x = screen_width() / 2.0 - TILE_SIZE / 2.0;
+            let sparky_y = 60.0;
+            sprites::robot::draw_robot(sparky_x, sparky_y, Dir::Down, 0, game_time);
 
-        // Collect all renderables for Y-sorting
-        struct Renderable { y: f32, kind: u8, idx: usize }
-        let mut renderables: Vec<Renderable> = vec![];
-
-        renderables.push(Renderable { y: player.y, kind: 0, idx: 0 }); // player
-        renderables.push(Renderable { y: sparky.entity.y, kind: 1, idx: 0 }); // sparky
-        for (i, n) in npcs.iter().enumerate() {
-            renderables.push(Renderable { y: n.pixel_y(), kind: 2, idx: i });
-        }
-        renderables.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap());
-
-        for r in &renderables {
-            match r.kind {
-                0 => match player_gender {
-                    Gender::Boy => sprites::player::draw_player_boy(player.x, player.y, player.dir, player.frame, game_time),
-                    Gender::Girl => sprites::player::draw_player_girl(player.x, player.y, player.dir, player.frame, game_time),
-                },
-                1 => sprites::robot::draw_robot(sparky.entity.x, sparky.entity.y, sparky.entity.dir, sparky.entity.frame, game_time),
-                2 => npcs[r.idx].draw(game_time),
-                _ => {}
+            // Progress indicator
+            if let Some(ref iq) = intake {
+                if iq.phase == IntakePhase::Question || iq.phase == IntakePhase::Transition {
+                    let progress_text = format!("Question {} of {}", iq.question_index + 1, INTAKE_QUESTION_COUNT);
+                    let tw = measure_text(&progress_text, None, 20, 1.0).width;
+                    draw_text(&progress_text, screen_width() / 2.0 - tw / 2.0, 130.0,
+                        20.0, Color::from_rgba(144, 202, 249, 200));
+                }
             }
-        }
 
-        // HUD (screen space)
-        set_default_camera();
+            // Draw intake challenge (reuse challenge renderer)
+            if let Some(ref mut iq) = intake {
+                if let Some(ref mut ac) = iq.challenge {
+                    let (bounds, scaffold) = ui::challenge::draw_challenge(&ac.state, &ac.challenge, game_time);
+                    ac.choice_bounds = bounds;
+                    ac.scaffold = scaffold;
+                }
+            }
+        } else {
+            set_camera(&Camera2D {
+                zoom: vec2(2.0 / screen_width(), 2.0 / screen_height()),
+                target: vec2(camera.x + GAME_W / 2.0, camera.y + GAME_H / 2.0),
+                ..Default::default()
+            });
+
+            clear_background(Color::from_rgba(26, 26, 46, 255));
+            tilemap::draw_map(&map, camera.x, camera.y, GAME_W, GAME_H, game_time);
+
+            // Collect all renderables for Y-sorting
+            struct Renderable { y: f32, kind: u8, idx: usize }
+            let mut renderables: Vec<Renderable> = vec![];
+
+            renderables.push(Renderable { y: player.y, kind: 0, idx: 0 }); // player
+            renderables.push(Renderable { y: sparky.entity.y, kind: 1, idx: 0 }); // sparky
+            for (i, n) in npcs.iter().enumerate() {
+                renderables.push(Renderable { y: n.pixel_y(), kind: 2, idx: i });
+            }
+            renderables.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap());
+
+            for r in &renderables {
+                match r.kind {
+                    0 => match player_gender {
+                        Gender::Boy => sprites::player::draw_player_boy(player.x, player.y, player.dir, player.frame, game_time),
+                        Gender::Girl => sprites::player::draw_player_girl(player.x, player.y, player.dir, player.frame, game_time),
+                    },
+                    1 => sprites::robot::draw_robot(sparky.entity.x, sparky.entity.y, sparky.entity.dir, sparky.entity.frame, game_time),
+                    2 => npcs[r.idx].draw(game_time),
+                    _ => {}
+                }
+            }
+
+            // HUD (screen space)
+            set_default_camera();
+        }
         ui::hud::draw_area_name(map.id, player.tile_x, player.tile_y);
         dum_dum_hud.draw(dum_dums);
         let export_clicked = debug_overlay.draw(
