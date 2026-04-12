@@ -291,24 +291,35 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
     }
 
     if mode == RenderMode::Dream {
-        // Dreamy palette — muted purples and blues
-        let dream_grass = Color::from_rgba(106, 90, 205, 255);     // lavender
-        let dream_water = Color::from_rgba(50, 50, 140, 255);      // deep indigo
+        // Dreamy palette — muted purples and blues. Exhaustive so the compiler
+        // catches any new Tile variant that needs a dream color.
+        let dream_grass = Color::from_rgba(106, 90, 205, 255);      // lavender
+        let dream_water = Color::from_rgba(50, 50, 140, 255);       // deep indigo
+        let dream_cream = Color::from_rgba(160, 140, 190, 255);     // muted cream
+        let dream_wood  = Color::from_rgba(120, 100, 140, 255);     // muted wood
+        let dream_dark  = Color::from_rgba(60, 50, 80, 255);        // muted dark
         return match tile {
-            Tile::Grass    => dream_grass,
-            Tile::Path     => Color::from_rgba(180, 160, 200, 255), // misty path
-            Tile::Water    => dream_water,
-            Tile::Tree     => dream_grass,                          // grass base
-            Tile::Flower   => dream_grass,                          // grass base
-            Tile::Fence    => dream_grass,                          // grass base
-            Tile::Sign     => dream_grass,                          // grass base
-            Tile::Chest    => dream_grass,                          // grass base
-            Tile::Bridge   => dream_water,                          // water base
-            Tile::HouseWall => Color::from_rgba(160, 140, 190, 255), // muted cream
-            Tile::Roof     => Color::from_rgba(130, 80, 140, 255),   // muted plum
-            Tile::Door     => Color::from_rgba(160, 140, 190, 255),  // muted cream
-            Tile::Window   => Color::from_rgba(160, 140, 190, 255),  // muted cream
-            _ => tile_color_normal(tile),
+            Tile::Grass     => dream_grass,
+            Tile::Path      => Color::from_rgba(180, 160, 200, 255), // misty path
+            Tile::Water     => dream_water,
+            Tile::Tree      => dream_grass,
+            Tile::Flower    => dream_grass,
+            Tile::Fence     => dream_grass,
+            Tile::Sign      => dream_grass,
+            Tile::Chest     => dream_grass,
+            Tile::Bridge    => dream_water,
+            Tile::Wall      => dream_dark,
+            Tile::HouseWall => dream_cream,
+            Tile::Roof      => Color::from_rgba(130, 80, 140, 255),  // muted plum
+            Tile::Door      => dream_cream,
+            Tile::Window    => dream_cream,
+            Tile::WoodFloor => dream_wood,
+            Tile::Rug       => dream_wood,
+            Tile::Table     => dream_dark,
+            Tile::Bookshelf => dream_dark,
+            Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98
+                            => dream_dark,
+            Tile::GlitchWall => dream_dark,
         };
     }
 
@@ -335,7 +346,9 @@ fn tile_color_normal(tile: Tile) -> Color {
         Tile::Rug       => Color::from_rgba(161, 136, 127, 255),   // rug (floor base)
         Tile::Table     => Color::from_rgba(78, 52, 46, 255),      // table
         Tile::Bookshelf => Color::from_rgba(62, 39, 35, 255),      // shelf
-        _               => Color::from_rgba(50, 50, 50, 255),      // unknown / glitch
+        Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98
+                        => Color::from_rgba(50, 50, 50, 255),      // glitch tiles
+        Tile::GlitchWall => Color::from_rgba(50, 50, 50, 255),     // glitch wall
     }
 }
 

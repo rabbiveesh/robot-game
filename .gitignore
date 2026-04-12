@@ -2,3 +2,4 @@ node_modules/
 dist/
 target/
 robot-buddy-game/www/
+!robot-buddy-game/www/index.html
