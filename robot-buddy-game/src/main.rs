@@ -910,8 +910,8 @@ async fn main() {
                 // Track dream state across transitions
                 if dest_map == "dream" {
                     dreaming = true;
-                } else if portal.from_map == "dream" && dest_map == "overworld" {
-                    // Exiting dream back to overworld ends the dream
+                } else if dest_map == "overworld" {
+                    // Any return to overworld ends the dream
                     dreaming = false;
                 }
 
