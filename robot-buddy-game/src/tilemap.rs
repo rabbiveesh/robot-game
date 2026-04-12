@@ -68,9 +68,11 @@ pub fn all_portals() -> &'static [Portal] {
         Portal { from_map: "dream", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false },
         // SECRET: Doghouse land — roof tile behind home
         Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true },
+        Portal { from_map: "dream", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true },
         Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: Dir::Down, secret: false },
         // SECRET: Hidden grove — tree at top border
         Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true },
+        Portal { from_map: "dream", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true },
         Portal { from_map: "grove", from_x: 5, from_y: 8, to_map: "overworld", to_x: 15, to_y: 1, dir: Dir::Down, secret: false },
     ]
 }
@@ -86,6 +88,8 @@ const SECRET_WALKABLE: &[(&str, usize, usize)] = &[
     ("overworld", 5, 5),   // roof tile → doghouse portal
     ("overworld", 15, 0),  // tree tile → grove portal
     ("dream", 16, 14),     // water tile → dream exit portal
+    ("dream", 5, 5),       // roof tile → doghouse portal (dream-side)
+    ("dream", 15, 0),      // tree tile → grove portal (dream-side)
 ];
 
 fn is_secret_walkable(map_id: &str, col: usize, row: usize) -> bool {
