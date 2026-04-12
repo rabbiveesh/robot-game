@@ -547,6 +547,13 @@ async fn main() {
                                 }
                                 iq.challenge = None;
 
+                                // Save after each intake answer
+                                let save = gather_save_data(&player, &sparky, &map,
+                                    &player_name, player_gender, &profile, dum_dums, play_time,
+                                    &gifts_given);
+                                save::save_to_slot(active_slot, &save);
+                                auto_save_timer = 0.0;
+
                                 if iq.question_index >= INTAKE_QUESTION_COUNT {
                                     iq.phase = IntakePhase::Complete;
                                 } else {
@@ -856,6 +863,13 @@ async fn main() {
                     }
                     active_challenge = None;
                     state = GameState::Playing;
+
+                    // Save after every challenge (profile just changed)
+                    let save = gather_save_data(&player, &sparky, &map,
+                        &player_name, player_gender, &profile, dum_dums, play_time,
+                        &gifts_given);
+                    save::save_to_slot(active_slot, &save);
+                    auto_save_timer = 0.0;
                 }
             }
         }
@@ -871,7 +885,8 @@ async fn main() {
         if state != GameState::Title && state != GameState::NewGame {
             play_time += dt;
             auto_save_timer += dt;
-            if auto_save_timer >= 30.0 {
+            // Save on timer or when page becomes hidden (tab switch / close)
+            if auto_save_timer >= 30.0 || save::is_page_hidden() {
                 auto_save_timer = 0.0;
                 let save = gather_save_data(&player, &sparky, &map,
                     &player_name, player_gender, &profile, dum_dums, play_time,
@@ -1054,6 +1069,14 @@ async fn main() {
                                 dum_dums = result.new_dum_dums;
                                 gifts_given = result.new_total_gifts;
                                 dum_dum_hud.flash();
+
+                                // Save after gift (dum_dums + gifts_given changed)
+                                let save = gather_save_data(&player, &sparky, &map,
+                                    &player_name, player_gender, &profile, dum_dums, play_time,
+                                    &gifts_given);
+                                save::save_to_slot(active_slot, &save);
+                                auto_save_timer = 0.0;
+
                                 let reaction = give_reaction_dialogue(&menu_target_id, &menu_target_name, &result.milestone);
                                 dialogue.start(reaction);
                                 state = GameState::Dialogue;

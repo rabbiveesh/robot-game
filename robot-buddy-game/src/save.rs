@@ -148,6 +148,15 @@ extern "C" {
     fn ls_get_len(key_ptr: *const u8, key_len: usize) -> i32;
     fn ls_get(key_ptr: *const u8, key_len: usize, buf_ptr: *mut u8, buf_len: usize);
     fn ls_set(key_ptr: *const u8, key_len: usize, val_ptr: *const u8, val_len: usize);
+    fn page_is_hidden() -> i32;
+}
+
+/// Returns true when the browser tab is hidden (user switched tabs or is closing).
+pub fn is_page_hidden() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    { unsafe { page_is_hidden() != 0 } }
+    #[cfg(not(target_arch = "wasm32"))]
+    { false }
 }
 
 #[cfg(target_arch = "wasm32")]

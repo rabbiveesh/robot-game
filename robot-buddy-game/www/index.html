@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Buddy Adventure</title>
+    <style>
+        * { margin: 0; padding: 0; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a1a; }
+        canvas { width: 100vw; height: 100vh; display: block; }
+    </style>
+</head>
+<body>
+    <canvas id="glcanvas" tabindex="0" width="960" height="720"></canvas>
+    <script src="mq_js_bundle.js"></script>
+    <script>
+        // localStorage plugin — called via extern "C" from Rust
+        miniquad_add_plugin({
+            register_plugin: function(importObject) {
+                importObject.env.ls_get_len = function(key_ptr, key_len) {
+                    var key = UTF8ToString(key_ptr, key_len);
+                    var val = localStorage.getItem(key);
+                    return val === null ? -1 : (new TextEncoder()).encode(val).length;
+                };
+                importObject.env.ls_get = function(key_ptr, key_len, buf_ptr, buf_len) {
+                    var key = UTF8ToString(key_ptr, key_len);
+                    var val = localStorage.getItem(key);
+                    if (val === null) return;
+                    var encoded = (new TextEncoder()).encode(val);
+                    var dst = new Uint8Array(wasm_memory.buffer, buf_ptr, buf_len);
+                    dst.set(encoded.subarray(0, buf_len));
+                };
+                importObject.env.ls_set = function(key_ptr, key_len, val_ptr, val_len) {
+                    var key = UTF8ToString(key_ptr, key_len);
+                    var val = UTF8ToString(val_ptr, val_len);
+                    localStorage.setItem(key, val);
+                };
+                importObject.env.page_is_hidden = function() {
+                    return document.hidden ? 1 : 0;
+                };
+            },
+            name: "localStorage",
+            version: 1,
+        });
+
+        // TTS plugin — browser SpeechSynthesis
+        miniquad_add_plugin({
+            register_plugin: function(importObject) {
+                importObject.env.tts_speak = function(text_ptr, text_len, pitch100, rate100) {
+                    if (!window.speechSynthesis) return;
+                    window.speechSynthesis.cancel();
+                    var text = UTF8ToString(text_ptr, text_len);
+                    var u = new SpeechSynthesisUtterance(text);
+                    u.pitch = pitch100 / 100.0;
+                    u.rate = rate100 / 100.0;
+                    u.volume = 0.8;
+                    window.speechSynthesis.speak(u);
+                };
+                importObject.env.tts_cancel = function() {
+                    if (window.speechSynthesis) window.speechSynthesis.cancel();
+                };
+            },
+            name: "tts",
+            version: 1,
+        });
+
+        load("robot-buddy-game.wasm");
+        document.getElementById("glcanvas").focus();
+        document.addEventListener("click", () => document.getElementById("glcanvas").focus());
+    </script>
+</body>
+</html>
