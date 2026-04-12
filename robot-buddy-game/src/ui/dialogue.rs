@@ -50,6 +50,11 @@ impl DialogueBox {
         self.on_complete = Some(Box::new(on_complete));
     }
 
+    /// True if the typewriter is still revealing characters (not yet waiting for input).
+    pub fn is_typewriting(&self) -> bool {
+        self.active && !self.waiting_for_input
+    }
+
     pub fn advance(&mut self) {
         if !self.active { return; }
         if !self.waiting_for_input {

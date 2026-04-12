@@ -1,5 +1,6 @@
 use serde::Serialize;
 use std::collections::HashMap;
+use robot_buddy_domain::learning::learner_profile::LearnerProfile;
 
 /// A single challenge attempt record for the session log.
 #[derive(Clone, Serialize)]
@@ -93,6 +94,12 @@ pub struct ExportMetadata {
     pub game_version: String,
     pub total_play_time_secs: f32,
     pub math_band: u8,
+    pub spread_width: f64,
+    pub pace: f64,
+    pub scaffolding: f64,
+    pub streak: i32,
+    pub rolling_window_size: usize,
+    pub intake_completed: bool,
     pub map_id: String,
 }
 
@@ -103,7 +110,7 @@ pub fn build_export(
     gifts_given: &HashMap<String, u32>,
     dum_dums: u32,
     play_time: f32,
-    math_band: u8,
+    profile: &LearnerProfile,
     map_id: &str,
 ) -> String {
     let attempted = session_log.challenge_count();
@@ -124,7 +131,13 @@ pub fn build_export(
         metadata: ExportMetadata {
             game_version: "0.2.0-macroquad".into(),
             total_play_time_secs: play_time,
-            math_band,
+            math_band: profile.math_band,
+            spread_width: profile.spread_width,
+            pace: profile.pace,
+            scaffolding: profile.scaffolding,
+            streak: profile.streak,
+            rolling_window_size: profile.rolling_window.entries.len(),
+            intake_completed: profile.intake_completed,
             map_id: map_id.to_string(),
         },
     };

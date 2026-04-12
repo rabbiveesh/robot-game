@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use robot_buddy_domain::learning::learner_profile::LearnerProfile;
 
 // ─── AREA NAME ──────────────────────────────────────────
 
@@ -129,12 +130,12 @@ impl DebugOverlay {
 
     /// Draw the debug overlay. Returns true if the Export button was clicked.
     pub fn draw(&self, map_id: &str, tx: usize, ty: usize, dum_dums: u32, play_time: f32,
-                math_band: u8, challenges: usize, correct: usize) -> bool {
+                profile: &LearnerProfile, challenges: usize, correct: usize) -> bool {
         if !self.visible { return false; }
 
         let sw = screen_width();
         let panel_w = 380.0;
-        let panel_h = 340.0;
+        let panel_h = 480.0;
         let x = sw - panel_w - 10.0;
         let y = 10.0;
 
@@ -145,9 +146,10 @@ impl DebugOverlay {
         let green = Color::from_rgba(0, 230, 118, 255);
         let white = Color::from_rgba(210, 210, 210, 255);
         let gold = Color::from_rgba(255, 213, 79, 255);
+        let cyan = Color::from_rgba(100, 200, 255, 255);
         let mut ly = y + 26.0;
         let lx = x + 14.0;
-        let line_h = 24.0;
+        let line_h = 22.0;
 
         draw_text("PARENT DEBUG", lx, ly, 20.0, green);
         ly += line_h + 4.0;
@@ -166,9 +168,34 @@ impl DebugOverlay {
         draw_text(&format!("Play time: {}m {}s", mins, secs), lx, ly, 16.0, white);
         ly += line_h;
 
-        let band_label = super::title_screen::BAND_NAMES.get((math_band - 1) as usize).unwrap_or(&"???");
-        draw_text(&format!("Band: {} ({})", math_band, band_label), lx, ly, 16.0, white);
+        // -- Adaptive learning profile --
+        draw_text("-- Learning Profile --", lx, ly, 16.0, green);
         ly += line_h;
+
+        let band_label = super::title_screen::BAND_NAMES.get((profile.math_band - 1) as usize).unwrap_or(&"???");
+        draw_text(&format!("Band: {} ({})  Streak: {}", profile.math_band, band_label, profile.streak), lx, ly, 16.0, white);
+        ly += line_h;
+
+        draw_text(&format!("Pace: {:.2}  Scaffolding: {:.2}", profile.pace, profile.scaffolding), lx, ly, 16.0, white);
+        ly += line_h;
+
+        draw_text(&format!("Spread: {:.2}  Window: {}/20", profile.spread_width,
+            profile.rolling_window.entries.len()), lx, ly, 16.0, white);
+        ly += line_h;
+
+        draw_text(&format!("Intake: {}  Teach after: {} wrong",
+            if profile.intake_completed { "done" } else { "pending" },
+            profile.wrongs_before_teach), lx, ly, 16.0, white);
+        ly += line_h;
+
+        // CRA per operation
+        draw_text("CRA stages:", lx, ly, 16.0, cyan);
+        ly += line_h;
+        for (op, cra) in &profile.cra_stages {
+            draw_text(&format!("  {:?}: {:?}", op, cra), lx, ly, 14.0, white);
+            ly += 18.0;
+        }
+        ly += 4.0;
 
         let accuracy = if challenges > 0 {
             format!("{:.0}%", correct as f64 / challenges as f64 * 100.0)

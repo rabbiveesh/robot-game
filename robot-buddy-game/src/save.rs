@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use crate::sprites::Dir;
+use robot_buddy_domain::learning::learner_profile::LearnerProfile;
 
 /// Persistent save data for one slot.
 #[derive(Clone, Serialize, Deserialize)]
@@ -15,12 +16,28 @@ pub struct SaveData {
     pub player_dir: Dir,
     pub sparky_x: usize,
     pub sparky_y: usize,
-    pub math_band: u8,
+    /// Legacy field — kept for deserializing old saves. Migrated into `profile` on load.
+    #[serde(default)]
+    #[serde(skip_serializing)]
+    pub(crate) math_band: Option<u8>,
     pub dum_dums: u32,
     pub play_time: f32,
     pub timestamp: u64,
     #[serde(default)]
     pub gifts_given: HashMap<String, u32>,
+    #[serde(default = "LearnerProfile::new")]
+    pub profile: LearnerProfile,
+}
+
+impl SaveData {
+    /// Migrate legacy saves: if `math_band` was present but profile is default, apply it.
+    pub fn migrate_legacy(&mut self) {
+        if let Some(band) = self.math_band.take() {
+            if self.profile.math_band == 1 && band != 1 {
+                self.profile.math_band = band;
+            }
+        }
+    }
 }
 
 /// Deserialize Dir from either the enum name ("Up") or legacy u8 (0).
@@ -44,9 +61,9 @@ pub enum Gender {
 }
 
 impl SaveData {
-    pub fn new(name: &str, gender: Gender) -> Self {
+    pub fn new(name: &str, gender: Gender, profile: LearnerProfile) -> Self {
         SaveData {
-            version: 1,
+            version: 2,
             name: name.to_string(),
             gender,
             map_id: "overworld".into(),
@@ -55,11 +72,12 @@ impl SaveData {
             player_dir: Dir::Down,
             sparky_x: 14,
             sparky_y: 13,
-            math_band: 1,
+            math_band: None,
             dum_dums: 0,
             play_time: 0.0,
             timestamp: current_timestamp(),
             gifts_given: HashMap::new(),
+            profile,
         }
     }
 
@@ -88,7 +106,13 @@ pub type SaveSlots = [Option<SaveData>; 3];
 pub fn load_all_slots() -> SaveSlots {
     let json = read_storage(STORAGE_KEY);
     if let Some(json) = json {
-        serde_json::from_str(&json).unwrap_or([None, None, None])
+        let mut slots: SaveSlots = serde_json::from_str(&json).unwrap_or([None, None, None]);
+        for slot in slots.iter_mut() {
+            if let Some(ref mut save) = slot {
+                save.migrate_legacy();
+            }
+        }
+        slots
     } else {
         [None, None, None]
     }

@@ -10,10 +10,15 @@ use robot_buddy_domain::challenge::challenge_state::{
 use robot_buddy_domain::learning::challenge_generator::{
     Challenge, ChallengeProfile, generate_challenge,
 };
-use robot_buddy_domain::learning::operation_stats::OperationStats;
+use robot_buddy_domain::learning::learner_profile::{
+    LearnerProfile, LearnerEvent, learner_reducer,
+};
+use robot_buddy_domain::learning::frustration_detector::{
+    BehaviorSignal, detect_frustration,
+};
 use robot_buddy_domain::economy::give;
 use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
-use robot_buddy_domain::types::{Phase, CraStage};
+use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel};
 
 mod tilemap;
 mod sprites;
@@ -53,26 +58,32 @@ struct ActiveChallenge {
     choice_bounds: Vec<ChoiceBound>,
     scaffold: ScaffoldBounds,
     complete_timer: f32, // counts up from 0 when Phase::Complete + correct
+    start_time: f32,     // game_time when challenge was presented (for response time)
 }
 
-fn make_challenge_profile(band: u8) -> ChallengeProfile {
+fn make_challenge_profile(profile: &LearnerProfile) -> ChallengeProfile {
     ChallengeProfile {
-        math_band: band.max(1).min(10),
-        spread_width: 0.5,
-        operation_stats: OperationStats::new(),
+        math_band: profile.math_band.max(1).min(10),
+        spread_width: profile.spread_width,
+        operation_stats: profile.operation_stats.clone(),
     }
 }
 
-fn start_challenge(rng: &mut SmallRng, band: u8) -> ActiveChallenge {
-    let profile = make_challenge_profile(band);
-    let challenge = generate_challenge(&profile, rng);
-    let cra = CraStage::Abstract; // default starting CRA
+fn start_challenge(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32) -> ActiveChallenge {
+    let cp = make_challenge_profile(profile);
+    let challenge = generate_challenge(&cp, rng);
+
+    // CRA stage per-operation from the profile (defaults to Concrete for new profiles)
+    let cra = profile.cra_stages
+        .get(&challenge.operation)
+        .copied()
+        .unwrap_or(CraStage::Concrete);
 
     let cs = ChallengeState {
         phase: Phase::Presented,
         correct_answer: challenge.correct_answer,
         attempts: 0,
-        max_attempts: 2,
+        max_attempts: profile.wrongs_before_teach.max(1) as u32,
         correct: None,
         question: DisplaySpeech {
             display: challenge.display_text.clone(),
@@ -97,6 +108,7 @@ fn start_challenge(rng: &mut SmallRng, band: u8) -> ActiveChallenge {
         choice_bounds: vec![],
         scaffold: ScaffoldBounds { show_me: None, tell_me: None },
         complete_timer: 0.0,
+        start_time: game_time,
     }
 }
 
@@ -263,7 +275,8 @@ async fn main() {
     let mut menu_target_id: String = String::new(); // NPC id or "sparky" or "chest"
     let mut menu_target_name: String = String::new();
     let mut menu_can_challenge = false;
-    let mut math_band: u8 = 1;
+    let mut profile = LearnerProfile::new();
+    let mut behavior_signals: Vec<BehaviorSignal> = vec![];
     let mut dreaming = false; // persists dream overlay across map transitions
     let mut session_log = session::SessionLog::new();
 
@@ -284,7 +297,7 @@ async fn main() {
                             if let Some(ref save) = save_slots[slot] {
                                 load_from_save(save, &mut map, &mut player, &mut sparky,
                                     &mut npcs, &mut player_name, &mut player_gender,
-                                    &mut math_band, &mut dum_dums, &mut play_time,
+                                    &mut profile, &mut dum_dums, &mut play_time,
                                     &mut gifts_given);
                                 active_slot = slot;
                                 auto_save_timer = 0.0;
@@ -318,10 +331,12 @@ async fn main() {
                                 let slot = form.slot;
                                 player_name = form.name.clone();
                                 player_gender = form.gender;
-                                math_band = form.math_band;
+                                profile = LearnerProfile::new();
+                                profile.math_band = form.math_band;
                                 dum_dums = 0;
                                 play_time = 0.0;
                                 active_slot = slot;
+                                behavior_signals.clear();
 
                                 // Reset game state
                                 map = Map::overworld();
@@ -332,7 +347,7 @@ async fn main() {
 
                                 // Save immediately
                                 let save = gather_save_data(&player, &sparky, &map,
-                                    &player_name, player_gender, math_band, dum_dums, play_time,
+                                    &player_name, player_gender, &profile, dum_dums, play_time,
                                     &gifts_given);
                                 save::save_to_slot(slot, &save);
                                 save_slots = save::load_all_slots();
@@ -487,11 +502,21 @@ async fn main() {
             }
             GameState::Dialogue => {
                 if is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Enter) {
+                    // Track text skipping (Space while typewriter still running)
+                    if dialogue.is_typewriting() {
+                        behavior_signals.push(BehaviorSignal {
+                            signal: "text_skipped".into(),
+                            timestamp: Some(game_time as f64 * 1000.0),
+                        });
+                        profile = learner_reducer(profile, LearnerEvent::Behavior {
+                            signal: "text_skipped".into(),
+                        });
+                    }
                     dialogue.advance();
                     if !dialogue.active {
                         if pending_challenge {
                             pending_challenge = false;
-                            let ac = start_challenge(&mut rng, math_band);
+                            let ac = start_challenge(&mut rng, &profile, game_time);
                             audio::tts::speak("Sparky", &ac.challenge.speech_text);
                             active_challenge = Some(ac);
                             state = GameState::Challenge;
@@ -538,12 +563,15 @@ async fn main() {
                 }
                 if dismiss {
                     if let Some(ref ac) = active_challenge {
+                        let was_correct = ac.state.correct == Some(true);
+                        let response_ms = ((game_time - ac.start_time) as f64 * 1000.0).min(30000.0);
+
                         // Log challenge to session
                         session_log.record_challenge(session::ChallengeRecord {
                             question: ac.challenge.display_text.clone(),
                             correct_answer: ac.challenge.correct_answer,
-                            player_answer: None, // could track this with more state
-                            correct: ac.state.correct == Some(true),
+                            player_answer: None,
+                            correct: was_correct,
                             operation: ac.challenge.numbers.op.clone(),
                             band: ac.challenge.band,
                             sampled_band: ac.challenge.sampled_band,
@@ -553,6 +581,44 @@ async fn main() {
                             source: menu_target_id.clone(),
                             play_time_at_event: play_time,
                         });
+
+                        // Feed result into adaptive learning system
+                        let event = LearnerEvent::PuzzleAttempted {
+                            correct: was_correct,
+                            operation: ac.challenge.operation,
+                            sub_skill: ac.challenge.sub_skill,
+                            band: ac.challenge.sampled_band,
+                            center_band: Some(ac.challenge.center_band),
+                            response_time_ms: Some(response_ms),
+                            hint_used: ac.state.hint_used,
+                            told_me: ac.state.told_me,
+                            cra_level_shown: Some(ac.state.render_hint.cra_stage),
+                            timestamp: Some(game_time as f64 * 1000.0),
+                        };
+                        profile = learner_reducer(profile, event);
+
+                        // Rapid clicking detection: answer in < 1s is a click-through
+                        if response_ms < 1000.0 && !was_correct {
+                            let sig = BehaviorSignal {
+                                signal: "rapid_clicking".into(),
+                                timestamp: Some(game_time as f64 * 1000.0),
+                            };
+                            behavior_signals.push(sig);
+                            profile = learner_reducer(profile, LearnerEvent::Behavior {
+                                signal: "rapid_clicking".into(),
+                            });
+                        }
+
+                        // Frustration detection
+                        let frustration = detect_frustration(
+                            &profile.rolling_window, &behavior_signals,
+                        );
+                        if frustration.level == FrustrationLevel::High {
+                            profile = learner_reducer(profile, LearnerEvent::FrustrationDetected {
+                                level: "high".into(),
+                            });
+                        }
+
                         // Award dum dums if challenge had a reward
                         if let Some(ref reward) = ac.state.reward {
                             dum_dums += reward.amount;
@@ -579,7 +645,7 @@ async fn main() {
             if auto_save_timer >= 30.0 {
                 auto_save_timer = 0.0;
                 let save = gather_save_data(&player, &sparky, &map,
-                    &player_name, player_gender, math_band, dum_dums, play_time,
+                    &player_name, player_gender, &profile, dum_dums, play_time,
                     &gifts_given);
                 save::save_to_slot(active_slot, &save);
             }
@@ -686,13 +752,13 @@ async fn main() {
         dum_dum_hud.draw(dum_dums);
         let export_clicked = debug_overlay.draw(
             map.id, player.tile_x, player.tile_y, dum_dums, play_time,
-            math_band, session_log.challenge_count(), session_log.correct_count(),
+            &profile, session_log.challenge_count(), session_log.correct_count(),
         );
         // Export session: button click or E key while overlay is visible
         if export_clicked || (debug_overlay.visible && is_key_pressed(KeyCode::E)) {
             let json = session::build_export(
                 &player_name, &session_log, &gifts_given,
-                dum_dums, play_time, math_band, map.id,
+                dum_dums, play_time, &profile, map.id,
             );
             let filename = format!("robot-buddy-session-{}.json",
                 play_time as u64);
@@ -843,11 +909,11 @@ fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Np
 
 fn gather_save_data(
     player: &Entity, sparky: &Sparky, map: &Map,
-    name: &str, gender: Gender, band: u8, dum_dums: u32, play_time: f32,
+    name: &str, gender: Gender, profile: &LearnerProfile, dum_dums: u32, play_time: f32,
     gifts_given: &HashMap<String, u32>,
 ) -> SaveData {
     SaveData {
-        version: 1,
+        version: 2,
         name: name.to_string(),
         gender,
         map_id: map.id.to_string(),
@@ -856,23 +922,24 @@ fn gather_save_data(
         player_dir: player.dir,
         sparky_x: sparky.entity.tile_x,
         sparky_y: sparky.entity.tile_y,
-        math_band: band,
+        math_band: None,
         dum_dums,
         play_time,
         timestamp: 0,
         gifts_given: gifts_given.clone(),
+        profile: profile.clone(),
     }
 }
 
 fn load_from_save(
     save: &SaveData, map: &mut Map, player: &mut Entity, sparky: &mut Sparky,
     npcs: &mut Vec<npc::Npc>, name: &mut String, gender: &mut Gender,
-    band: &mut u8, dum_dums: &mut u32, play_time: &mut f32,
+    profile: &mut LearnerProfile, dum_dums: &mut u32, play_time: &mut f32,
     gifts_given: &mut HashMap<String, u32>,
 ) {
     *name = save.name.clone();
     *gender = save.gender;
-    *band = save.math_band;
+    *profile = save.profile.clone();
     *dum_dums = save.dum_dums;
     *play_time = save.play_time;
     *gifts_given = save.gifts_given.clone();
