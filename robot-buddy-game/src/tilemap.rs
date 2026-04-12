@@ -292,12 +292,22 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
 
     if mode == RenderMode::Dream {
         // Dreamy palette — muted purples and blues
+        let dream_grass = Color::from_rgba(106, 90, 205, 255);     // lavender
+        let dream_water = Color::from_rgba(50, 50, 140, 255);      // deep indigo
         return match tile {
-            Tile::Grass    => Color::from_rgba(106, 90, 205, 255),  // lavender grass
+            Tile::Grass    => dream_grass,
             Tile::Path     => Color::from_rgba(180, 160, 200, 255), // misty path
-            Tile::Water    => Color::from_rgba(50, 50, 140, 255),   // deep dream water (dark indigo)
-            Tile::Tree     => Color::from_rgba(106, 90, 205, 255),  // trees (dream grass base)
-            Tile::Flower   => Color::from_rgba(106, 90, 205, 255),  // flowers (dream grass base)
+            Tile::Water    => dream_water,
+            Tile::Tree     => dream_grass,                          // grass base
+            Tile::Flower   => dream_grass,                          // grass base
+            Tile::Fence    => dream_grass,                          // grass base
+            Tile::Sign     => dream_grass,                          // grass base
+            Tile::Chest    => dream_grass,                          // grass base
+            Tile::Bridge   => dream_water,                          // water base
+            Tile::HouseWall => Color::from_rgba(160, 140, 190, 255), // muted cream
+            Tile::Roof     => Color::from_rgba(130, 80, 140, 255),   // muted plum
+            Tile::Door     => Color::from_rgba(160, 140, 190, 255),  // muted cream
+            Tile::Window   => Color::from_rgba(160, 140, 190, 255),  // muted cream
             _ => tile_color_normal(tile),
         };
     }
