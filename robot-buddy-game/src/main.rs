@@ -903,21 +903,26 @@ async fn main() {
         if arrived && state == GameState::Playing {
             if let Some(portal) = tilemap::check_portal(map.id, player.tile_x, player.tile_y) {
                 let secret = portal.secret;
-                let dest_map = portal.to_map;
+                let mut dest_map = portal.to_map;
                 let dest_x = portal.to_x;
                 let dest_y = portal.to_y;
 
                 // Track dream state across transitions
                 if dest_map == "dream" {
                     dreaming = true;
-                } else if dest_map == "overworld" {
-                    // Any return to overworld ends the dream
+                } else if portal.from_map == "dream" && dest_map == "overworld" {
+                    // Explicit dream→overworld exit portal — wake up
                     dreaming = false;
+                } else if dreaming && dest_map == "overworld" {
+                    // Exiting a sub-map (home/lab/shop/doghouse) while dreaming —
+                    // stay in the dream world instead of landing on overworld.
+                    // Dream map has the same layout so coordinates are valid.
+                    dest_map = "dream";
                 }
 
                 // Swap map
                 map = Map::by_id(dest_map);
-                // Apply dream overlay if dreaming (affects non-dream maps too)
+                // Apply dream overlay if dreaming (affects non-dream sub-maps)
                 if dreaming && map.render_mode == tilemap::RenderMode::Normal {
                     map.render_mode = tilemap::RenderMode::Dream;
                 }
