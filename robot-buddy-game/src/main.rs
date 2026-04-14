@@ -1064,7 +1064,9 @@ async fn main() {
                             state = GameState::Dialogue;
                         }
                         "give" => {
-                            if let Some(result) = give::process_give(dum_dums, &menu_target_id, &gifts_given) {
+                            if !give::can_give(dum_dums) {
+                                state = GameState::Playing;
+                            } else if let Some(result) = give::process_give(dum_dums, &menu_target_id, &gifts_given) {
                                 session_log.record_give(session::GiveRecord {
                                     recipient_id: menu_target_id.clone(),
                                     recipient_name: menu_target_name.clone(),

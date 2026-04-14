@@ -1,5 +1,6 @@
 use macroquad::prelude::*;
 use robot_buddy_domain::learning::learner_profile::LearnerProfile;
+use robot_buddy_domain::types::Operation;
 
 // ─── AREA NAME ──────────────────────────────────────────
 
@@ -135,7 +136,7 @@ impl DebugOverlay {
 
         let sw = screen_width();
         let panel_w = 380.0;
-        let panel_h = 480.0;
+        let panel_h = 620.0;
         let x = sw - panel_w - 10.0;
         let y = 10.0;
 
@@ -196,6 +197,34 @@ impl DebugOverlay {
             ly += 18.0;
         }
         ly += 4.0;
+
+        // Per-operation accuracy (from rolling window)
+        draw_text("-- Operation Stats --", lx, ly, 16.0, green);
+        ly += line_h;
+        for op in [Operation::Add, Operation::Sub, Operation::Multiply, Operation::Divide, Operation::NumberBond] {
+            let stats = profile.operation_stats.get_coarse(op);
+            let window_acc = profile.rolling_window.operation_accuracy(op);
+            let acc_str = match window_acc {
+                Some(a) => format!("{:.0}%", a * 100.0),
+                None => "—".into(),
+            };
+            let lifetime_str = match stats.accuracy() {
+                Some(a) => format!("{:.0}% ({}/{})", a * 100.0, stats.correct, stats.attempts),
+                None => "—".into(),
+            };
+            draw_text(&format!("  {:?}: recent {} | total {}", op, acc_str, lifetime_str),
+                lx, ly, 14.0, white);
+            ly += 18.0;
+        }
+        ly += 4.0;
+
+        // Response time + consecutive wrong
+        let avg_rt = profile.rolling_window.avg_response_time();
+        let rt_str = if avg_rt > 0.0 { format!("{:.0}ms", avg_rt) } else { "—".into() };
+        let consec = profile.rolling_window.consecutive_wrong();
+        draw_text(&format!("Avg response: {}  Wrong streak: {}", rt_str, consec),
+            lx, ly, 16.0, white);
+        ly += line_h + 4.0;
 
         let accuracy = if challenges > 0 {
             format!("{:.0}%", correct as f64 / challenges as f64 * 100.0)
