@@ -17,11 +17,132 @@ pub fn draw_visual(challenge: &Challenge, cx: f32, cy: f32, _time: f32) {
     let answer = challenge.correct_answer;
     let band = challenge.sampled_band;
 
+    // Number bond / missing addend: "What + b = total?"
+    if challenge.numbers.format == "bond" {
+        let total = challenge.numbers.bond_total.unwrap_or(a);
+        draw_bond(total, b, answer, cx, cy);
+        return;
+    }
+
     if band >= 5 {
         draw_base10_blocks(a, b, op, answer, cx, cy);
     } else {
         draw_dots(a, b, op, cx, cy);
     }
+}
+
+// ─── NUMBER BOND (part-part-whole) ─────────────────────
+//
+// Renders a part-whole diagram for missing-addend problems ("? + b = total"):
+//   [whole: total dots]  ← all dots together
+//          ╱    ╲
+//   [known]    [missing]
+// The unknown part is drawn with empty circles + "?" so the child can see
+// how many are still needed.
+
+const BOND_DOT_R: f32 = 7.0;
+const BOND_DOT_GAP: f32 = 5.0;
+const BOND_BOX_PAD: f32 = 8.0;
+const BOND_LABEL_SIZE: u16 = 18;
+
+fn bond_box_width(count: i32) -> f32 {
+    let n = count.max(1) as f32;
+    n * (BOND_DOT_R * 2.0 + BOND_DOT_GAP) - BOND_DOT_GAP + BOND_BOX_PAD * 2.0
+}
+
+const BOND_BOX_H: f32 = BOND_DOT_R * 2.0 + BOND_BOX_PAD * 2.0;
+
+fn draw_bond_box(x: f32, y: f32, w: f32, stroke: Color, fill: Color) {
+    // Soft rounded container
+    let r = 8.0;
+    let body = Color::new(fill.r, fill.g, fill.b, 0.18);
+    draw_rectangle(x + r, y, w - 2.0 * r, BOND_BOX_H, body);
+    draw_rectangle(x, y + r, w, BOND_BOX_H - 2.0 * r, body);
+    draw_circle(x + r, y + r, r, body);
+    draw_circle(x + w - r, y + r, r, body);
+    draw_circle(x + r, y + BOND_BOX_H - r, r, body);
+    draw_circle(x + w - r, y + BOND_BOX_H - r, r, body);
+    // Outline (approximate rounded rect with a plain rect — the filled circles hide corners)
+    draw_rectangle_lines(x, y, w, BOND_BOX_H, 2.0, stroke);
+}
+
+fn draw_bond_dots_in_box(x: f32, y: f32, count: i32, color: Color) {
+    for i in 0..count {
+        let dx = x + BOND_BOX_PAD + BOND_DOT_R + i as f32 * (BOND_DOT_R * 2.0 + BOND_DOT_GAP);
+        let dy = y + BOND_BOX_H / 2.0;
+        draw_circle(dx, dy, BOND_DOT_R, color);
+    }
+}
+
+fn draw_bond_unknown_in_box(x: f32, y: f32, count: i32, color: Color) {
+    // Draw hollow circles with a "?" inside to show missing quantity
+    for i in 0..count {
+        let dx = x + BOND_BOX_PAD + BOND_DOT_R + i as f32 * (BOND_DOT_R * 2.0 + BOND_DOT_GAP);
+        let dy = y + BOND_BOX_H / 2.0;
+        draw_circle_lines(dx, dy, BOND_DOT_R, 2.0, color);
+    }
+    // Center "?" label over the group
+    let label = "?";
+    let fs = 22;
+    let lw = measure_text(label, None, fs, 1.0).width;
+    let cx = x + bond_box_width(count) / 2.0;
+    draw_text(label, cx - lw / 2.0, y + BOND_BOX_H / 2.0 + 8.0, fs as f32, color);
+}
+
+fn draw_bond(total: i32, known: i32, missing: i32, cx: f32, cy: f32) {
+    // Render count is bounded so things don't run off the panel.
+    let t_count = total.min(20);
+    let k_count = known.min(20);
+    let m_count = missing.min(20);
+    let unknown_color = Color::new(0.878, 0.878, 0.878, 1.0);
+    let known_color = YELLOW_B;
+    let whole_color = BLUE_A;
+
+    // Row 1: the whole
+    let whole_w = bond_box_width(t_count);
+    let whole_x = cx - whole_w / 2.0;
+    let whole_y = cy;
+
+    // Row 2: known + missing, side by side
+    let known_w = bond_box_width(k_count);
+    let miss_w = bond_box_width(m_count);
+    let gap = 32.0;
+    let parts_total = known_w + gap + miss_w;
+    let known_x = cx - parts_total / 2.0;
+    let miss_x = known_x + known_w + gap;
+    let parts_y = whole_y + BOND_BOX_H + 44.0;
+
+    // Connector lines (whole → each part)
+    let top_cx = cx;
+    let top_cy = whole_y + BOND_BOX_H;
+    let left_tx = known_x + known_w / 2.0;
+    let right_tx = miss_x + miss_w / 2.0;
+    let line_color = Color::new(0.690, 0.745, 0.773, 1.0);
+    draw_line(top_cx, top_cy, left_tx, parts_y, 2.0, line_color);
+    draw_line(top_cx, top_cy, right_tx, parts_y, 2.0, line_color);
+
+    // Whole
+    draw_bond_box(whole_x, whole_y, whole_w, whole_color, whole_color);
+    draw_bond_dots_in_box(whole_x, whole_y, t_count, whole_color);
+    let total_label = format!("{}", total);
+    let tlw = measure_text(&total_label, None, BOND_LABEL_SIZE, 1.0).width;
+    draw_text(&total_label, cx - tlw / 2.0, whole_y - 6.0, BOND_LABEL_SIZE as f32, LABEL_GRAY);
+
+    // Known part
+    draw_bond_box(known_x, parts_y, known_w, known_color, known_color);
+    draw_bond_dots_in_box(known_x, parts_y, k_count, known_color);
+    let k_label = format!("{}", known);
+    let klw = measure_text(&k_label, None, BOND_LABEL_SIZE, 1.0).width;
+    draw_text(&k_label, known_x + known_w / 2.0 - klw / 2.0,
+        parts_y + BOND_BOX_H + 20.0, BOND_LABEL_SIZE as f32, known_color);
+
+    // Missing part
+    draw_bond_box(miss_x, parts_y, miss_w, unknown_color, unknown_color);
+    draw_bond_unknown_in_box(miss_x, parts_y, m_count, unknown_color);
+    let q_label = "?";
+    let qlw = measure_text(q_label, None, BOND_LABEL_SIZE, 1.0).width;
+    draw_text(q_label, miss_x + miss_w / 2.0 - qlw / 2.0,
+        parts_y + BOND_BOX_H + 20.0, BOND_LABEL_SIZE as f32, unknown_color);
 }
 
 // ─── DOT VISUAL (bands 1-4) ────────────────────────────

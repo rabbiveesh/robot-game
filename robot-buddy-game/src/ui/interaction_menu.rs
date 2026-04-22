@@ -15,15 +15,15 @@ pub fn draw_interaction_menu(options: &[MenuOption]) -> Option<MenuAction> {
     let sw = screen_width();
     let sh = screen_height();
 
-    let btn_w = 160.0;
-    let btn_h = 44.0;
-    let gap = 10.0;
+    let btn_w = 200.0;
+    let btn_h = 56.0;
+    let gap = 12.0;
     let total_w = options.len() as f32 * btn_w + (options.len() as f32 - 1.0) * gap;
     let start_x = sw / 2.0 - total_w / 2.0;
-    let y = sh - 180.0;
+    let y = sh - 220.0;
 
     // Background strip
-    draw_rectangle(start_x - 10.0, y - 8.0, total_w + 20.0, btn_h + 16.0,
+    draw_rectangle(start_x - 12.0, y - 10.0, total_w + 24.0, btn_h + 20.0,
         Color::new(0.078, 0.078, 0.157, 0.85));
 
     let (mx, my) = mouse_position();
@@ -42,8 +42,8 @@ pub fn draw_interaction_menu(options: &[MenuOption]) -> Option<MenuAction> {
         draw_rectangle_lines(bx, y, btn_w, btn_h, 1.5, Color::new(1.0, 1.0, 1.0, 0.3));
 
         let label = format!("[{}] {}", opt.key, opt.label);
-        let tw = measure_text(&label, None, 20, 1.0).width;
-        draw_text(&label, bx + btn_w / 2.0 - tw / 2.0, y + 28.0, 20.0, WHITE);
+        let tw = measure_text(&label, None, 26, 1.0).width;
+        draw_text(&label, bx + btn_w / 2.0 - tw / 2.0, y + 37.0, 26.0, WHITE);
 
         // Click
         if clicked && hover {

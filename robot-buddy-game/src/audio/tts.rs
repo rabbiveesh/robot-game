@@ -29,8 +29,9 @@ fn clean_for_speech(text: &str) -> String {
         .replace(|c: char| "\u{1F916}\u{1F680}\u{2B50}\u{1F31F}\u{1F36D}\u{1F4CD}#".contains(c), "")
 }
 
-/// Speak a line of dialogue. No-op on native (no browser speech API).
+/// Speak a line of dialogue. No-op on native (no browser speech API) or when TTS is disabled.
 pub fn speak(speaker: &str, text: &str) {
+    if !crate::settings::tts_enabled() { return; }
     let clean = clean_for_speech(text);
     if clean.trim().is_empty() { return; }
     let voice = voice_for_speaker(speaker);

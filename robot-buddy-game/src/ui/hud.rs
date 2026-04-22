@@ -36,20 +36,21 @@ pub fn get_area_name(map_id: &str, tx: usize, ty: usize) -> &'static str {
         "dream" => "The Dream",
         "doghouse" => "D0GH0USE.exe",
         "grove" => "Hidden Grove",
+        "dev" => "Dev Zone",
         _ => "???",
     }
 }
 
 pub fn draw_area_name(map_id: &str, tx: usize, ty: usize) {
     let name = get_area_name(map_id, tx, ty);
-    let tw = measure_text(name, None, 20, 1.0).width;
-    let pill_w = tw + 30.0;
-    let pill_h = 32.0;
+    let tw = measure_text(name, None, 26, 1.0).width;
+    let pill_w = tw + 36.0;
+    let pill_h = 40.0;
     let x = 12.0;
     let y = 10.0;
 
     draw_rectangle(x, y, pill_w, pill_h, Color::new(0.078, 0.078, 0.157, 0.7));
-    draw_text(name, x + 12.0, y + 22.0, 20.0, Color::from_rgba(144, 202, 249, 255));
+    draw_text(name, x + 18.0, y + 28.0, 26.0, Color::from_rgba(144, 202, 249, 255));
 }
 
 // ─── DUM DUM COUNTER ────────────────────────────────────

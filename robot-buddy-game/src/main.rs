@@ -30,6 +30,7 @@ mod ui;
 mod save;
 mod audio;
 mod session;
+mod settings;
 
 use tilemap::{Map, TILE_SIZE};
 use sprites::Dir;
@@ -53,6 +54,12 @@ enum GameState {
     InteractionMenu,
     Dialogue,
     Challenge,
+}
+
+/// Cheat code: a save name that matches sends the player to the dev map.
+fn is_dev_zone_code(name: &str) -> bool {
+    let normalized: String = name.chars().filter(|c| !c.is_whitespace()).collect();
+    normalized.eq_ignore_ascii_case("justinbailey")
 }
 
 const INTAKE_QUESTION_COUNT: usize = 5;
@@ -354,12 +361,16 @@ async fn main() {
     let mut intake: Option<IntakeState> = None;
     let mut dreaming = false; // persists dream overlay across map transitions
     let mut session_log = session::SessionLog::new();
+    let mut settings_open = false;
 
     loop {
         let dt = get_frame_time();
         game_time += dt;
 
         // ─── INPUT + RENDER (Title/NewGame are self-contained) ──
+        if settings_open {
+            // Paused overlay: skip game input, update, and movement below.
+        } else {
         match state {
             GameState::Title => {
                 if let Some(action) = ui::title_screen::draw_title_screen(&save_slots, game_time) {
@@ -415,6 +426,38 @@ async fn main() {
                     if let Some(action) = form.draw() {
                         match action {
                             NewGameAction::Start => {
+                                // Dev Zone: name a save file "justinbailey" → spawn into dev map.
+                                // Skips intake, skips saving; ESC returns to title.
+                                if is_dev_zone_code(&form.name) {
+                                    player_name = "Dev".into();
+                                    player_gender = form.gender;
+                                    profile = LearnerProfile::new();
+                                    profile.math_band = 5;
+                                    profile.intake_completed = true;
+                                    dum_dums = 20;
+                                    play_time = 0.0;
+                                    behavior_signals.clear();
+
+                                    map = Map::by_id("dev");
+                                    npcs = npc::npcs_for_map(map.id);
+                                    player = Entity::new(7, 10);
+                                    player.dir = Dir::Up;
+                                    sparky = Sparky::new(8, 10);
+                                    camera = GameCamera { x: 0.0, y: 0.0 };
+
+                                    dialogue.start(vec![
+                                        DialogueLine {
+                                            speaker: "Sparky".into(),
+                                            text: "BEEP BOOP! Dev zone! Walk around, talk to everyone, open chests. ESC to exit!".into(),
+                                        },
+                                    ]);
+
+                                    new_game_form = None;
+                                    state = GameState::Dialogue;
+                                    next_frame().await;
+                                    continue;
+                                }
+
                                 let slot = form.slot;
                                 player_name = form.name.clone();
                                 player_gender = form.gender;
@@ -864,29 +907,41 @@ async fn main() {
                     active_challenge = None;
                     state = GameState::Playing;
 
-                    // Save after every challenge (profile just changed)
-                    let save = gather_save_data(&player, &sparky, &map,
-                        &player_name, player_gender, &profile, dum_dums, play_time,
-                        &gifts_given);
-                    save::save_to_slot(active_slot, &save);
-                    auto_save_timer = 0.0;
+                    // Save after every challenge (profile just changed). Dev map skips save.
+                    if map.id != "dev" {
+                        let save = gather_save_data(&player, &sparky, &map,
+                            &player_name, player_gender, &profile, dum_dums, play_time,
+                            &gifts_given);
+                        save::save_to_slot(active_slot, &save);
+                        auto_save_timer = 0.0;
+                    }
                 }
             }
         }
 
+        } // end of `else` for settings_open pause
+
         // P key: toggle debug overlay (any gameplay state)
-        if is_key_pressed(KeyCode::P) && state != GameState::Title && state != GameState::NewGame {
+        if !settings_open && is_key_pressed(KeyCode::P) && state != GameState::Title && state != GameState::NewGame {
             debug_overlay.toggle();
+        }
+
+        // ESC in the dev map returns to the title screen
+        if !settings_open && map.id == "dev" && state == GameState::Playing && is_key_pressed(KeyCode::Escape) {
+            state = GameState::Title;
+            dialogue.active = false;
+            active_challenge = None;
+            pending_challenge = false;
         }
         dum_dum_hud.update(dt);
 
         // ─── UPDATE ───────────────────────────────────
-        // Only track time + auto-save during actual gameplay
-        if state != GameState::Title && state != GameState::NewGame {
+        // Only track time + auto-save during actual gameplay. Dev map doesn't persist.
+        if !settings_open && state != GameState::Title && state != GameState::NewGame {
             play_time += dt;
             auto_save_timer += dt;
             // Save on timer or when page becomes hidden (tab switch / close)
-            if auto_save_timer >= 30.0 || save::is_page_hidden() {
+            if (auto_save_timer >= 30.0 || save::is_page_hidden()) && map.id != "dev" {
                 auto_save_timer = 0.0;
                 let save = gather_save_data(&player, &sparky, &map,
                     &player_name, player_gender, &profile, dum_dums, play_time,
@@ -895,9 +950,14 @@ async fn main() {
             }
         }
 
-        let arrived = player.move_toward_target(dt);
-        sparky.update(dt, player.tile_x, player.tile_y);
-        dialogue.update(dt);
+        let arrived = if settings_open {
+            false
+        } else {
+            let a = player.move_toward_target(dt);
+            sparky.update(dt, player.tile_x, player.tile_y);
+            dialogue.update(dt);
+            a
+        };
 
         // Portal check — after player arrives at a new tile
         if arrived && state == GameState::Playing {
@@ -977,9 +1037,9 @@ async fn main() {
             if let Some(ref iq) = intake {
                 if iq.phase == IntakePhase::Question || iq.phase == IntakePhase::Transition {
                     let progress_text = format!("Question {} of {}", iq.question_index + 1, INTAKE_QUESTION_COUNT);
-                    let tw = measure_text(&progress_text, None, 20, 1.0).width;
-                    draw_text(&progress_text, screen_width() / 2.0 - tw / 2.0, 130.0,
-                        20.0, Color::from_rgba(144, 202, 249, 200));
+                    let tw = measure_text(&progress_text, None, 26, 1.0).width;
+                    draw_text(&progress_text, screen_width() / 2.0 - tw / 2.0, 134.0,
+                        26.0, Color::from_rgba(144, 202, 249, 200));
                 }
             }
 
@@ -1108,6 +1168,28 @@ async fn main() {
             let (bounds, scaffold) = ui::challenge::draw_challenge(&ac.state, &ac.challenge, game_time);
             ac.choice_bounds = bounds;
             ac.scaffold = scaffold;
+        }
+
+        // Settings overlay (T to open/close). Paused everything above.
+        if settings_open {
+            ui::settings_overlay::draw();
+            if let Some(result) = ui::settings_overlay::handle_input() {
+                settings_open = false;
+                match result {
+                    ui::settings_overlay::SettingsResult::Close => {}
+                    ui::settings_overlay::SettingsResult::BackToTitle => {
+                        audio::tts::cancel();
+                        dialogue.active = false;
+                        active_challenge = None;
+                        pending_challenge = false;
+                        state = GameState::Title;
+                    }
+                }
+            }
+        } else if state != GameState::Title && state != GameState::NewGame
+            && is_key_pressed(KeyCode::T)
+        {
+            settings_open = true;
         }
 
         next_frame().await

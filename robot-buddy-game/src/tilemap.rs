@@ -273,6 +273,29 @@ impl Map {
         m
     }
 
+    #[allow(non_snake_case)]
+    pub fn dev() -> Self {
+        use Tile::*;
+        let (Wl, WF, Rg, Tb, Bs, Ch) = (Wall, WoodFloor, Rug, Table, Bookshelf, Chest);
+        Map {
+            id: "dev", width: 16, height: 12, render_mode: RenderMode::Normal,
+            tiles: vec![
+                vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,Bs,WF,WF,WF,Tb,WF,WF,WF,WF,Tb,WF,WF,WF,Bs,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,Ch,WF,Ch,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,Rg,Rg,Rg,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,Rg,WF,Rg,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
+            ],
+        }
+    }
+
     pub fn by_id(id: &str) -> Self {
         match id {
             "overworld" => Self::overworld(),
@@ -282,6 +305,7 @@ impl Map {
             "dream" => Self::dream(),
             "doghouse" => Self::doghouse(),
             "grove" => Self::grove(),
+            "dev" => Self::dev(),
             _ => Self::overworld(),
         }
     }

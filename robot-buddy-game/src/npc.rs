@@ -84,6 +84,23 @@ pub fn npcs_for_map(map_id: &str) -> Vec<Npc> {
             Npc { id: "grove_spirit", name: "Old Oak", tile_x: 6, tile_y: 4,
                 sprite: SpriteType::OldOak, can_receive_gifts: true, never_challenge: false },
         ],
+        "dev" => vec![
+            // Sprite gallery — one of each NPC, lined up. Natural talk = TTS test.
+            Npc { id: "mommy", name: "Mommy", tile_x: 2, tile_y: 3,
+                sprite: SpriteType::Mommy, can_receive_gifts: false, never_challenge: true },
+            Npc { id: "sage", name: "Professor Gizmo", tile_x: 4, tile_y: 3,
+                sprite: SpriteType::Sage, can_receive_gifts: false, never_challenge: true },
+            Npc { id: "shopkeeper", name: "Bolt the Shopkeeper", tile_x: 6, tile_y: 3,
+                sprite: SpriteType::Shopkeeper, can_receive_gifts: false, never_challenge: true },
+            Npc { id: "kid_1", name: "Tali", tile_x: 8, tile_y: 3,
+                sprite: SpriteType::Kid1, can_receive_gifts: false, never_challenge: true },
+            Npc { id: "kid_2", name: "Noa", tile_x: 10, tile_y: 3,
+                sprite: SpriteType::Kid2, can_receive_gifts: false, never_challenge: true },
+            Npc { id: "glitch_dog", name: "B0RK.exe", tile_x: 12, tile_y: 3,
+                sprite: SpriteType::Dog, can_receive_gifts: false, never_challenge: true },
+            Npc { id: "grove_spirit", name: "Old Oak", tile_x: 13, tile_y: 3,
+                sprite: SpriteType::OldOak, can_receive_gifts: false, never_challenge: true },
+        ],
         _ => vec![],
     }
 }

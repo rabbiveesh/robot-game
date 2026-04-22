@@ -1,5 +1,6 @@
 use macroquad::prelude::*;
 use crate::audio;
+use crate::settings;
 
 pub struct DialogueLine {
     pub speaker: String,
@@ -11,7 +12,6 @@ pub struct DialogueBox {
     current_line: usize,
     char_index: usize,
     char_timer: f32,
-    char_speed: f32,
     waiting_for_input: bool,
     pub active: bool,
     on_complete: Option<Box<dyn FnOnce()>>,
@@ -24,7 +24,6 @@ impl DialogueBox {
             current_line: 0,
             char_index: 0,
             char_timer: 0.0,
-            char_speed: 0.03,
             waiting_for_input: false,
             active: false,
             on_complete: None,
@@ -87,8 +86,9 @@ impl DialogueBox {
         if !self.active || self.waiting_for_input { return; }
         if let Some(line) = self.lines.get(self.current_line) {
             self.char_timer += dt;
-            while self.char_timer >= self.char_speed && self.char_index < line.text.len() {
-                self.char_timer -= self.char_speed;
+            let char_speed = settings::char_speed_seconds();
+            while self.char_timer >= char_speed && self.char_index < line.text.len() {
+                self.char_timer -= char_speed;
                 // Advance by one character (handle UTF-8 properly)
                 let remaining = &line.text[self.char_index..];
                 if let Some(c) = remaining.chars().next() {
@@ -107,7 +107,7 @@ impl DialogueBox {
 
         let sw = screen_width();
         let sh = screen_height();
-        let box_h = 130.0;
+        let box_h = 170.0;
         let box_y = sh - box_h - 10.0;
         let box_x = 10.0;
         let box_w = sw - 20.0;
@@ -120,24 +120,23 @@ impl DialogueBox {
         draw_rectangle_lines(box_x, box_y, box_w, box_h, 3.0, border_color);
 
         // Speaker name tab
-        let name_w = line.speaker.len() as f32 * 10.0 + 24.0;
-        draw_rectangle(box_x + 15.0, box_y - 14.0, name_w, 28.0, border_color);
-        draw_text(&line.speaker, box_x + 27.0, box_y + 4.0, 20.0, Color::from_rgba(26, 26, 46, 255));
+        let name_w = line.speaker.len() as f32 * 13.0 + 30.0;
+        draw_rectangle(box_x + 15.0, box_y - 18.0, name_w, 34.0, border_color);
+        draw_text(&line.speaker, box_x + 27.0, box_y + 6.0, 26.0, Color::from_rgba(26, 26, 46, 255));
 
         // Text with typewriter effect
         let visible = &line.text[..self.char_index.min(line.text.len())];
-        // Word-wrap at ~50 chars per line
-        let max_chars = ((box_w - 40.0) / 12.0) as usize;
+        let max_chars = ((box_w - 40.0) / 15.0) as usize;
         let wrapped = word_wrap(visible, max_chars);
         for (i, text_line) in wrapped.iter().enumerate() {
-            draw_text(text_line, box_x + 20.0, box_y + 40.0 + i as f32 * 24.0, 22.0, WHITE);
+            draw_text(text_line, box_x + 20.0, box_y + 52.0 + i as f32 * 32.0, 28.0, WHITE);
         }
 
         // "SPACE >" blink indicator
         if self.waiting_for_input {
             let blink = (get_time() * 6.0).sin() > 0.0;
             if blink {
-                draw_text("SPACE >", box_x + box_w - 100.0, box_y + box_h - 16.0, 16.0,
+                draw_text("SPACE >", box_x + box_w - 120.0, box_y + box_h - 18.0, 20.0,
                     Color::from_rgba(150, 150, 150, 255));
             }
         }
