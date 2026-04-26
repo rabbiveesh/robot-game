@@ -115,20 +115,84 @@ fn talking_to_sparky_can_roll_a_challenge_and_award_dum_dums() {
 }
 
 #[test]
+fn sage_offers_kenken_and_solving_it_completes_the_session() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc("sage");
+
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu,
+        "puzzler NPC should open the menu (Talk + Try a Puzzle)");
+
+    let mark = h.mark();
+    h.select_option("puzzle");
+    h.wait_until(|g| g.state == GameState::KenKen);
+
+    let started_grid = {
+        let ak = h.game.active_kenken().expect("active KenKen after picking 'puzzle'");
+        ak.session.puzzle.grid_size
+    };
+    assert!(started_grid >= 2 && started_grid <= 4,
+        "kenken_level should clamp to 2..=4, got {}", started_grid);
+
+    h.solve_kenken_correctly();
+
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::KenKenStarted { .. })),
+        "expected KenKenStarted; got: {:?}", events,
+    );
+    let resolved = events.iter().find_map(|e| match e {
+        GameEvent::KenKenResolved { correct, hints_used, grid_size, .. } =>
+            Some((*correct, *hints_used, *grid_size)),
+        _ => None,
+    }).expect(&format!("expected KenKenResolved; got: {:?}", events));
+    assert_eq!(resolved, (true, 0, started_grid),
+        "fully solving the puzzle by hand should resolve correct=true with 0 hints");
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::DumDumsAwarded { .. })),
+        "solving a kenken should award dum_dums; got: {:?}", events,
+    );
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
+fn kenken_hint_marks_resolution_as_hint_used() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc("sage");
+    h.interact();
+    h.select_option("puzzle");
+    h.wait_until(|g| g.state == GameState::KenKen);
+
+    // One hint, then solve the rest.
+    h.request_kenken_hint();
+    let mark = h.mark();
+    h.solve_kenken_correctly();
+
+    let events = h.events_since(mark);
+    let hints_used = events.iter().find_map(|e| match e {
+        GameEvent::KenKenResolved { hints_used, .. } => Some(*hints_used),
+        _ => None,
+    }).expect(&format!("expected KenKenResolved; got: {:?}", events));
+    assert_eq!(hints_used, 1, "one hint button click should record one hint");
+}
+
+#[test]
 fn walk_to_npc_then_interact_starts_dialogue() {
     let mut h = Harness::new(42);
     h.start_dev_game();
 
-    // The sage is the second sprite in the dev gallery row. walk_to_npc
-    // pathfinds to an adjacent walkable tile and turns to face them.
-    h.walk_to_npc("sage");
+    // Mommy in the dev gallery has only the "talk" option (gifts off, no puzzle,
+    // no challenge). walk_to_npc pathfinds to an adjacent walkable tile and turns
+    // to face them.
+    h.walk_to_npc("mommy");
 
     let mark = h.mark();
     h.interact();
 
-    // Sage in the dev map has only the "talk" option. Stronger than asserting
-    // state==Dialogue: assert the menu was *skipped* — no transition through
-    // InteractionMenu — and DialogueStarted fired.
+    // Stronger than asserting state==Dialogue: assert the menu was *skipped* — no
+    // transition through InteractionMenu — and DialogueStarted fired.
     let events = h.events_since(mark);
     assert!(
         events.iter().any(|e| matches!(e, GameEvent::DialogueStarted { .. })),

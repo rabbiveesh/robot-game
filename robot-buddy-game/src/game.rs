@@ -27,6 +27,9 @@ use robot_buddy_domain::learning::intake_assessor::{
 };
 use robot_buddy_domain::economy::give;
 use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
+use robot_buddy_domain::logic::kenken::{
+    self, KenKenAction, KenKenPhase, KenKenSession, cage_ops_for_band, generate_kenken,
+};
 use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel};
 
 use crate::tilemap::{self, Map, TILE_SIZE};
@@ -59,6 +62,7 @@ pub enum GameState {
     InteractionMenu,
     Dialogue,
     Challenge,
+    KenKen,
 }
 
 #[derive(PartialEq, Debug)]
@@ -100,6 +104,14 @@ struct ActiveChallenge {
     scaffold: ScaffoldBounds,
     complete_timer: f32,
     start_time: f32,
+}
+
+pub struct ActiveKenKen {
+    pub session: KenKenSession,
+    pub selected: Option<(u8, u8)>,
+    pub complete_timer: f32,
+    pub start_time: f32,
+    pub source_npc: String,
 }
 
 // ─── Sprites/movement ───────────────────────────────────
@@ -241,6 +253,14 @@ pub enum GameEvent {
     DumDumsAwarded { amount: u32 },
     MapTransitioned { from: String, to: String },
     IntakeCompleted { math_band: u8 },
+    KenKenStarted { grid_size: u8, source: String },
+    KenKenResolved {
+        correct: bool,
+        grid_size: u8,
+        hints_used: u8,
+        constraint_violations: u8,
+        response_ms: f64,
+    },
 }
 
 // ─── The Game ───────────────────────────────────────────
@@ -262,6 +282,7 @@ pub struct Game {
     pub state: GameState,
     intake: Option<IntakeState>,
     active_challenge: Option<ActiveChallenge>,
+    active_kenken: Option<ActiveKenKen>,
     pending_challenge: bool,
     new_game_form: Option<NewGameForm>,
 
@@ -325,6 +346,7 @@ impl Game {
             state: GameState::Title,
             intake: None,
             active_challenge: None,
+            active_kenken: None,
             pending_challenge: false,
             new_game_form: None,
             player_name: String::new(),
@@ -392,6 +414,12 @@ impl Game {
             .or_else(|| self.intake.as_ref().and_then(|iq| iq.challenge.as_ref().map(|ac| ac.state.phase)))
     }
 
+    /// Read-only view of the active KenKen session (None if no puzzle is on screen).
+    /// Tests use this with `ui::kenken::layout` to compute click targets.
+    pub fn active_kenken(&self) -> Option<&ActiveKenKen> {
+        self.active_kenken.as_ref()
+    }
+
     /// Snapshot of the event log length. Pair with `events_since(mark)` to
     /// read events emitted by a specific action — the basic assertion pattern
     /// for tests that care about *what just happened*, not just end-state.
@@ -448,6 +476,7 @@ impl Game {
             self.set_state(GameState::Title);
             self.dialogue.active = false;
             self.active_challenge = None;
+            self.active_kenken = None;
             self.pending_challenge = false;
         }
         self.dum_dum_hud.update(dt);
@@ -510,6 +539,7 @@ impl Game {
             GameState::InteractionMenu => false,
             GameState::Dialogue => { self.step_dialogue(input); false }
             GameState::Challenge => { self.step_challenge(input, dt, screen); false }
+            GameState::KenKen => { self.step_kenken(input, dt, screen); false }
         }
     }
 
@@ -837,12 +867,13 @@ impl Game {
                 self.set_state(GameState::Dialogue);
             } else if let Some(target) = npc::get_interact_target(
                 self.player.tile_x, self.player.tile_y, self.player.dir, &self.npcs
-            ).map(|n| (n.id.to_string(), n.name.to_string(), n.can_receive_gifts, n.never_challenge, n)) {
-                let (target_id, target_name, can_receive_gifts, never_challenge, target_ref) = target;
+            ).map(|n| (n.id.to_string(), n.name.to_string(), n.can_receive_gifts, n.never_challenge, n.is_puzzler, n)) {
+                let (target_id, target_name, can_receive_gifts, never_challenge, is_puzzler, target_ref) = target;
                 let npc_info = NpcInfo {
                     id: target_id.clone(),
                     can_receive_gifts: Some(can_receive_gifts),
                     has_shop: None,
+                    is_puzzler: Some(is_puzzler),
                 };
                 let player_st = PlayerState { dum_dums: self.dum_dums };
                 let opts = interaction_options::get_interaction_options(&npc_info, &player_st);
@@ -874,6 +905,7 @@ impl Game {
                     id: "sparky".to_string(),
                     can_receive_gifts: Some(true),
                     has_shop: None,
+                    is_puzzler: Some(false),
                 };
                 let player_st = PlayerState { dum_dums: self.dum_dums };
                 let opts = interaction_options::get_interaction_options(&npc_info, &player_st);
@@ -1041,6 +1073,78 @@ impl Game {
         }
     }
 
+    fn step_kenken(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        let mut dismiss = false;
+        if let Some(ref mut ak) = self.active_kenken {
+            // Auto-dismiss timer once solved.
+            if ak.session.phase == KenKenPhase::Complete {
+                ak.complete_timer += dt;
+                if ak.complete_timer >= 2.5 { dismiss = true; }
+                if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) {
+                    dismiss = true;
+                }
+            }
+
+            if !dismiss {
+                let layout = ui::kenken::layout(&ak.session, screen);
+
+                // Keyboard input (number 1..N to fill the selected cell).
+                if let Some(intent) = ui::kenken::handle_key(&ak.session, input, ak.selected) {
+                    apply_kenken_intent(ak, intent);
+                }
+
+                // Mouse click → select cell, place value, hint, or clear.
+                if input.mouse_clicked {
+                    let (mx, my) = input.mouse_pos;
+                    if let Some(intent) = ui::kenken::handle_click(mx, my, &ak.session, &layout, ak.selected) {
+                        apply_kenken_intent(ak, intent);
+                    }
+                }
+            }
+        }
+
+        if dismiss {
+            if let Some(ak) = self.active_kenken.take() {
+                let was_correct = ak.session.phase == KenKenPhase::Complete;
+                let response_ms = ((self.game_time - ak.start_time) as f64 * 1000.0).min(120000.0);
+                let grid_size = ak.session.puzzle.grid_size;
+                let hints_used = ak.session.hints_used;
+                let violations = ak.session.constraint_violations;
+
+                self.profile = learner_reducer(self.profile.clone(), LearnerEvent::KenKenAttempted {
+                    correct: was_correct,
+                    grid_size,
+                    hints_used,
+                    constraint_violations: violations,
+                    response_time_ms: Some(response_ms),
+                });
+
+                if was_correct {
+                    // Same reward shape as a correct arithmetic challenge: 1 Dum Dum.
+                    let award = 1u32;
+                    self.dum_dums += award;
+                    self.dum_dum_hud.flash();
+                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                }
+
+                self.events.push(GameEvent::KenKenResolved {
+                    correct: was_correct,
+                    grid_size,
+                    hints_used,
+                    constraint_violations: violations,
+                    response_ms,
+                });
+            }
+            self.set_state(GameState::Playing);
+
+            if self.map.id != "dev" {
+                let save_data = self.gather_save_data();
+                self.save_backend.save_to(self.active_slot, &save_data);
+                self.auto_save_timer = 0.0;
+            }
+        }
+    }
+
     fn handle_interaction_menu(&mut self, input: &FrameInput, screen: (f32, f32)) {
         let layout = ui::interaction_menu::layout(&self.menu_options, screen);
         let action = ui::interaction_menu::handle_input(&layout, input);
@@ -1069,6 +1173,16 @@ impl Game {
                         }
                     }
                     self.set_state(GameState::Dialogue);
+                }
+                "puzzle" => {
+                    let source = self.menu_target_id.clone();
+                    let ak = start_kenken(&mut self.rng, &self.profile, self.game_time, source);
+                    self.events.push(GameEvent::KenKenStarted {
+                        grid_size: ak.session.puzzle.grid_size,
+                        source: ak.source_npc.clone(),
+                    });
+                    self.active_kenken = Some(ak);
+                    self.set_state(GameState::KenKen);
                 }
                 "give" => {
                     if !give::can_give(self.dum_dums) {
@@ -1124,6 +1238,7 @@ impl Game {
                         audio::tts::cancel();
                         self.dialogue.active = false;
                         self.active_challenge = None;
+                        self.active_kenken = None;
                         self.pending_challenge = false;
                         self.set_state(GameState::Title);
                     }
@@ -1302,6 +1417,12 @@ impl Game {
             ui::challenge::draw_challenge(&ac.state, &ac.challenge, self.game_time);
         }
 
+        // KenKen overlay
+        if let Some(ref ak) = self.active_kenken {
+            let layout = ui::kenken::layout(&ak.session, screen);
+            ui::kenken::draw_kenken(&ak.session, &layout, self.game_time, ak.selected);
+        }
+
         if self.settings_open {
             ui::settings_overlay::draw(screen);
         }
@@ -1414,6 +1535,40 @@ fn start_challenge(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32)
         scaffold: ScaffoldBounds { show_me: None, tell_me: None },
         complete_timer: 0.0,
         start_time: game_time,
+    }
+}
+
+fn start_kenken(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, source: String) -> ActiveKenKen {
+    let grid_size = profile.kenken_level.clamp(2, 4);
+    let ops = cage_ops_for_band(profile.math_band);
+    let puzzle = generate_kenken(grid_size, &ops, rng);
+    let session = KenKenSession::new(puzzle);
+    ActiveKenKen {
+        session,
+        selected: None,
+        complete_timer: 0.0,
+        start_time: game_time,
+        source_npc: source,
+    }
+}
+
+fn apply_kenken_intent(ak: &mut ActiveKenKen, intent: ui::kenken::KenKenInput) {
+    match intent {
+        ui::kenken::KenKenInput::Action(action) => {
+            ak.session = kenken::kenken_reducer(ak.session.clone(), action.clone());
+            // Once a placement happens, the user's next click on a different cell
+            // re-establishes selection — but the cell whose value was just placed
+            // should clear so subsequent picker clicks don't accidentally overwrite.
+            if let KenKenAction::CellPlaced { .. } = action {
+                ak.selected = None;
+            }
+        }
+        ui::kenken::KenKenInput::SelectCell(r, c) => {
+            ak.selected = Some((r, c));
+        }
+        ui::kenken::KenKenInput::Deselect => {
+            ak.selected = None;
+        }
     }
 }
 

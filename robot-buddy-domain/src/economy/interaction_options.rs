@@ -10,6 +10,8 @@ pub struct NpcInfo {
     pub can_receive_gifts: Option<bool>,
     #[serde(default)]
     pub has_shop: Option<bool>,
+    #[serde(default)]
+    pub is_puzzler: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +55,15 @@ pub fn get_interaction_options(npc: &NpcInfo, player_state: &PlayerState) -> Vec
         });
     }
 
+    if npc.is_puzzler.unwrap_or(false) {
+        let key = (options.len() + 1).to_string();
+        options.push(InteractionOption {
+            option_type: "puzzle".into(),
+            label: "Try a Puzzle".into(),
+            key,
+        });
+    }
+
     options
 }
 
@@ -63,7 +74,7 @@ mod tests {
     #[test]
     fn always_includes_talk() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None },
+            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None },
             &PlayerState { dum_dums: 0 },
         );
         assert_eq!(opts[0].option_type, "talk");
@@ -72,7 +83,7 @@ mod tests {
     #[test]
     fn includes_give_when_has_dum_dums() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None },
+            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None },
             &PlayerState { dum_dums: 3 },
         );
         assert_eq!(opts.len(), 2);
@@ -82,7 +93,7 @@ mod tests {
     #[test]
     fn excludes_give_when_zero_dum_dums() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None },
+            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None },
             &PlayerState { dum_dums: 0 },
         );
         assert_eq!(opts.len(), 1);
@@ -91,9 +102,20 @@ mod tests {
     #[test]
     fn excludes_give_when_cant_receive() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "chest".into(), can_receive_gifts: Some(false), has_shop: None },
+            &NpcInfo { id: "chest".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: None },
             &PlayerState { dum_dums: 5 },
         );
         assert_eq!(opts.len(), 1);
+    }
+
+    #[test]
+    fn includes_puzzle_when_npc_is_puzzler() {
+        let opts = get_interaction_options(
+            &NpcInfo { id: "sage".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: Some(true) },
+            &PlayerState { dum_dums: 0 },
+        );
+        assert!(opts.iter().any(|o| o.option_type == "puzzle"),
+            "puzzler NPCs should expose a 'puzzle' option, got: {:?}",
+            opts.iter().map(|o| &o.option_type).collect::<Vec<_>>());
     }
 }

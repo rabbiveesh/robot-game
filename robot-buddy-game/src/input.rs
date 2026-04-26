@@ -17,7 +17,7 @@ const TRACKED_KEYS: &[KeyCode] = &[
     KeyCode::W, KeyCode::A, KeyCode::S, KeyCode::D,
     KeyCode::Space, KeyCode::Enter,
     KeyCode::Backspace, KeyCode::Tab, KeyCode::Escape,
-    KeyCode::Key1, KeyCode::Key2, KeyCode::Key3,
+    KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4,
     KeyCode::P, KeyCode::T, KeyCode::E,
 ];
 
