@@ -871,14 +871,16 @@ impl Game {
                 self.set_state(GameState::Dialogue);
             } else if let Some(target) = npc::get_interact_target(
                 self.player.tile_x, self.player.tile_y, self.player.dir, &self.npcs
-            ).map(|n| (n.id.to_string(), n.name.to_string(), n.can_receive_gifts, n.never_challenge, n.is_puzzler, n)) {
-                let (target_id, target_name, can_receive_gifts, never_challenge, is_puzzler, target_ref) = target;
+            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n)) {
+                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, target_ref) = target;
+                let target_id = target_kind.as_str().to_string();
+                let target_name = target_kind.display_name().to_string();
 
                 // Dev knob bay NPCs short-circuit the normal interaction flow.
-                // Each ctrl_* id maps to one effect — cycle a profile field,
+                // Each ctrl_* kind maps to one effect -- cycle a profile field,
                 // reset a flag, or fire a fresh puzzle.
-                if target_id.starts_with("ctrl_") {
-                    self.apply_dev_control(&target_id);
+                if target_kind.is_dev_control() {
+                    self.apply_dev_control(target_kind);
                     return;
                 }
 
@@ -1086,24 +1088,25 @@ impl Game {
         }
     }
 
-    /// Dev knob effects. Single dispatch on ctrl_* id. Direct profile
-    /// mutation here is intentional — these are debugging tools, not
-    /// gameplay events, and going through the learner reducer would mean
-    /// inventing fake events for every knob. The `dev` map (and its child
-    /// `control` map) is the only place ctrl_* NPCs exist, so this can't
+    /// Dev knob effects. Exhaustive match on the dev-control NpcKind variants.
+    /// Direct profile mutation here is intentional -- these are debugging
+    /// tools, not gameplay events, and going through the learner reducer would
+    /// mean inventing fake events for every knob. The `dev` map (and its child
+    /// `control` map) is the only place dev-control NPCs exist, so this can't
     /// fire from a real game.
-    fn apply_dev_control(&mut self, ctrl_id: &str) {
+    fn apply_dev_control(&mut self, kind: npc::NpcKind) {
+        use npc::NpcKind::*;
         let line = |text: &str| DialogueLine {
             speaker: "Knob".into(),
             text: text.into(),
         };
-        match ctrl_id {
-            "ctrl_band" => {
+        match kind {
+            CtrlBand => {
                 self.profile.math_band = if self.profile.math_band >= 10 { 1 } else { self.profile.math_band + 1 };
                 self.start_dialogue(vec![line(&format!("BEEP. Math band is now {}.", self.profile.math_band))]);
                 self.set_state(GameState::Dialogue);
             }
-            "ctrl_kenken_level" => {
+            CtrlKenkenLevel => {
                 self.profile.kenken_level = match self.profile.kenken_level {
                     2 => 3,
                     3 => 4,
@@ -1113,28 +1116,29 @@ impl Game {
                 self.start_dialogue(vec![line(&format!("BEEP. KenKen grid is now {}x{}.", n, n))]);
                 self.set_state(GameState::Dialogue);
             }
-            "ctrl_cra_reset" => {
+            CtrlCraReset => {
                 for stage in self.profile.cra_stages.values_mut() {
                     *stage = CraStage::Concrete;
                 }
                 self.start_dialogue(vec![line("All operation CRA stages reset to Concrete.")]);
                 self.set_state(GameState::Dialogue);
             }
-            "ctrl_intro_reset" => {
+            CtrlIntroReset => {
                 self.profile.kenken_intro_seen = false;
                 self.start_dialogue(vec![line("KenKen intro flag cleared. Next puzzle replays the tutorial.")]);
                 self.set_state(GameState::Dialogue);
             }
-            "ctrl_trigger_kenken" => {
-                let ak = start_kenken(&mut self.rng, &self.profile, self.game_time, ctrl_id.into());
+            CtrlTriggerKenken => {
+                let source = kind.as_str().to_string();
+                let ak = start_kenken(&mut self.rng, &self.profile, self.game_time, source.clone());
                 self.events.push(GameEvent::KenKenStarted {
                     grid_size: ak.session.puzzle.grid_size,
-                    source: ctrl_id.into(),
+                    source,
                 });
                 self.active_kenken = Some(ak);
                 self.set_state(GameState::KenKen);
             }
-            "ctrl_trigger_challenge" => {
+            CtrlTriggerChallenge => {
                 let ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
                 self.events.push(GameEvent::ChallengeStarted {
                     question: ac.challenge.display_text.clone(),
@@ -1143,8 +1147,9 @@ impl Game {
                 self.active_challenge = Some(ac);
                 self.set_state(GameState::Challenge);
             }
-            _ => {
-                self.start_dialogue(vec![line(&format!("Unknown control: {}", ctrl_id))]);
+            // Non-dev kinds shouldn't reach here -- caller gates on is_dev_control.
+            other => {
+                self.start_dialogue(vec![line(&format!("Unknown control: {}", other.as_str()))]);
                 self.set_state(GameState::Dialogue);
             }
         }
@@ -1271,7 +1276,7 @@ impl Game {
                         self.start_dialogue(lines);
                     } else {
                         // Pull lines first to free the borrow before start_dialogue.
-                        let lines = self.npcs.iter().find(|n| n.id == self.menu_target_id)
+                        let lines = self.npcs.iter().find(|n| n.id_str() == self.menu_target_id)
                             .map(|target| {
                                 let lines = npc_dialogue_lines(target, &mut self.rng);
                                 lines
@@ -1746,49 +1751,52 @@ fn sparky_dialogue_lines(rng: &mut SmallRng) -> Vec<DialogueLine> {
 }
 
 fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
-    let lines: &[&str] = match npc.id {
-        "mommy" => &[
+    use npc::NpcKind::*;
+    let lines: &[&str] = match npc.kind {
+        Mommy => &[
             "Hi sweetie! I'm so proud of you for exploring!",
             "You and Sparky make the best team!",
             "I love you! Keep being amazing!",
         ],
-        "sage" | "sage_lab" => &[
+        Sage | SageLab => &[
             "Ahhhh, young adventurer! The stars told me you'd come!",
             "Welcome! I am Professor Gizmo, master of numbers!",
             "The ancient scrolls speak of a hero... and I think it's YOU!",
         ],
-        "kid_1" => &[
+        Kid1 => &[
             "Wanna see me do a cartwheel? Watch! ...okay I can't actually do one yet.",
             "Sparky is SO COOL! I wish I had a robot friend!",
             "Did you know frogs can jump SUPER far? Like, really far!",
         ],
-        "kid_2" => &[
+        Kid2 => &[
             "Hi... um... do you like bugs? I found a really cool one.",
             "Sparky beeped at me and I think that means he likes me!",
             "Do you think clouds are soft? I think they're soft.",
         ],
-        "shopkeeper" => &[
+        Shopkeeper => &[
             "Welcome to my shop! Everything costs Dum Dums!",
             "I've got the finest wares in all of Robot Village!",
         ],
-        "dream_sage" => &[
+        DreamSage => &[
             "You are dreaming... or are you? The numbers whisper here...",
             "In dreams, 2 + 2 can be anything... but it's still 4.",
         ],
-        "glitch_dog" => &[
+        GlitchDog => &[
             "BORK BORK! sys.treat.exe... GOOD BOY overflow!",
             "Woof! *static* I am... a good boy? BORK.dll loaded!",
             "fetch(ball) returned: UNDEFINED... but I still love you!",
         ],
-        "grove_spirit" => &[
+        GroveSpirit => &[
             "How... did you find this place? The trees have hidden it for ages...",
             "It's dangerous to go alone... take this!",
             "The leaves whisper your name... they say you are very clever.",
         ],
-        _ => &["Hello there!"],
+        // Dev-control NPCs go through apply_dev_control, never this path.
+        CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
+        | CtrlTriggerKenken | CtrlTriggerChallenge => &["Hello there!"],
     };
     let idx = rng.gen_range(0..lines.len());
-    vec![DialogueLine { speaker: npc.name.into(), text: lines[idx].into() }]
+    vec![DialogueLine { speaker: npc.name().into(), text: lines[idx].into() }]
 }
 
 fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Npc]) -> (usize, usize) {
