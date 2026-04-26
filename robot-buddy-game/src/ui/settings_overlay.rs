@@ -1,5 +1,6 @@
 use macroquad::prelude::*;
 use crate::settings::{self, TextSpeed};
+use crate::input::FrameInput;
 
 pub enum SettingsResult {
     Close,
@@ -147,15 +148,15 @@ pub fn draw() {
 }
 
 /// Handle input; returns a result if the overlay should close.
-pub fn handle_input() -> Option<SettingsResult> {
-    if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::T) {
+pub fn handle_input(input: &FrameInput) -> Option<SettingsResult> {
+    if input.pressed(KeyCode::Escape) || input.pressed(KeyCode::T) {
         return Some(SettingsResult::Close);
     }
 
-    if !is_mouse_button_pressed(MouseButton::Left) {
+    if !input.mouse_clicked {
         return None;
     }
-    let (mx, my) = mouse_position();
+    let (mx, my) = input.mouse_pos;
     let (_, _, _, _, rows) = layout();
     for row in rows {
         let (x, y, w, h) = row.rect;

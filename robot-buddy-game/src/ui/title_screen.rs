@@ -1,5 +1,6 @@
 use macroquad::prelude::*;
 use crate::save::{SaveSlots, Gender};
+use crate::input::FrameInput;
 
 // ─── TITLE SCREEN ───────────────────────────────────────
 
@@ -9,7 +10,7 @@ pub enum TitleAction {
     DeleteSlot(usize),   // slot index
 }
 
-pub fn draw_title_screen(slots: &SaveSlots, time: f32) -> Option<TitleAction> {
+pub fn draw_title_screen(slots: &SaveSlots, time: f32, input: &FrameInput) -> Option<TitleAction> {
     let sw = screen_width();
     let sh = screen_height();
 
@@ -51,8 +52,8 @@ pub fn draw_title_screen(slots: &SaveSlots, time: f32) -> Option<TitleAction> {
     let slot_gap = 10.0;
 
     let mut action: Option<TitleAction> = None;
-    let (mx, my) = mouse_position();
-    let clicked = is_mouse_button_pressed(MouseButton::Left);
+    let (mx, my) = input.mouse_pos;
+    let clicked = input.mouse_clicked;
 
     for (i, slot) in slots.iter().enumerate() {
         let sy = slot_start_y + i as f32 * (slot_h + slot_gap);
@@ -139,7 +140,7 @@ pub fn draw_title_screen(slots: &SaveSlots, time: f32) -> Option<TitleAction> {
 
     // Keyboard shortcuts
     for (i, key) in [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3].iter().enumerate() {
-        if is_key_pressed(*key) {
+        if input.pressed(*key) {
             if slots[i].is_some() {
                 action = Some(TitleAction::LoadGame(i));
             } else {
@@ -188,21 +189,21 @@ impl NewGameForm {
         }
     }
 
-    pub fn update(&mut self, dt: f32) {
+    pub fn update(&mut self, dt: f32, input: &FrameInput) {
         self.cursor_blink += dt;
 
         // Text input
-        if let Some(ch) = get_char_pressed() {
-            if self.name.len() < 20 && (ch.is_alphanumeric() || ch == ' ' || ch == '-') {
-                self.name.push(ch);
+        for ch in &input.chars_typed {
+            if self.name.len() < 20 && (ch.is_alphanumeric() || *ch == ' ' || *ch == '-') {
+                self.name.push(*ch);
             }
         }
-        if is_key_pressed(KeyCode::Backspace) {
+        if input.pressed(KeyCode::Backspace) {
             self.name.pop();
         }
     }
 
-    pub fn draw(&self) -> Option<NewGameAction> {
+    pub fn draw(&self, input: &FrameInput) -> Option<NewGameAction> {
         let sw = screen_width();
         let sh = screen_height();
 
@@ -262,8 +263,8 @@ impl NewGameForm {
         let girl_x = sw / 2.0 + gap / 2.0;
         let btn_y = 310.0;
 
-        let (mx, my) = mouse_position();
-        let clicked = is_mouse_button_pressed(MouseButton::Left);
+        let (mx, my) = input.mouse_pos;
+        let clicked = input.mouse_clicked;
         let mut action: Option<NewGameAction> = None;
 
         // Boy button
@@ -333,7 +334,7 @@ impl NewGameForm {
         if can_start && clicked && start_hover {
             action = Some(NewGameAction::Start);
         }
-        if can_start && is_key_pressed(KeyCode::Enter) {
+        if can_start && input.pressed(KeyCode::Enter) {
             action = Some(NewGameAction::Start);
         }
 
@@ -343,7 +344,7 @@ impl NewGameForm {
         draw_text(back, sw / 2.0 - bw / 2.0, sh - 30.0, 14.0,
             Color::from_rgba(100, 100, 120, 255));
 
-        if is_key_pressed(KeyCode::Escape) {
+        if input.pressed(KeyCode::Escape) {
             action = Some(NewGameAction::Back);
         }
 
@@ -352,7 +353,7 @@ impl NewGameForm {
         action
     }
 
-    pub fn handle_form_clicks(&mut self) {
+    pub fn handle_form_clicks(&mut self, input: &FrameInput) {
         let sw = screen_width();
         let btn_w = 120.0;
         let gap = 20.0;
@@ -360,9 +361,9 @@ impl NewGameForm {
         let girl_x = sw / 2.0 + gap / 2.0;
         let btn_y = 310.0;
         let btn_h = 50.0;
-        let (mx, my) = mouse_position();
+        let (mx, my) = input.mouse_pos;
 
-        if is_mouse_button_pressed(MouseButton::Left) {
+        if input.mouse_clicked {
             if mx >= boy_x && mx <= boy_x + btn_w && my >= btn_y && my <= btn_y + btn_h {
                 self.gender = Gender::Boy;
             }
@@ -372,7 +373,7 @@ impl NewGameForm {
         }
 
         // Tab to toggle gender
-        if is_key_pressed(KeyCode::Tab) {
+        if input.pressed(KeyCode::Tab) {
             self.gender = match self.gender {
                 Gender::Boy => Gender::Girl,
                 Gender::Girl => Gender::Boy,
@@ -388,7 +389,7 @@ impl NewGameForm {
         let arr_y = 405.0;
         let arr_h = 20.0;
 
-        if is_mouse_button_pressed(MouseButton::Left) {
+        if input.mouse_clicked {
             if mx >= arr_left_x - 20.0 && mx <= sw / 2.0 && my >= arr_y && my <= arr_y + arr_h {
                 if self.math_band > 1 { self.math_band -= 1; }
             }
@@ -396,7 +397,7 @@ impl NewGameForm {
                 if self.math_band < 10 { self.math_band += 1; }
             }
         }
-        if is_key_pressed(KeyCode::Left) && self.math_band > 1 { self.math_band -= 1; }
-        if is_key_pressed(KeyCode::Right) && self.math_band < 10 { self.math_band += 1; }
+        if input.pressed(KeyCode::Left) && self.math_band > 1 { self.math_band -= 1; }
+        if input.pressed(KeyCode::Right) && self.math_band < 10 { self.math_band += 1; }
     }
 }

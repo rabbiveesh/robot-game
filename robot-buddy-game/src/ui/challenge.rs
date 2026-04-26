@@ -4,6 +4,7 @@ use robot_buddy_domain::learning::challenge_generator::Challenge;
 use robot_buddy_domain::types::Phase;
 
 use super::visuals;
+use crate::input::FrameInput;
 
 // ─── LAYOUT (testable) ─────────────────────────────────
 
@@ -253,10 +254,10 @@ fn draw_star_burst(cx: f32, cy: f32, time: f32) {
 
 // ─── INPUT HANDLING ─────────────────────────────────────
 
-pub fn handle_key(cs: &ChallengeState, challenge: &Challenge) -> Option<ChallengeAction> {
+pub fn handle_key(cs: &ChallengeState, challenge: &Challenge, input: &FrameInput) -> Option<ChallengeAction> {
     // In complete or teaching phase, Space/Enter dismisses
     if cs.phase == Phase::Complete || cs.phase == Phase::Teaching {
-        if is_key_pressed(KeyCode::Space) || is_key_pressed(KeyCode::Enter) {
+        if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) {
             if cs.phase == Phase::Teaching {
                 return Some(ChallengeAction::TeachingComplete);
             }
@@ -269,7 +270,7 @@ pub fn handle_key(cs: &ChallengeState, challenge: &Challenge) -> Option<Challeng
     // Number keys 1-3 to pick choices
     let keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3];
     for (i, key) in keys.iter().enumerate() {
-        if is_key_pressed(*key) {
+        if input.pressed(*key) {
             if let Some(choice) = challenge.choices.get(i) {
                 let answer: i32 = choice.text.parse().unwrap_or(0);
                 return Some(ChallengeAction::AnswerSubmitted { answer });

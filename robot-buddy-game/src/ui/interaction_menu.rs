@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use crate::input::FrameInput;
 
 pub struct MenuOption {
     pub option_type: String,
@@ -11,7 +12,7 @@ pub enum MenuAction {
     Dismiss,
 }
 
-pub fn draw_interaction_menu(options: &[MenuOption]) -> Option<MenuAction> {
+pub fn draw_interaction_menu(options: &[MenuOption], input: &FrameInput) -> Option<MenuAction> {
     let sw = screen_width();
     let sh = screen_height();
 
@@ -26,8 +27,8 @@ pub fn draw_interaction_menu(options: &[MenuOption]) -> Option<MenuAction> {
     draw_rectangle(start_x - 12.0, y - 10.0, total_w + 24.0, btn_h + 20.0,
         Color::new(0.078, 0.078, 0.157, 0.85));
 
-    let (mx, my) = mouse_position();
-    let clicked = is_mouse_button_pressed(MouseButton::Left);
+    let (mx, my) = input.mouse_pos;
+    let clicked = input.mouse_clicked;
 
     for (i, opt) in options.iter().enumerate() {
         let bx = start_x + i as f32 * (btn_w + gap);
@@ -57,13 +58,13 @@ pub fn draw_interaction_menu(options: &[MenuOption]) -> Option<MenuAction> {
             3 => KeyCode::Key3,
             _ => continue,
         };
-        if is_key_pressed(key) {
+        if input.pressed(key) {
             return Some(MenuAction::Select(opt.option_type.clone()));
         }
     }
 
     // Escape dismisses
-    if is_key_pressed(KeyCode::Escape) {
+    if input.pressed(KeyCode::Escape) {
         return Some(MenuAction::Dismiss);
     }
 
