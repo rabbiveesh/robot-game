@@ -11,10 +11,15 @@
 
 use macroquad::prelude::*;
 use robot_buddy_domain::logic::kenken::{
-    KenKenAction, KenKenPhase, KenKenSession, ValidationResult,
+    CageOp, KenKenAction, KenKenPhase, KenKenSession, ValidationResult,
 };
 
 use crate::input::FrameInput;
+
+/// Number of intro overlay steps shown the first time a kid opens KenKen.
+/// After advancing past the last step, the puzzle becomes interactive and the
+/// profile flag flips so this never fires again.
+pub const INTRO_STEPS: u8 = 3;
 
 // ─── Layout types ───────────────────────────────────────
 
@@ -205,7 +210,6 @@ const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0);
 const WIN_GREEN: Color = Color::new(0.412, 0.941, 0.682, 1.0);
 const BLUE_BTN: Color = Color::new(0.129, 0.588, 0.953, 1.0);
 const SCAFFOLD_BG: Color = Color::new(0.329, 0.431, 0.478, 1.0);
-const HINT_GRAY: Color = Color::new(0.471, 0.565, 0.604, 1.0);
 const GIVEN_TEXT: Color = Color::new(0.20, 0.20, 0.20, 1.0);
 const USER_TEXT: Color = Color::new(0.06, 0.30, 0.55, 1.0);
 const VIOLATION_TINT: Color = Color::new(1.0, 0.4, 0.4, 0.45);
@@ -230,6 +234,7 @@ pub fn draw_kenken(
     layout: &KenKenLayout,
     _time: f32,
     selected: Option<(u8, u8)>,
+    intro_step: Option<u8>,
 ) {
     let sw = screen_width();
     let sh = screen_height();
@@ -330,25 +335,156 @@ pub fn draw_kenken(
         draw_rectangle_lines(rect.x + 2.0, rect.y + 2.0, rect.w - 4.0, rect.h - 4.0, 4.0, GOLD);
     }
 
-    for picker in &layout.pickers {
-        let r = picker.rect;
-        draw_rectangle(r.x, r.y, r.w, r.h, BLUE_BTN);
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.4));
-        let label = format!("{}", picker.value);
-        let size = 32u16;
-        let tw = measure_text(&label, None, size, 1.0).width;
-        draw_text(&label, r.x + r.w / 2.0 - tw / 2.0, r.y + r.h / 2.0 + size as f32 * 0.35, size as f32, WHITE);
-    }
-
-    draw_button(layout.hint_btn, "Hint");
-    draw_button(layout.clear_btn, "Clear");
-
     if session.phase == KenKenPhase::Complete {
+        // The picker row + Hint/Clear buttons are inert once solved — replace
+        // the whole control strip with the dismiss prompt so it isn't buried
+        // under disabled controls.
+        let strip_top = layout.pickers.first().map(|p| p.rect.y).unwrap_or(p.y + p.h - 60.0);
+        let strip_bottom = layout.clear_btn.y + layout.clear_btn.h;
         let dismiss = "Press SPACE to continue";
-        let dw = measure_text(dismiss, None, 22, 1.0).width;
+        let dw = measure_text(dismiss, None, 28, 1.0).width;
         let blink = (get_time() * 4.0).sin() > 0.0;
         if blink {
-            draw_text(dismiss, p.x + p.w / 2.0 - dw / 2.0, p.y + p.h - 16.0, 22.0, HINT_GRAY);
+            draw_text(
+                dismiss,
+                p.x + p.w / 2.0 - dw / 2.0,
+                (strip_top + strip_bottom) / 2.0 + 10.0,
+                28.0,
+                GOLD,
+            );
+        }
+    } else {
+        for picker in &layout.pickers {
+            let r = picker.rect;
+            draw_rectangle(r.x, r.y, r.w, r.h, BLUE_BTN);
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.4));
+            let label = format!("{}", picker.value);
+            let size = 32u16;
+            let tw = measure_text(&label, None, size, 1.0).width;
+            draw_text(&label, r.x + r.w / 2.0 - tw / 2.0, r.y + r.h / 2.0 + size as f32 * 0.35, size as f32, WHITE);
+        }
+
+        draw_button(layout.hint_btn, "Hint");
+        draw_button(layout.clear_btn, "Clear");
+    }
+
+    if let Some(step) = intro_step {
+        draw_intro_overlay(session, layout, step);
+    }
+}
+
+fn draw_intro_overlay(session: &KenKenSession, layout: &KenKenLayout, step: u8) {
+    let (highlight, instruction) = intro_step_data(session, layout, step);
+
+    // Pulsing glow border around the focus region. Drawn as concentric outlines
+    // with alternating alpha to fake a soft glow without compositing tricks.
+    let pulse = ((get_time() * 3.0).sin() * 0.5 + 0.5) as f32;
+    for w in 1..=4 {
+        let alpha = (1.0 - w as f32 * 0.18) * (0.55 + 0.35 * pulse);
+        draw_rectangle_lines(
+            highlight.x - w as f32,
+            highlight.y - w as f32,
+            highlight.w + 2.0 * w as f32,
+            highlight.h + 2.0 * w as f32,
+            2.0,
+            Color::new(1.0, 0.9, 0.25, alpha),
+        );
+    }
+
+    // Speech bubble at the bottom of the panel — out of the way of the grid
+    // and pickers, so it never overlaps the highlighted region.
+    let p = layout.panel;
+    let bubble_h = 96.0;
+    let bubble_y = p.y + p.h - bubble_h - 10.0;
+    let bubble_x = p.x + 16.0;
+    let bubble_w = p.w - 32.0;
+    draw_rectangle(bubble_x, bubble_y, bubble_w, bubble_h, Color::new(0.98, 0.98, 0.92, 0.97));
+    draw_rectangle_lines(bubble_x, bubble_y, bubble_w, bubble_h, 3.0, GOLD);
+
+    let lines: Vec<&str> = instruction.lines().collect();
+    let line_h = 24.0;
+    let total_h = line_h * lines.len() as f32;
+    let mut y = bubble_y + (bubble_h - total_h) / 2.0 + 18.0;
+    for line in lines {
+        let lw = measure_text(line, None, 22, 1.0).width;
+        draw_text(
+            line,
+            bubble_x + bubble_w / 2.0 - lw / 2.0,
+            y,
+            22.0,
+            Color::new(0.10, 0.10, 0.18, 1.0),
+        );
+        y += line_h;
+    }
+}
+
+fn intro_step_data(session: &KenKenSession, layout: &KenKenLayout, step: u8) -> (UiRect, String) {
+    match step {
+        0 => {
+            let n = session.puzzle.grid_size as usize;
+            let g0 = layout.cells[0][0];
+            let g_last = layout.cells[n - 1][n - 1];
+            (
+                UiRect {
+                    x: g0.x,
+                    y: g0.y,
+                    w: g_last.x + g_last.w - g0.x,
+                    h: g_last.y + g_last.h - g0.y,
+                },
+                "Each row needs every number, just once.\nEvery column too!\n\nTap to keep going...".into(),
+            )
+        }
+        1 => {
+            // Find a multi-cell cage to point at; if none, fall back to the first cage.
+            let cage = session
+                .puzzle
+                .cages
+                .iter()
+                .find(|c| c.cells.len() > 1)
+                .or_else(|| session.puzzle.cages.first())
+                .expect("kenken puzzle must have at least one cage");
+            let mut min_x = f32::MAX;
+            let mut min_y = f32::MAX;
+            let mut max_x = f32::MIN;
+            let mut max_y = f32::MIN;
+            for &(r, c) in &cage.cells {
+                let cell = layout.cells[r as usize][c as usize];
+                min_x = min_x.min(cell.x);
+                min_y = min_y.min(cell.y);
+                max_x = max_x.max(cell.x + cell.w);
+                max_y = max_y.max(cell.y + cell.h);
+            }
+            let phrase = match cage.operation {
+                CageOp::Add => format!("add up to {}", cage.target),
+                CageOp::Sub => format!("have a difference of {}", cage.target),
+                CageOp::Mul => format!("multiply to {}", cage.target),
+                CageOp::Div => format!("divide to {}", cage.target),
+            };
+            (
+                UiRect {
+                    x: min_x,
+                    y: min_y,
+                    w: max_x - min_x,
+                    h: max_y - min_y,
+                },
+                format!(
+                    "See the label '{}' here?\nThose squares {}!\n\nTap to keep going...",
+                    cage.display_label, phrase
+                ),
+            )
+        }
+        _ => {
+            let first = layout.pickers.first().map(|p| p.rect).unwrap_or(layout.panel);
+            let last = layout.pickers.last().map(|p| p.rect).unwrap_or(layout.panel);
+            (
+                UiRect {
+                    x: first.x - 4.0,
+                    y: first.y - 4.0,
+                    w: last.x + last.w - first.x + 8.0,
+                    h: first.h + 8.0,
+                },
+                "Tap a square, then tap a number\nto fill it in!\n\nTap to start!".into(),
+            )
         }
     }
 }

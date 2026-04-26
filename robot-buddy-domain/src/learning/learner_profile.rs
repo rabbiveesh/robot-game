@@ -32,6 +32,8 @@ pub struct LearnerProfile {
     pub pattern_level: u8,
     #[serde(default = "default_logic_confidence")]
     pub logic_confidence: f64,
+    #[serde(default)]
+    pub kenken_intro_seen: bool,
 }
 
 fn default_kenken_level() -> u8 { 2 }
@@ -65,6 +67,7 @@ impl LearnerProfile {
             kenken_level: default_kenken_level(),
             pattern_level: 0,
             logic_confidence: default_logic_confidence(),
+            kenken_intro_seen: false,
         }
     }
 }
@@ -116,6 +119,8 @@ pub enum LearnerEvent {
         #[serde(default)]
         response_time_ms: Option<f64>,
     },
+    #[serde(rename = "KENKEN_INTRO_SEEN")]
+    KenKenIntroSeen,
 }
 
 // ─── Helpers ────────────────────────────────────────────
@@ -363,6 +368,11 @@ pub fn learner_reducer(state: LearnerProfile, event: LearnerEvent) -> LearnerPro
                 ..state
             }
         }
+
+        LearnerEvent::KenKenIntroSeen => LearnerProfile {
+            kenken_intro_seen: true,
+            ..state
+        },
     }
 }
 

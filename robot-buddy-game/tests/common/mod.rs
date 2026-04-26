@@ -282,8 +282,9 @@ impl Harness {
 
     /// Place `value` at (row, col) in the active KenKen by clicking the cell
     /// then clicking the matching number picker. Mirrors how a real player
-    /// would interact: cell select → value pick.
+    /// would interact: cell select → value pick. Auto-skips intro if showing.
     pub fn place_kenken_cell(&mut self, row: u8, col: u8, value: u8) {
+        self.skip_kenken_intro();
         let (cell_x, cell_y, picker_x, picker_y) = {
             let ak = self.game.active_kenken().expect("place_kenken_cell: no active KenKen");
             let layout = ui::kenken::layout(&ak.session, SCREEN);
@@ -300,8 +301,9 @@ impl Harness {
         self.click(picker_x, picker_y);
     }
 
-    /// Click the Hint button on the active KenKen.
+    /// Click the Hint button on the active KenKen. Auto-skips intro if showing.
     pub fn request_kenken_hint(&mut self) {
+        self.skip_kenken_intro();
         let (x, y) = {
             let ak = self.game.active_kenken().expect("request_kenken_hint: no active KenKen");
             let layout = ui::kenken::layout(&ak.session, SCREEN);
@@ -311,11 +313,32 @@ impl Harness {
         self.click(x, y);
     }
 
+    /// If the first-time intro overlay is showing, tap Space until it
+    /// finishes. No-op once `kenken_intro_seen` is set on the profile.
+    pub fn skip_kenken_intro(&mut self) {
+        // Bound the loop — INTRO_STEPS plus slack — so a stuck intro can't
+        // hang the test forever.
+        for _ in 0..(ui::kenken::INTRO_STEPS as usize + 4) {
+            let still_in_intro = self
+                .game
+                .active_kenken()
+                .map(|ak| ak.intro_step.is_some())
+                .unwrap_or(false);
+            if !still_in_intro {
+                return;
+            }
+            self.press(macroquad::prelude::KeyCode::Space);
+        }
+        panic!("kenken intro never finished after enough advances");
+    }
+
     /// Fill in every empty cell with the puzzle's known solution. After the
     /// final cell, presses Space to dismiss the celebration screen and lands
-    /// back in `Playing`.
+    /// back in `Playing`. Auto-skips the first-time intro overlay if showing.
     pub fn solve_kenken_correctly(&mut self) {
-        let (n, fills) = {
+        self.skip_kenken_intro();
+
+        let fills = {
             let ak = self.game.active_kenken().expect("solve_kenken_correctly: no active KenKen");
             let n = ak.session.puzzle.grid_size as usize;
             let mut fills: Vec<(u8, u8, u8)> = Vec::new();
@@ -326,9 +349,8 @@ impl Harness {
                     }
                 }
             }
-            (n, fills)
+            fills
         };
-        let _ = n;
         for (r, c, v) in fills {
             self.place_kenken_cell(r, c, v);
         }

@@ -157,6 +157,37 @@ fn sage_offers_kenken_and_solving_it_completes_the_session() {
 }
 
 #[test]
+fn kenken_intro_shows_on_first_puzzle_only() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    assert!(!h.game.profile.kenken_intro_seen,
+        "fresh dev profile should not have seen the intro");
+
+    h.walk_to_npc("sage");
+    h.interact();
+    h.select_option("puzzle");
+    h.wait_until(|g| g.state == GameState::KenKen);
+
+    let step = h.game.active_kenken().unwrap().intro_step;
+    assert_eq!(step, Some(0), "first KenKen should start at intro step 0");
+
+    h.skip_kenken_intro();
+    assert!(h.game.profile.kenken_intro_seen,
+        "finishing the intro should flip the profile flag");
+    assert_eq!(h.game.active_kenken().unwrap().intro_step, None);
+
+    h.solve_kenken_correctly();
+
+    // Second KenKen — no intro this time.
+    h.walk_to_npc("sage");
+    h.interact();
+    h.select_option("puzzle");
+    h.wait_until(|g| g.state == GameState::KenKen);
+    assert_eq!(h.game.active_kenken().unwrap().intro_step, None,
+        "second KenKen should skip the intro");
+}
+
+#[test]
 fn kenken_hint_marks_resolution_as_hint_used() {
     let mut h = Harness::new(7);
     h.start_dev_game();

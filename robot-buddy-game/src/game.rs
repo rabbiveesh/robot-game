@@ -112,6 +112,10 @@ pub struct ActiveKenKen {
     pub complete_timer: f32,
     pub start_time: f32,
     pub source_npc: String,
+    /// `Some(n)` while the first-time intro overlay is showing on step `n`.
+    /// `None` once the kid has tapped past the last step (or already saw the
+    /// intro previously). Domain reducer never sees this — it's UI-only state.
+    pub intro_step: Option<u8>,
 }
 
 // ─── Sprites/movement ───────────────────────────────────
@@ -1074,6 +1078,33 @@ impl Game {
     }
 
     fn step_kenken(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        // Intro overlay swallows all input until the kid taps past the last
+        // step. Only on completion do we fire the profile event so this never
+        // fires again.
+        let mut intro_finished = false;
+        if let Some(ref mut ak) = self.active_kenken {
+            if let Some(step) = ak.intro_step {
+                if input.mouse_clicked || input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) {
+                    let next = step + 1;
+                    if next >= ui::kenken::INTRO_STEPS {
+                        ak.intro_step = None;
+                        intro_finished = true;
+                        // Reset start_time so the kid's intro reading time
+                        // doesn't pollute the puzzle response measurement.
+                        ak.start_time = self.game_time;
+                    } else {
+                        ak.intro_step = Some(next);
+                    }
+                }
+                if !intro_finished {
+                    return; // skip puzzle logic while intro is showing
+                }
+            }
+        }
+        if intro_finished {
+            self.profile = learner_reducer(self.profile.clone(), LearnerEvent::KenKenIntroSeen);
+        }
+
         let mut dismiss = false;
         if let Some(ref mut ak) = self.active_kenken {
             // Auto-dismiss timer once solved.
@@ -1420,7 +1451,7 @@ impl Game {
         // KenKen overlay
         if let Some(ref ak) = self.active_kenken {
             let layout = ui::kenken::layout(&ak.session, screen);
-            ui::kenken::draw_kenken(&ak.session, &layout, self.game_time, ak.selected);
+            ui::kenken::draw_kenken(&ak.session, &layout, self.game_time, ak.selected, ak.intro_step);
         }
 
         if self.settings_open {
@@ -1543,12 +1574,14 @@ fn start_kenken(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, so
     let ops = cage_ops_for_band(profile.math_band);
     let puzzle = generate_kenken(grid_size, &ops, rng);
     let session = KenKenSession::new(puzzle);
+    let intro_step = if profile.kenken_intro_seen { None } else { Some(0) };
     ActiveKenKen {
         session,
         selected: None,
         complete_timer: 0.0,
         start_time: game_time,
         source_npc: source,
+        intro_step,
     }
 }
 
