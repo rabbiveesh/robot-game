@@ -14,7 +14,6 @@ pub struct DialogueBox {
     char_timer: f32,
     waiting_for_input: bool,
     pub active: bool,
-    on_complete: Option<Box<dyn FnOnce()>>,
 }
 
 impl DialogueBox {
@@ -26,7 +25,6 @@ impl DialogueBox {
             char_timer: 0.0,
             waiting_for_input: false,
             active: false,
-            on_complete: None,
         }
     }
 
@@ -41,12 +39,6 @@ impl DialogueBox {
         self.char_timer = 0.0;
         self.waiting_for_input = false;
         self.active = true;
-        self.on_complete = None;
-    }
-
-    pub fn start_with_callback(&mut self, lines: Vec<DialogueLine>, on_complete: impl FnOnce() + 'static) {
-        self.start(lines);
-        self.on_complete = Some(Box::new(on_complete));
     }
 
     /// True if the typewriter is still revealing characters (not yet waiting for input).
@@ -68,9 +60,6 @@ impl DialogueBox {
         if self.current_line >= self.lines.len() {
             self.active = false;
             audio::tts::cancel();
-            if let Some(cb) = self.on_complete.take() {
-                cb();
-            }
             return;
         }
         // Speak the next line

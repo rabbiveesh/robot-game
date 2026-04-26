@@ -61,26 +61,6 @@ pub enum Gender {
 }
 
 impl SaveData {
-    pub fn new(name: &str, gender: Gender, profile: LearnerProfile) -> Self {
-        SaveData {
-            version: 2,
-            name: name.to_string(),
-            gender,
-            map_id: "overworld".into(),
-            player_x: 14,
-            player_y: 12,
-            player_dir: Dir::Down,
-            sparky_x: 14,
-            sparky_y: 13,
-            math_band: None,
-            dum_dums: 0,
-            play_time: 0.0,
-            timestamp: current_timestamp(),
-            gifts_given: HashMap::new(),
-            profile,
-        }
-    }
-
     pub fn play_time_display(&self) -> String {
         let secs = self.play_time as u64;
         let mins = secs / 60;

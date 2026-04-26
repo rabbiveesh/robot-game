@@ -14,7 +14,3 @@ rand = { version = "0.8", default-features = false, features = ["small_rng"] }
 
 [dev-dependencies]
 rand = { version = "0.8", default-features = false, features = ["small_rng"] }
-
-[profile.release]
-opt-level = "s"
-lto = true

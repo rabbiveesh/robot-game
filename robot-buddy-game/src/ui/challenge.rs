@@ -10,7 +10,6 @@ use super::visuals;
 pub struct ChoiceBound {
     pub rect: (f32, f32, f32, f32), // x, y, w, h
     pub answer: i32,
-    pub correct: bool,
 }
 
 pub struct ScaffoldBounds {
@@ -136,7 +135,6 @@ pub fn draw_challenge(cs: &ChallengeState, challenge: &Challenge, time: f32) -> 
         choice_bounds.push(ChoiceBound {
             rect: (bx, by, btn_w, btn_h),
             answer,
-            correct: choice.correct,
         });
     }
 
