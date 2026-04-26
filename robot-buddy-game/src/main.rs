@@ -16,6 +16,7 @@ fn window_conf() -> Conf {
 async fn main() {
     let seed = macroquad::rand::rand() as u64;
     let mut g = Game::new(seed);
+    g.refresh_save_slots();
 
     loop {
         let dt = get_frame_time();

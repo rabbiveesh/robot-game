@@ -280,7 +280,7 @@ pub struct Game {
 
     // UI / overlays
     dialogue: DialogueBox,
-    menu_options: Vec<MenuOption>,
+    pub menu_options: Vec<MenuOption>,
     menu_target_id: String,
     menu_target_name: String,
     menu_can_challenge: bool,
@@ -298,6 +298,9 @@ pub struct Game {
 }
 
 impl Game {
+    /// Construct a fresh game. Does not touch disk. Production callers should
+    /// follow up with `refresh_save_slots()` to populate the title screen.
+    /// Tests skip that and start with empty slots — no /tmp races.
     pub fn new(seed: u64) -> Self {
         let map = Map::overworld();
         let npcs = npc::npcs_for_map(map.id);
@@ -319,7 +322,7 @@ impl Game {
             player_gender: Gender::Boy,
             dum_dums: 0,
             gifts_given: HashMap::new(),
-            save_slots: save::load_all_slots(),
+            save_slots: [None, None, None],
             active_slot: 0,
             auto_save_timer: 0.0,
             profile: LearnerProfile::new(),
@@ -337,6 +340,46 @@ impl Game {
             events: Vec::new(),
             session_log: session::SessionLog::new(),
         }
+    }
+
+    /// Reload save slots from persistent storage. Called from production main()
+    /// at startup so the title screen reflects what's on disk.
+    pub fn refresh_save_slots(&mut self) {
+        self.save_slots = save::load_all_slots();
+    }
+
+    // ─── Test-friendly accessors ────────────────────────
+    //
+    // Read-only views into private state. Tests use these to assert and to
+    // implement story helpers (e.g. "press the key for the correct answer").
+
+    /// True iff a dialogue box is currently active (typewriter running or waiting
+    /// for the player to advance).
+    pub fn is_dialogue_active(&self) -> bool {
+        self.dialogue.active
+    }
+
+    /// True iff the player has finished any in-progress tile-to-tile slide.
+    /// Movement on this game is grid-locked: each input direction starts a slide
+    /// from one tile to the next, and inputs are ignored mid-slide.
+    pub fn player_at_rest(&self) -> bool {
+        !self.player.moving
+    }
+
+    /// Index (0-based) of the correct choice in the currently-active challenge,
+    /// be it intake or normal. None if no challenge is on screen.
+    pub fn correct_choice_index(&self) -> Option<usize> {
+        let ch = self.active_challenge.as_ref()
+            .map(|ac| &ac.challenge)
+            .or_else(|| self.intake.as_ref().and_then(|iq| iq.challenge.as_ref().map(|ac| &ac.challenge)))?;
+        ch.choices.iter().position(|c| c.correct)
+    }
+
+    /// Phase of the active challenge (intake or normal). None if no challenge.
+    pub fn challenge_phase(&self) -> Option<Phase> {
+        self.active_challenge.as_ref()
+            .map(|ac| ac.state.phase)
+            .or_else(|| self.intake.as_ref().and_then(|iq| iq.challenge.as_ref().map(|ac| ac.state.phase)))
     }
 
     fn set_state(&mut self, new_state: GameState) {
