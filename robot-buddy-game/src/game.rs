@@ -356,14 +356,15 @@ impl Game {
         self.dialogue.start(lines);
     }
 
-    /// Run one frame: process input, update logic, run animations, render.
-    pub fn step(&mut self, input: &FrameInput, dt: f32) {
+    /// Run one frame of pure logic — no rendering, no macroquad calls. Tests
+    /// can call this without a window. Production main calls step() then render().
+    pub fn step(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         self.game_time += dt;
 
         let early_exit = if self.settings_open {
             false
         } else {
-            self.dispatch_state(input, dt)
+            self.dispatch_state(input, dt, screen)
         };
         if early_exit { return; }
 
@@ -413,36 +414,44 @@ impl Game {
 
         self.camera.follow(self.player.x, self.player.y, &self.map, GAME_W, GAME_H);
 
-        // ─── RENDER ─────────────────────────────────────
-        self.render_world();
-        self.render_hud(input);
-
-        // Interaction menu (draw + input together since it's screen-space)
+        // Interaction menu input (layout from step-side; render() draws separately)
         if self.state == GameState::InteractionMenu {
-            self.handle_interaction_menu(input);
+            self.handle_interaction_menu(input, screen);
         }
 
-        self.dialogue.draw();
-        self.draw_challenge_overlay();
-        self.handle_settings_layer(input);
+        // Settings overlay input
+        self.handle_settings_input(input, screen);
+
+        // Debug-overlay export (uses last-frame's stashed button rect, or E key).
+        if self.debug_overlay.is_export_clicked(input)
+            || (self.debug_overlay.visible && input.pressed(KeyCode::E))
+        {
+            let json = session::build_export(
+                &self.player_name, &self.session_log, &self.gifts_given,
+                self.dum_dums, self.play_time, &self.profile, self.map.id,
+            );
+            let filename = format!("robot-buddy-session-{}.json", self.play_time as u64);
+            session::download_json(&json, &filename);
+        }
     }
 
-    fn dispatch_state(&mut self, input: &FrameInput, dt: f32) -> bool {
+    fn dispatch_state(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) -> bool {
         match self.state {
-            GameState::Title => { self.step_title(input); true }
-            GameState::NewGame => { self.step_new_game(input, dt); true }
-            GameState::Intake => { self.step_intake(input, dt); false }
+            GameState::Title => { self.step_title(input, screen); true }
+            GameState::NewGame => { self.step_new_game(input, dt, screen); true }
+            GameState::Intake => { self.step_intake(input, dt, screen); false }
             GameState::Playing => { self.step_playing(input, dt); false }
             GameState::InteractionMenu => false,
             GameState::Dialogue => { self.step_dialogue(input); false }
-            GameState::Challenge => { self.step_challenge(input, dt); false }
+            GameState::Challenge => { self.step_challenge(input, dt, screen); false }
         }
     }
 
     // ─── State arms ─────────────────────────────────────
 
-    fn step_title(&mut self, input: &FrameInput) {
-        let action = ui::title_screen::draw_title_screen(&self.save_slots, self.game_time, input);
+    fn step_title(&mut self, input: &FrameInput, screen: (f32, f32)) {
+        let layout = ui::title_screen::layout_title(&self.save_slots, screen);
+        let action = ui::title_screen::handle_title_input(&layout, input);
         if let Some(action) = action {
             match action {
                 TitleAction::NewGame(slot) => {
@@ -479,15 +488,16 @@ impl Game {
         }
     }
 
-    fn step_new_game(&mut self, input: &FrameInput, dt: f32) {
+    fn step_new_game(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         // Take ownership of the form briefly so we can mutate self in branches.
         let mut form = match self.new_game_form.take() {
             Some(f) => f,
             None => return,
         };
         form.update(dt, input);
-        form.handle_form_clicks(input);
-        let action = form.draw(input);
+        let layout = ui::title_screen::layout_form(&form, screen);
+        form.handle_form_clicks(&layout, input);
+        let action = form.handle_action(&layout, input);
         // Put it back unless we're transitioning away
         let mut keep_form = true;
 
@@ -566,11 +576,18 @@ impl Game {
         }
     }
 
-    fn step_intake(&mut self, input: &FrameInput, dt: f32) {
+    fn step_intake(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         let mut iq = match self.intake.take() {
             Some(s) => s,
             None => return,
         };
+
+        // Populate hit-test bounds from the pure layout fn so step doesn't depend on render.
+        if let Some(ref mut ac) = iq.challenge {
+            let (bounds, scaffold) = ui::challenge::layout(&ac.state, &ac.challenge, screen);
+            ac.choice_bounds = bounds;
+            ac.scaffold = scaffold;
+        }
 
         match iq.phase {
             IntakePhase::Intro => {
@@ -847,7 +864,14 @@ impl Game {
         }
     }
 
-    fn step_challenge(&mut self, input: &FrameInput, dt: f32) {
+    fn step_challenge(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        // Populate hit-test bounds from the pure layout fn.
+        if let Some(ref mut ac) = self.active_challenge {
+            let (bounds, scaffold) = ui::challenge::layout(&ac.state, &ac.challenge, screen);
+            ac.choice_bounds = bounds;
+            ac.scaffold = scaffold;
+        }
+
         let mut dismiss = false;
         if let Some(ref mut ac) = self.active_challenge {
             if ac.state.phase == Phase::Complete && ac.state.correct == Some(true) {
@@ -951,8 +975,9 @@ impl Game {
         }
     }
 
-    fn handle_interaction_menu(&mut self, input: &FrameInput) {
-        let action = ui::interaction_menu::draw_interaction_menu(&self.menu_options, input);
+    fn handle_interaction_menu(&mut self, input: &FrameInput, screen: (f32, f32)) {
+        let layout = ui::interaction_menu::layout(&self.menu_options, screen);
+        let action = ui::interaction_menu::handle_input(&layout, input);
         let Some(action) = action else { return };
         match action {
             ui::interaction_menu::MenuAction::Select(opt_type) => match opt_type.as_str() {
@@ -1023,10 +1048,9 @@ impl Game {
         }
     }
 
-    fn handle_settings_layer(&mut self, input: &FrameInput) {
+    fn handle_settings_input(&mut self, input: &FrameInput, screen: (f32, f32)) {
         if self.settings_open {
-            ui::settings_overlay::draw();
-            if let Some(result) = ui::settings_overlay::handle_input(input) {
+            if let Some(result) = ui::settings_overlay::handle_input(input, screen) {
                 self.settings_open = false;
                 match result {
                     ui::settings_overlay::SettingsResult::Close => {}
@@ -1106,12 +1130,13 @@ impl Game {
 
     // ─── Rendering ─────────────────────────────────────
 
-    fn render_world(&mut self) {
+    fn render_world(&mut self, screen: (f32, f32)) {
+        let (sw, sh) = screen;
         if self.state == GameState::Intake {
             clear_background(Color::from_rgba(26, 26, 46, 255));
             set_default_camera();
 
-            let sparky_x = screen_width() / 2.0 - TILE_SIZE / 2.0;
+            let sparky_x = sw / 2.0 - TILE_SIZE / 2.0;
             let sparky_y = 60.0;
             sprites::robot::draw_robot(sparky_x, sparky_y, Dir::Down, 0, self.game_time);
 
@@ -1119,21 +1144,19 @@ impl Game {
                 if iq.phase == IntakePhase::Question || iq.phase == IntakePhase::Transition {
                     let progress_text = format!("Question {} of {}", iq.question_index + 1, INTAKE_QUESTION_COUNT);
                     let tw = measure_text(&progress_text, None, 26, 1.0).width;
-                    draw_text(&progress_text, screen_width() / 2.0 - tw / 2.0, 134.0,
+                    draw_text(&progress_text, sw / 2.0 - tw / 2.0, 134.0,
                         26.0, Color::from_rgba(144, 202, 249, 200));
                 }
             }
 
-            if let Some(ref mut iq) = self.intake {
-                if let Some(ref mut ac) = iq.challenge {
-                    let (bounds, scaffold) = ui::challenge::draw_challenge(&ac.state, &ac.challenge, self.game_time);
-                    ac.choice_bounds = bounds;
-                    ac.scaffold = scaffold;
+            if let Some(ref iq) = self.intake {
+                if let Some(ref ac) = iq.challenge {
+                    ui::challenge::draw_challenge(&ac.state, &ac.challenge, self.game_time);
                 }
             }
         } else {
             set_camera(&Camera2D {
-                zoom: vec2(2.0 / screen_width(), 2.0 / screen_height()),
+                zoom: vec2(2.0 / sw, 2.0 / sh),
                 target: vec2(self.camera.x + GAME_W / 2.0, self.camera.y + GAME_H / 2.0),
                 ..Default::default()
             });
@@ -1167,30 +1190,54 @@ impl Game {
         }
     }
 
-    fn render_hud(&mut self, input: &FrameInput) {
+    fn render_hud(&mut self, screen: (f32, f32)) {
         ui::hud::draw_area_name(self.map.id, self.player.tile_x, self.player.tile_y);
-        self.dum_dum_hud.draw(self.dum_dums);
-        let export_clicked = self.debug_overlay.draw(
+        self.dum_dum_hud.draw(self.dum_dums, screen);
+        self.debug_overlay.draw(
             self.map.id, self.player.tile_x, self.player.tile_y,
             self.dum_dums, self.play_time,
             &self.profile, self.session_log.challenge_count(), self.session_log.correct_count(),
-            input,
+            screen,
         );
-        if export_clicked || (self.debug_overlay.visible && input.pressed(KeyCode::E)) {
-            let json = session::build_export(
-                &self.player_name, &self.session_log, &self.gifts_given,
-                self.dum_dums, self.play_time, &self.profile, self.map.id,
-            );
-            let filename = format!("robot-buddy-session-{}.json", self.play_time as u64);
-            session::download_json(&json, &filename);
-        }
     }
 
-    fn draw_challenge_overlay(&mut self) {
-        if let Some(ref mut ac) = self.active_challenge {
-            let (bounds, scaffold) = ui::challenge::draw_challenge(&ac.state, &ac.challenge, self.game_time);
-            ac.choice_bounds = bounds;
-            ac.scaffold = scaffold;
+    /// Draw everything for the current frame. Only called in production — tests
+    /// skip this so they don't need a macroquad context.
+    pub fn render(&mut self, screen: (f32, f32), input: &FrameInput) {
+        match self.state {
+            GameState::Title => {
+                let layout = ui::title_screen::layout_title(&self.save_slots, screen);
+                ui::title_screen::draw_title(&layout, &self.save_slots, self.game_time, input.mouse_pos);
+                return;
+            }
+            GameState::NewGame => {
+                if let Some(ref form) = self.new_game_form {
+                    let layout = ui::title_screen::layout_form(form, screen);
+                    form.draw(&layout, input.mouse_pos);
+                }
+                return;
+            }
+            _ => {}
+        }
+
+        // World + HUD for all gameplay states (Intake handled inside render_world).
+        self.render_world(screen);
+        self.render_hud(screen);
+
+        if self.state == GameState::InteractionMenu {
+            let layout = ui::interaction_menu::layout(&self.menu_options, screen);
+            ui::interaction_menu::draw(&layout, input.mouse_pos);
+        }
+
+        self.dialogue.draw();
+
+        // Challenge overlay (separate from intake's in-render_world drawing).
+        if let Some(ref ac) = self.active_challenge {
+            ui::challenge::draw_challenge(&ac.state, &ac.challenge, self.game_time);
+        }
+
+        if self.settings_open {
+            ui::settings_overlay::draw(screen);
         }
     }
 

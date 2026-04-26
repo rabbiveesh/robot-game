@@ -18,6 +18,65 @@ pub struct ScaffoldBounds {
     pub tell_me: Option<(f32, f32, f32, f32)>,
 }
 
+/// Pure layout: produces the same rect data that `draw_challenge` used to compute,
+/// without making any macroquad calls. `step()` calls this for hit-testing;
+/// `render()` calls it again and passes it into `draw_challenge_with_layout`.
+pub fn layout(
+    cs: &ChallengeState,
+    challenge: &Challenge,
+    screen: (f32, f32),
+) -> (Vec<ChoiceBound>, ScaffoldBounds) {
+    let (sw, sh) = screen;
+
+    if cs.phase == Phase::Teaching {
+        // Teaching has no clickable choices/scaffold buttons.
+        return (vec![], ScaffoldBounds { show_me: None, tell_me: None });
+    }
+
+    let panel_w = (sw - 40.0).min(760.0);
+    let panel_h = if cs.hint_used { 560.0 } else { 420.0 };
+    let panel_x = (sw - panel_w) / 2.0;
+    let panel_y = (sh - panel_h) / 2.0 - 10.0;
+
+    let hint_offset = if cs.hint_used { 80.0 } else { 0.0 };
+    let feedback_offset = if cs.phase == Phase::Feedback && cs.feedback.is_some() { 40.0 } else { 0.0 };
+
+    let btn_w = ((panel_w - 80.0) / 3.0).min(200.0);
+    let btn_h = 88.0;
+    let btn_y = panel_y + 150.0 + hint_offset + feedback_offset;
+    let total_btn_w = btn_w * 3.0 + 20.0 * 2.0;
+    let btn_start_x = panel_x + (panel_w - total_btn_w) / 2.0;
+
+    let choice_bounds: Vec<ChoiceBound> = challenge.choices.iter().enumerate().map(|(i, choice)| {
+        let bx = btn_start_x + i as f32 * (btn_w + 20.0);
+        let answer: i32 = choice.text.parse().unwrap_or(0);
+        ChoiceBound { rect: (bx, btn_y, btn_w, btn_h), answer }
+    }).collect();
+
+    let mut scaffold = ScaffoldBounds { show_me: None, tell_me: None };
+    if cs.phase == Phase::Presented || cs.phase == Phase::Feedback {
+        let scaff_y = btn_y + btn_h + 16.0;
+        let scaff_btn_w = 150.0;
+        let scaff_btn_h = 46.0;
+        let scaff_gap = 12.0;
+
+        let show_me_visible = !cs.hint_used;
+        if show_me_visible {
+            let sm_x = panel_x + panel_w / 2.0 - scaff_btn_w - scaff_gap / 2.0;
+            scaffold.show_me = Some((sm_x, scaff_y, scaff_btn_w, scaff_btn_h));
+        }
+
+        let tm_x = if show_me_visible {
+            panel_x + panel_w / 2.0 + scaff_gap / 2.0
+        } else {
+            panel_x + panel_w / 2.0 - scaff_btn_w / 2.0
+        };
+        scaffold.tell_me = Some((tm_x, scaff_y, scaff_btn_w, scaff_btn_h));
+    }
+
+    (choice_bounds, scaffold)
+}
+
 
 // ─── DRAWING ────────────────────────────────────────────
 

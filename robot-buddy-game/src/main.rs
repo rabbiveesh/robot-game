@@ -31,7 +31,9 @@ async fn main() {
     loop {
         let dt = get_frame_time();
         let input = FrameInput::capture();
-        g.step(&input, dt);
+        let screen = (screen_width(), screen_height());
+        g.step(&input, dt, screen);
+        g.render(screen, &input);
         next_frame().await;
     }
 }
