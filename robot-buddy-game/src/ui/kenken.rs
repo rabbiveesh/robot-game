@@ -341,15 +341,15 @@ pub fn draw_kenken(
         // under disabled controls.
         let strip_top = layout.pickers.first().map(|p| p.rect.y).unwrap_or(p.y + p.h - 60.0);
         let strip_bottom = layout.clear_btn.y + layout.clear_btn.h;
-        let dismiss = "Press SPACE to continue";
-        let dw = measure_text(dismiss, None, 28, 1.0).width;
+        let dismiss = "Tap or press SPACE to continue";
+        let dw = measure_text(dismiss, None, 26, 1.0).width;
         let blink = (get_time() * 4.0).sin() > 0.0;
         if blink {
             draw_text(
                 dismiss,
                 p.x + p.w / 2.0 - dw / 2.0,
                 (strip_top + strip_bottom) / 2.0 + 10.0,
-                28.0,
+                26.0,
                 GOLD,
             );
         }
