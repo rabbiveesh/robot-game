@@ -413,6 +413,16 @@ fn kenken_2x2_solvable() {
 }
 ```
 
+### Dev Zone: fix clipping during layout/draw split
+
+The Dev Zone (`ui/dev_zone.rs`) has visual clipping problems that should be fixed as part of this refactor, not separately. The root cause is the same architecture the E2E refactor addresses:
+
+- Visual render boxes are hardcoded at 160px, but content height varies (large base-10 blocks, multi-row dots, wide division groups all overflow).
+- No scissor/clip rects — content bleeds into adjacent sections and above the viewport on scroll.
+- The entire `draw()` is one 130-line function doing manual Y-cursor layout with `- scroll` on every call.
+
+When the layout/draw split happens (`build_*_layout()` → `draw_*()`), the Dev Zone should get the same treatment: each section measures its content height, the layout cursor positions sections dynamically, and each section gets a clip rect. This also makes the Dev Zone testable — `build_dev_zone_layout()` returns section bounds that tests can assert against.
+
 ### What this replaces
 
 | Before (JS) | After (Rust) |
