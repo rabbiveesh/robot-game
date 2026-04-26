@@ -433,7 +433,7 @@ fn intro_step_data(session: &KenKenSession, layout: &KenKenLayout, step: u8) -> 
                     h: g_last.y + g_last.h - g0.y,
                 },
                 format!(
-                    "Every row gets {} — each one ONCE, no repeats!\nEvery column too.\n\nTap to keep going...",
+                    "Every row gets {} -- each one ONCE, no repeats!\nEvery column too.\n\nTap to keep going...",
                     nums
                 ),
             )
