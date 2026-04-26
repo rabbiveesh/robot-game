@@ -36,7 +36,7 @@ These are NOT optional. Every PR must respect these:
 ## Tech Stack
 
 - **One language: Rust.** Domain crate + macroquad game crate, single WASM binary.
-- **Tests**: `cargo test` (62 tests, all in domain crate).
+- **Tests**: `cargo test` runs 62 domain unit tests + 7 game integration tests (headless story-style — see ADR-002).
 - **Build**: `cargo build --target wasm32-unknown-unknown --release` → `target/wasm32-unknown-unknown/release/robot-buddy-game.wasm`.
 - **CI**: GitHub Actions: `cargo test` + WASM build + deploy to Pages. No Node, no npm.
 
@@ -59,13 +59,20 @@ robot-buddy-game/                # Macroquad game (depends on domain)
   Cargo.toml
   index.html                     # WASM loader (source — copied into www/ by build)
   src/
-    main.rs                      # game loop, state machine
-    tilemap.rs, npc.rs, save.rs, session.rs, settings.rs
+    lib.rs                       # re-exports modules so tests/ can use them
+    main.rs                      # thin macroquad shim: capture FrameInput → step → render
+    game.rs                      # Game struct + step (pure logic) + render (macroquad-only) + GameEvent
+    input.rs                     # FrameInput — single input boundary
+    save.rs                      # SaveBackend trait + LocalStorageBackend (prod) + InMemoryBackend (tests)
+    tilemap.rs, npc.rs, session.rs, settings.rs
     sprites/                     # player, robot, npcs
     ui/                          # challenge, dialogue, hud, interaction_menu, title_screen, settings_overlay, visuals
     visuals/                     # math visualization renderers
     audio/                       # TTS via miniquad plugin
     net/                         # AI dialogue fetch
+  tests/                         # headless integration tests — plain `cargo test`, no window
+    common/mod.rs                # Harness + story helpers (walk_to_npc, interact, answer_correctly)
+    headless.rs, story.rs        # 7 player-flow tests; assertions read GameEvent log
   www/                           # build output (gitignored except index.html)
 ```
 
@@ -74,6 +81,7 @@ robot-buddy-game/                # Macroquad game (depends on domain)
 ADRs document key design decisions, their context, and consequences. Read these before proposing alternatives — the "why not" is usually in the Alternatives Considered section.
 
 - **[ADR-001: Band Blending](docs/adr/001-band-blending.md)** — Bands are distribution centers, not hard levels. Accuracy-based promotion replaces streaks. Spread width tightens on frustration, widens on confidence. Streak is display-only.
+- **[ADR-002: Headless Test Harness](docs/adr/002-headless-test-harness.md)** — `Game::step` (pure) / `Game::render` (macroquad) split, `FrameInput` boundary, `SaveBackend` trait with `InMemoryBackend` for tests, `GameEvent` log as the assertion surface. Story-style integration tests run as plain `cargo test` with no window.
 
 ## Key Domain Concepts
 
@@ -87,7 +95,7 @@ ADRs document key design decisions, their context, and consequences. Read these 
 
 ```bash
 # Test
-cargo test                                                    # 62 domain tests
+cargo test                                                    # 62 domain + 7 game integration tests
 
 # Build WASM
 cargo build --target wasm32-unknown-unknown --release

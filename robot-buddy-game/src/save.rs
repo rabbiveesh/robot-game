@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use crate::sprites::Dir;
 use robot_buddy_domain::learning::learner_profile::LearnerProfile;
@@ -83,38 +84,87 @@ const STORAGE_KEY: &str = "robotBuddySaves";
 /// 3 save slots, each Option<SaveData>.
 pub type SaveSlots = [Option<SaveData>; 3];
 
-pub fn load_all_slots() -> SaveSlots {
-    let json = read_storage(STORAGE_KEY);
-    if let Some(json) = json {
-        let mut slots: SaveSlots = serde_json::from_str(&json).unwrap_or([None, None, None]);
-        for slot in slots.iter_mut() {
-            if let Some(ref mut save) = slot {
-                save.migrate_legacy();
+// ─── BACKEND ────────────────────────────────────────────
+//
+// Production runs against `LocalStorageBackend` (browser localStorage on WASM,
+// /tmp files on native dev). Tests construct an `InMemoryBackend` so each
+// `Game` owns isolated storage — no /tmp races, no cross-test contamination.
+
+pub trait SaveBackend {
+    fn load_all(&self) -> SaveSlots;
+    fn save_to(&self, slot: usize, data: &SaveData);
+    fn delete(&self, slot: usize);
+    /// True when the host wants the game to flush state right now (browser tab
+    /// becoming hidden). Non-browser backends always return false.
+    fn is_page_hidden(&self) -> bool { false }
+}
+
+pub struct LocalStorageBackend;
+
+impl SaveBackend for LocalStorageBackend {
+    fn load_all(&self) -> SaveSlots {
+        let json = read_storage(STORAGE_KEY);
+        if let Some(json) = json {
+            let mut slots: SaveSlots = serde_json::from_str(&json).unwrap_or([None, None, None]);
+            for slot in slots.iter_mut() {
+                if let Some(ref mut save) = slot {
+                    save.migrate_legacy();
+                }
             }
+            slots
+        } else {
+            [None, None, None]
         }
-        slots
-    } else {
-        [None, None, None]
+    }
+
+    fn save_to(&self, slot: usize, data: &SaveData) {
+        let mut slots = self.load_all();
+        if slot < 3 {
+            let mut data = data.clone();
+            data.timestamp = current_timestamp();
+            slots[slot] = Some(data);
+            let json = serde_json::to_string(&slots).unwrap();
+            write_storage(STORAGE_KEY, &json);
+        }
+    }
+
+    fn delete(&self, slot: usize) {
+        let mut slots = self.load_all();
+        if slot < 3 {
+            slots[slot] = None;
+            let json = serde_json::to_string(&slots).unwrap();
+            write_storage(STORAGE_KEY, &json);
+        }
+    }
+
+    fn is_page_hidden(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        { unsafe { page_is_hidden() != 0 } }
+        #[cfg(not(target_arch = "wasm32"))]
+        { false }
     }
 }
 
-pub fn save_to_slot(slot: usize, data: &SaveData) {
-    let mut slots = load_all_slots();
-    if slot < 3 {
+#[derive(Default)]
+pub struct InMemoryBackend {
+    slots: RefCell<SaveSlots>,
+}
+
+impl SaveBackend for InMemoryBackend {
+    fn load_all(&self) -> SaveSlots {
+        self.slots.borrow().clone()
+    }
+
+    fn save_to(&self, slot: usize, data: &SaveData) {
+        if slot >= 3 { return; }
         let mut data = data.clone();
-        data.timestamp = current_timestamp();
-        slots[slot] = Some(data);
-        let json = serde_json::to_string(&slots).unwrap();
-        write_storage(STORAGE_KEY, &json);
+        data.timestamp = 0;
+        self.slots.borrow_mut()[slot] = Some(data);
     }
-}
 
-pub fn delete_slot(slot: usize) {
-    let mut slots = load_all_slots();
-    if slot < 3 {
-        slots[slot] = None;
-        let json = serde_json::to_string(&slots).unwrap();
-        write_storage(STORAGE_KEY, &json);
+    fn delete(&self, slot: usize) {
+        if slot >= 3 { return; }
+        self.slots.borrow_mut()[slot] = None;
     }
 }
 
@@ -129,14 +179,6 @@ extern "C" {
     fn ls_get(key_ptr: *const u8, key_len: usize, buf_ptr: *mut u8, buf_len: usize);
     fn ls_set(key_ptr: *const u8, key_len: usize, val_ptr: *const u8, val_len: usize);
     fn page_is_hidden() -> i32;
-}
-
-/// Returns true when the browser tab is hidden (user switched tabs or is closing).
-pub fn is_page_hidden() -> bool {
-    #[cfg(target_arch = "wasm32")]
-    { unsafe { page_is_hidden() != 0 } }
-    #[cfg(not(target_arch = "wasm32"))]
-    { false }
 }
 
 #[cfg(target_arch = "wasm32")]

@@ -7,8 +7,9 @@
 #![allow(dead_code)] // helpers are added as tests need them
 
 use macroquad::prelude::KeyCode;
-use robot_buddy_game::game::{Game, GameState};
+use robot_buddy_game::game::{Game, GameEvent, GameState};
 use robot_buddy_game::input::FrameInput;
+use robot_buddy_game::save::InMemoryBackend;
 
 pub const SCREEN: (f32, f32) = (960.0, 720.0);
 pub const DT: f32 = 1.0 / 60.0;
@@ -23,11 +24,13 @@ pub struct Harness {
 }
 
 impl Harness {
-    /// Start a fresh game seeded for determinism. Game::new() leaves save_slots
-    /// empty — production calls refresh_save_slots() to load /tmp; tests don't,
-    /// so parallel tests won't race on /tmp/robotBuddySaves.json.
+    /// Start a fresh game seeded for determinism. Each Harness owns its own
+    /// in-memory save backend, so tests don't write /tmp and parallel tests
+    /// don't share storage.
     pub fn new(seed: u64) -> Self {
-        Harness { game: Game::new(seed) }
+        Harness {
+            game: Game::with_backend(seed, Box::new(InMemoryBackend::default())),
+        }
     }
 
     // ─── Primitive frame drivers ─────────────────────────
@@ -272,6 +275,19 @@ impl Harness {
     /// Convenience alias matching the user's example wording.
     pub fn answer_correctly(&mut self) {
         self.answer_challenge_correctly();
+    }
+
+    // ─── Event-log access ────────────────────────────────
+
+    /// Snapshot the event log length. Capture before an action, then read
+    /// the events that action produced via `events_since(mark)`.
+    pub fn mark(&self) -> usize {
+        self.game.event_mark()
+    }
+
+    /// Events emitted since the given mark.
+    pub fn events_since(&self, mark: usize) -> &[GameEvent] {
+        self.game.events_since(mark)
     }
 }
 

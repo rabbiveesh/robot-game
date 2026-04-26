@@ -38,7 +38,7 @@ use crate::ui::challenge::{ChoiceBound, ScaffoldBounds};
 use crate::ui::title_screen::{TitleAction, NewGameAction, NewGameForm};
 use crate::ui::hud::{DumDumHud, DebugOverlay};
 use crate::ui::interaction_menu::MenuOption;
-use crate::save::{self, SaveData, SaveSlots, Gender};
+use crate::save::{self, SaveBackend, SaveData, SaveSlots, Gender};
 use crate::audio;
 use crate::session;
 use crate::input::FrameInput;
@@ -273,6 +273,7 @@ pub struct Game {
     save_slots: SaveSlots,
     active_slot: usize,
     auto_save_timer: f32,
+    save_backend: Box<dyn SaveBackend>,
 
     // Profile / learning
     pub profile: LearnerProfile,
@@ -298,10 +299,18 @@ pub struct Game {
 }
 
 impl Game {
-    /// Construct a fresh game. Does not touch disk. Production callers should
-    /// follow up with `refresh_save_slots()` to populate the title screen.
-    /// Tests skip that and start with empty slots — no /tmp races.
+    /// Construct a fresh game using the production save backend (browser
+    /// localStorage on WASM, /tmp file on native dev). Does not touch storage
+    /// at construction; production callers follow up with `refresh_save_slots()`
+    /// to populate the title screen. Tests skip that and start empty.
     pub fn new(seed: u64) -> Self {
+        Self::with_backend(seed, Box::new(save::LocalStorageBackend))
+    }
+
+    /// Construct a fresh game with a caller-supplied save backend. Tests pass
+    /// `InMemoryBackend` so each game owns isolated storage with no /tmp races
+    /// and no cross-test contamination.
+    pub fn with_backend(seed: u64, save_backend: Box<dyn SaveBackend>) -> Self {
         let map = Map::overworld();
         let npcs = npc::npcs_for_map(map.id);
         Game {
@@ -325,6 +334,7 @@ impl Game {
             save_slots: [None, None, None],
             active_slot: 0,
             auto_save_timer: 0.0,
+            save_backend,
             profile: LearnerProfile::new(),
             behavior_signals: Vec::new(),
             dialogue: DialogueBox::new(),
@@ -345,7 +355,7 @@ impl Game {
     /// Reload save slots from persistent storage. Called from production main()
     /// at startup so the title screen reflects what's on disk.
     pub fn refresh_save_slots(&mut self) {
-        self.save_slots = save::load_all_slots();
+        self.save_slots = self.save_backend.load_all();
     }
 
     // ─── Test-friendly accessors ────────────────────────
@@ -380,6 +390,19 @@ impl Game {
         self.active_challenge.as_ref()
             .map(|ac| ac.state.phase)
             .or_else(|| self.intake.as_ref().and_then(|iq| iq.challenge.as_ref().map(|ac| ac.state.phase)))
+    }
+
+    /// Snapshot of the event log length. Pair with `events_since(mark)` to
+    /// read events emitted by a specific action — the basic assertion pattern
+    /// for tests that care about *what just happened*, not just end-state.
+    pub fn event_mark(&self) -> usize {
+        self.events.len()
+    }
+
+    /// Events appended since the given mark. Slice is borrowed from the log,
+    /// so callers can iterate or `matches!` against it without cloning.
+    pub fn events_since(&self, mark: usize) -> &[GameEvent] {
+        &self.events[mark..]
     }
 
     fn set_state(&mut self, new_state: GameState) {
@@ -433,10 +456,10 @@ impl Game {
         if !self.settings_open && self.state != GameState::Title && self.state != GameState::NewGame {
             self.play_time += dt;
             self.auto_save_timer += dt;
-            if (self.auto_save_timer >= 30.0 || save::is_page_hidden()) && self.map.id != "dev" {
+            if (self.auto_save_timer >= 30.0 || self.save_backend.is_page_hidden()) && self.map.id != "dev" {
                 self.auto_save_timer = 0.0;
                 let save_data = self.gather_save_data();
-                save::save_to_slot(self.active_slot, &save_data);
+                self.save_backend.save_to(self.active_slot, &save_data);
             }
         }
 
@@ -524,8 +547,8 @@ impl Game {
                     }
                 }
                 TitleAction::DeleteSlot(slot) => {
-                    save::delete_slot(slot);
-                    self.save_slots = save::load_all_slots();
+                    self.save_backend.delete(slot);
+                    self.save_slots = self.save_backend.load_all();
                 }
             }
         }
@@ -588,8 +611,8 @@ impl Game {
                         self.camera = GameCamera { x: 0.0, y: 0.0 };
 
                         let save_data = self.gather_save_data();
-                        save::save_to_slot(slot, &save_data);
-                        self.save_slots = save::load_all_slots();
+                        self.save_backend.save_to(slot, &save_data);
+                        self.save_slots = self.save_backend.load_all();
                         self.auto_save_timer = 0.0;
 
                         self.intake = Some(IntakeState::new(form.math_band));
@@ -703,7 +726,7 @@ impl Game {
                     iq.challenge = None;
 
                     let save_data = self.gather_save_data();
-                    save::save_to_slot(self.active_slot, &save_data);
+                    self.save_backend.save_to(self.active_slot, &save_data);
                     self.auto_save_timer = 0.0;
 
                     if iq.question_index >= INTAKE_QUESTION_COUNT {
@@ -1012,7 +1035,7 @@ impl Game {
 
             if self.map.id != "dev" {
                 let save_data = self.gather_save_data();
-                save::save_to_slot(self.active_slot, &save_data);
+                self.save_backend.save_to(self.active_slot, &save_data);
                 self.auto_save_timer = 0.0;
             }
         }
@@ -1070,7 +1093,7 @@ impl Game {
                         });
 
                         let save_data = self.gather_save_data();
-                        save::save_to_slot(self.active_slot, &save_data);
+                        self.save_backend.save_to(self.active_slot, &save_data);
                         self.auto_save_timer = 0.0;
 
                         let reaction = give_reaction_dialogue(
