@@ -1,192 +1,144 @@
-# Architecture Spec — Rust Domain + JS Presentation
+# Architecture Spec
 
-## Bounded Contexts
+One language: Rust. One binary: WASM. Two crates in a workspace.
 
-```
-┌─────────────────────────────────────────────────────┐
-│                 PRESENTATION (JS)                     │
-│  Canvas, Sprites, QuizRenderer, UI, Input, TTS       │
-│  Depends on everything below. Nothing depends on it. │
-└──────────────────────┬──────────────────────────────┘
-                       │ reads state (JSON from WASM)
-┌──────────────────────▼──────────────────────────────┐
-│              APPLICATION (JS: adapter.js)             │
-│  Orchestrates WASM domain ↔ presentation. Thin glue. │
-└───┬──────────────────────────────────────────────────┘
-    │ calls via wasm-bindgen (JSON in/out)
-┌───▼──────────────────────────────────────────────────┐
-│               DOMAIN (Rust → WASM)                    │
-│  robot-buddy-domain/                                  │
-│  ├── learning/   (profile, reducer, generator, etc.)  │
-│  ├── challenge/  (lifecycle state machine)             │
-│  └── economy/    (rewards, gifts)                     │
-│  Pure Rust. No browser APIs. cargo test.              │
-└──────────────────────────────────────────────────────┘
-    ▲
-┌───┴──────────────────────────────────────────────────┐
-│              INFRASTRUCTURE (JS)                      │
-│  Speech recognition, Claude/Gemini API, ElevenLabs,   │
-│  localStorage (SaveManager)                           │
-└──────────────────────────────────────────────────────┘
-```
-
-**The golden rule**: the domain is Rust, compiled to WASM. It has ZERO browser dependencies. All domain logic is tested with `cargo test`. The JS layer handles browser APIs, rendering, and user interaction.
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Domain | Rust → WASM (wasm-bindgen + serde) |
-| Domain tests | `cargo test` (58 tests) |
-| Presentation | Vanilla JS, Canvas 2D |
-| Infrastructure | JS (browser APIs: Speech, fetch, localStorage) |
-| Presentation tests | Vitest (speech recognition parser) |
-| Build | wasm-pack (domain), rollup (infrastructure JS) |
-| CI | GitHub Actions: cargo test + wasm-pack build + npm test |
-| Deploy | GitHub Pages (static: HTML + JS + WASM) |
-
-## Rust Domain Structure
+## Bounded contexts
 
 ```
+┌────────────────────────────────────────────────────────────┐
+│                  PRESENTATION (Macroquad)                  │
+│  Tilemap, sprites, UI, input, audio, save, AI dialogue.    │
+│  robot-buddy-game/src/                                     │
+└────────────────────────┬───────────────────────────────────┘
+                         │ direct Rust calls — no JSON, no bridge
+┌────────────────────────▼───────────────────────────────────┐
+│                       DOMAIN (Rust)                        │
+│  Pure logic. No browser APIs.                              │
+│  robot-buddy-domain/src/                                   │
+│  ├── learning/   profile reducer, challenge gen,           │
+│  │               rolling window, frustration, intake       │
+│  ├── challenge/  lifecycle state machine                   │
+│  ├── economy/    rewards, gifts, interaction options       │
+│  └── types.rs    Operation, SubSkill, CraStage, Phase      │
+└────────────────────────────────────────────────────────────┘
+```
+
+The domain crate has zero rendering or browser deps. The game crate consumes domain types directly through a path dependency. There is no serialization boundary between the two — adding a domain field is a single compiler-checked refactor across the whole workspace.
+
+## Workspace layout
+
+```
+Cargo.toml                          # workspace root
+build-wasm.sh                       # cargo build + assemble www/
+
 robot-buddy-domain/
   Cargo.toml
   src/
-    lib.rs                    # WASM exports (wasm_bindgen functions)
-    types.rs                  # Shared enums: Operation, SubSkill, CraStage, Phase, etc.
+    lib.rs                          # pub mod types/learning/challenge/economy
+    types.rs
     learning/
-      mod.rs
-      learner_profile.rs      # Main reducer: band blending, CRA progression, dials
-      challenge_generator.rs  # Band distribution, number gen, classification, features
-      rolling_window.rs       # Immutable sliding window
-      operation_stats.rs      # Coarse + fine-grained stats (HashMap<enum>)
-      frustration_detector.rs # Signal analysis → recommendations
-      intake_assessor.rs      # Placement logic
+      learner_profile.rs            # main reducer: bands, CRA, dials
+      challenge_generator.rs        # band distribution, number gen, classification
+      rolling_window.rs             # immutable sliding window
+      operation_stats.rs            # coarse + fine-grained stats
+      frustration_detector.rs       # signal analysis → recommendations
+      intake_assessor.rs            # placement quiz logic
     challenge/
-      mod.rs
-      challenge_state.rs      # Lifecycle reducer: phases, rewards, voice, scaffold
+      challenge_state.rs            # lifecycle reducer (Presented/Feedback/Teaching/Complete)
     economy/
-      mod.rs
-      rewards.rs              # Correct → reward
-      give.rs                 # Gift tracking with milestones
+      rewards.rs                    # correct → reward
+      give.rs                       # gift tracking with milestones
+      interaction_options.rs        # menu items per NPC + player state
     bin/
-      simulate.rs             # CLI learning simulator
-      simulate_challenge.rs   # CLI challenge lifecycle simulator
+      simulate.rs                   # CLI learning simulator
+
+robot-buddy-game/
+  Cargo.toml                        # depends on robot-buddy-domain + macroquad
+  index.html                        # WASM loader (source — copied into www/ by build)
+  src/
+    main.rs                         # game loop, GameState, input dispatch
+    tilemap.rs                      # map data + rendering
+    npc.rs                          # NPC data, facing/adjacency, give handlers
+    save.rs                         # localStorage via miniquad plugin
+    session.rs                      # session log, JSON export
+    settings.rs                     # AI provider, voice, TTS toggle
+    sprites/
+      player.rs                     # boy/girl
+      robot.rs                      # Sparky
+      npcs.rs                       # Mommy, kids, Gizmo, dog, etc.
+    ui/
+      challenge.rs                  # challenge panel, choices, show-me/tell-me, celebration
+      dialogue.rs                   # dialogue box, typewriter
+      hud.rs                        # area name, Dum Dum counter, badges, debug overlays
+      interaction_menu.rs           # NPC option picker
+      title_screen.rs               # save slots, name input, settings
+      settings_overlay.rs           # in-game settings (ESC)
+      visuals.rs                    # math visualizations (dots, ten-frames, base-10 blocks)
+    audio/
+      tts.rs                        # SpeechSynthesis via miniquad plugin
+
+robot-buddy-game/www/                # build output (gitignored, except index.html)
+  index.html
+  mq_js_bundle.js                   # macroquad runtime (from cargo registry)
+  robot-buddy-game.wasm
 ```
 
-## JS Presentation Structure
+## Browser interop
+
+Macroquad uses miniquad, not wasm-bindgen. Browser APIs that the engine doesn't expose are reached through miniquad plugins — small JS shims registered in `robot-buddy-game/index.html` and called from Rust via `extern "C"`. Today there are three:
+
+| Plugin       | Purpose                                          | Rust caller        |
+|--------------|--------------------------------------------------|--------------------|
+| localStorage | `ls_get`, `ls_set` for save slots                | `save.rs`          |
+| tts          | `tts_speak`, `tts_cancel` for dialogue voice     | `audio/tts.rs`     |
+| download     | `download_file` for session export blob          | `session.rs`       |
+
+Adding a new browser API means: (1) add the JS shim in `index.html` under `miniquad_add_plugin`, (2) declare the `extern "C"` function in the Rust caller, (3) call it.
+
+## Type-safety guarantees
+
+| Guarantee            | Mechanism                                                              |
+|----------------------|------------------------------------------------------------------------|
+| No state mutation    | Domain structs immutable; reducers return new state.                   |
+| No missing fields    | Adding a field → compiler error at every construction site.            |
+| No magic strings     | `Operation::Add`, not `"add"`. Typos are compile errors.               |
+| Exhaustive matching  | `match` on `Phase`/`Operation` must cover every variant.               |
+| No null surprises    | `Option<T>` is explicit.                                               |
+| Deterministic RNG    | Domain takes `&mut impl Rng`. Tests seed `SmallRng::seed_from_u64(42)`.|
+
+## Event flow
 
 ```
-# Legacy files (game runs, being migrated incrementally)
-index.html              # Entry point, title screen, settings
-game.js                 # Game loop, state machine, input dispatch
-dialogue.js             # Dialogue box, challenge rendering entry, NPC interactions
-sprites.js              # Programmatic tile + character sprites
-world.js                # Map data, portals, camera
-characters.js           # Player movement, robot follow AI, NPC management
-adapter.js              # Wires WASM domain ↔ presentation
-wasm-bridge.js          # Loads WASM, exposes window.WasmDomain
-
-# Structured presentation code
-src/presentation/
-  renderers/
-    quiz-renderer.js            # QuizRenderer: choices, show-me/tell-me, celebration
-    visual-registry.js          # Registry for visualization methods
-    visuals/
-      base10-blocks-visual.js   # Tens rods + fives bars + ones cubes
-  dev-zone.js                   # Debug gallery (justinbailey)
-
-src/infrastructure/
-  speech-recognition.js         # Voice input, number parser
-
-# Build output (gitignored)
-dist/
-  wasm/
-    robot_buddy_domain_bg.wasm  # Compiled domain (~134KB)
-    robot_buddy_domain.js       # WASM glue
-  speech-recognition.js         # Bundled infrastructure
+User clicks an answer choice
+  → main.rs handle_pointer
+  → ui::challenge::hit_test → ChoiceBound { answer: 13 }
+  → GameState::on_answer_submitted(13, response_time, InputKind::Choice)
+  → challenge::challenge_state::challenge_reducer(state, action)
+  → learning::learner_profile::learner_reducer(profile, event)
+  → ui::challenge re-reads new ChallengeState next frame
 ```
 
-## WASM Bridge
+Single thread, single update loop. No async dispatch except for AI dialogue fetch (when wired) and TTS (fire-and-forget into the JS plugin).
 
-All domain calls go through `wasm-bridge.js` which exposes `window.WasmDomain`:
+## Key domain concepts
 
-```js
-WasmDomain.createProfile(overrides)       → LearnerProfile (JSON)
-WasmDomain.learnerReducer(state, event)   → LearnerProfile (JSON)
-WasmDomain.generateChallenge(profile, _)  → Challenge (JSON)
-WasmDomain.detectFrustration(window, [])  → FrustrationResult (JSON)
-WasmDomain.challengeReducer(state, action)→ ChallengeState (JSON)
-// ... etc
-```
-
-The adapter calls `WasmDomain.*` for all domain operations. WASM is required — no JS fallback.
-
-## Type Safety Guarantees
-
-The Rust domain provides compile-time guarantees that JS cannot:
-
-| Guarantee | How Rust enforces it |
-|-----------|---------------------|
-| No state mutation | Structs are immutable by default. Reducers return new state. |
-| No missing fields | Adding a field to a struct → compiler error at every construction site |
-| No magic strings | `Operation::Add` not `"add"`. Typos are compile errors. |
-| Exhaustive matching | Match on `Phase` or `Operation` must handle every variant |
-| No null surprise | `Option<T>` is explicit. Must be handled with `match` or `if let`. |
-| Deterministic RNG | `SmallRng::seed_from_u64(seed)` — no global `Math.random()` |
-
-## Event Flow
-
-```
-User clicks answer
-  → game.js handlePointer
-  → QuizRenderer.handleClick → returns { type: ANSWER_SUBMITTED, answer: 13 }
-  → adapter._onChallengeAnswer(13, time, 'choice')
-  → WasmDomain.challengeReducer(state, action)     ← Rust
-  → WasmDomain.learnerReducer(profile, event)       ← Rust
-  → adapter updates presentation state
-  → QuizRenderer.render reads new state
-```
-
-Every domain computation crosses the WASM boundary via JSON. The serialization cost is ~0.1ms per call — imperceptible for 30 challenges per session.
-
-## Key Domain Concepts
-
-- **LearnerProfile**: Main state. Dials (pace, scaffolding, spread), CRA stages per operation, math band, rolling window, operation stats. Immutable — reducer returns new profile.
-- **Band Blending**: Math band is a distribution center, not a hard level. Problems sampled from a spread around the center. See ADR-001.
-- **CRA Progression**: Concrete → Representational → Abstract, tracked per operation. Advances on 3 no-hint correct, demotes on hint-assisted correct or repeated tell-me.
-- **Sub-Skills**: Operations split into cognitive sub-skills (add_carry, sub_borrow, etc.). Feature vectors on every problem enable future dynamic sub-skill discovery.
-- **Challenge Lifecycle**: State machine (Presented → Feedback → Teaching → Complete). Single reducer handles answers, voice, show-me, tell-me. Rewards are domain-produced, not presentation-decided.
-- **Stealth Assessment**: Every interaction is a data point. Events include features, CRA level shown, hint usage, voice metadata. The child never feels tested.
-
-## Evolution Points
-
-### Event Bus (deferred)
-Currently the adapter dispatches directly. When the adapter grows too many cross-cutting concerns, introduce a priority-tiered event bus. See `docs/presentation-migration.md`.
-
-### Input Dispatcher (needed)
-Multiple files register key listeners independently. Should consolidate to one dispatcher with state-based routing. See `docs/presentation-migration.md`.
-
-### Full Rust Renderer (optional future)
-The presentation layer could be ported to Rust via Macroquad (2D game engine with WASM target). Same domain crate, no WASM boundary for domain calls. See `docs/rust-wasm-migration-spec.md` Phase 2.
+- **LearnerProfile** — main aggregate. Dials (pace, scaffolding, spread), per-operation CRA stages, math band, rolling window, operation stats. Immutable; reducer returns new profile.
+- **Band blending** — math band is a distribution center, not a hard level. Problems sampled around it. See ADR-001.
+- **CRA progression** — Concrete → Representational → Abstract, tracked per operation. Advances on 3 no-hint correct, demotes on hint-assisted correct or repeated tell-me.
+- **Sub-skills** — operations split into cognitive sub-skills (add_carry, sub_borrow, …). Feature vectors on every problem.
+- **Challenge lifecycle** — state machine (Presented → Feedback → Teaching → Complete). Single reducer handles answers, voice, show-me, tell-me. Rewards are domain-produced.
+- **Stealth assessment** — every interaction is a data point. Events carry features, CRA stage shown, hint usage, voice metadata. Child never feels tested.
 
 ## Commands
 
 ```bash
-# Domain tests (Rust)
-cd robot-buddy-domain && cargo test
-
-# Infrastructure tests (JS)
-npx vitest run
-
-# Build WASM
-wasm-pack build robot-buddy-domain --target web --out-dir ../dist/wasm
-
-# Build JS bundles
-npm run build
-
-# Simulate a kid
-cargo run --manifest-path robot-buddy-domain/Cargo.toml --bin simulate -- --profile gifted
-
-# Dev server
-npx serve .
+cargo test                                          # 62 domain tests
+cargo build --target wasm32-unknown-unknown --release
+./build-wasm.sh                                     # build + assemble www/
+cd robot-buddy-game/www && npx serve .              # local dev
+cargo run -p robot-buddy-domain --bin simulate -- --profile gifted
 ```
+
+## ADRs
+
+- [ADR-001: Band Blending](adr/001-band-blending.md) — bands are distribution centers, not hard levels.

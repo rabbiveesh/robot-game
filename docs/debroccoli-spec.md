@@ -78,6 +78,3 @@ This is still Abstract-tier only. But it's a quick win while we design the real 
 - **RPG Quest Spec**: quests would specify which mini-game types are available at each step, with the CRA stage determining the default.
 - **Architecture Spec**: mini-games would be presentation-layer components. The domain produces challenge data; the mini-game renders it and reports events back.
 
-## Presentation Migration
-
-**See `docs/presentation-migration.md` for migration trigger and plan.**

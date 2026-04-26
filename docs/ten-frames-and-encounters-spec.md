@@ -32,140 +32,26 @@ The kid can SEE that 8 needs 2 more to fill the frame, and 5 has 2 to spare, so 
 
 - Bands 1-4 (numbers 1-20)
 - When the kid presses show-me
-- Registered in the visual registry as an alternative to dots
-- Available in the Dev Zone playground
+- Available in the Dev Zone playground alongside the other concrete visuals
 
-### Implementation
+### Layout
 
-```
-src/presentation/renderers/visuals/ten-frame-visual.js
-```
+Two 2×5 grids of cells, one per operand. Filled cells = a colored dot; empty cells within the operand's count = a faint translucent square (these are the "how many more to make 10" empties). Cells beyond the operand's count are blank cells with just the border.
 
-```js
-function renderTenFrame(ctx, a, b, op, answer, cx, cy, time) {
-  const CELL = 24;        // cell size
-  const GAP = 3;          // between cells
-  const FRAME_GAP = 20;   // between operator and second number
-  const COLS = 5;
-  const ROWS = 2;
+| Constant     | Value                                           |
+|--------------|-------------------------------------------------|
+| Cell         | 24 px                                           |
+| Gap          | 3 px between cells                              |
+| Frame gap    | 20 px between operand frames and the operator  |
+| Cols × Rows  | 5 × 2                                           |
 
-  function drawFrame(x, y, filled, total, color, emptyColor) {
-    for (let row = 0; row < ROWS; row++) {
-      for (let col = 0; col < COLS; col++) {
-        const i = row * COLS + col;
-        const cx = x + col * (CELL + GAP);
-        const cy = y + row * (CELL + GAP);
+For numbers > 10, stack additional frames vertically. Operator glyph (`+` / `−`) sits between the two operand frames at 24 px bold. Each operand has a numeric label above it.
 
-        // Cell background
-        ctx.strokeStyle = '#546E7A';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(cx, cy, CELL, CELL);
+Operand colors: blue (`#42A5F5`) for `a`, yellow (`#FFD54F`) for `b` in addition; red (`#EF5350`) for `b` in subtraction.
 
-        if (i < filled) {
-          // Filled dot
-          ctx.fillStyle = color;
-          ctx.beginPath();
-          ctx.arc(cx + CELL/2, cy + CELL/2, CELL/2 - 3, 0, Math.PI * 2);
-          ctx.fill();
-        } else if (i < total) {
-          // Empty cell within the frame
-          ctx.fillStyle = emptyColor || 'rgba(255,255,255,0.1)';
-          ctx.fillRect(cx + 2, cy + 2, CELL - 4, CELL - 4);
-        }
-      }
-    }
-  }
+### Selection
 
-  // For numbers > 10, draw multiple frames stacked
-  function drawNumber(x, y, num, color) {
-    let remaining = num;
-    let frameY = y;
-    while (remaining > 0) {
-      const filled = Math.min(remaining, 10);
-      drawFrame(x, frameY, filled, 10, color, 'rgba(255,255,255,0.05)');
-      remaining -= filled;
-      frameY += ROWS * (CELL + GAP) + 8; // stack frames vertically
-    }
-    // Label
-    ctx.fillStyle = '#E0E0E0';
-    ctx.font = 'bold 16px "Segoe UI", system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(String(num), x + COLS * (CELL + GAP) / 2, y - 8);
-  }
-
-  if (op === '+') {
-    const frameW = COLS * (CELL + GAP);
-    const totalW = frameW + FRAME_GAP + 30 + FRAME_GAP + frameW;
-    const startX = cx - totalW / 2;
-
-    drawNumber(startX, cy, a, '#42A5F5');
-
-    // Plus sign
-    ctx.fillStyle = '#FFF';
-    ctx.font = 'bold 24px "Segoe UI", system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('+', startX + frameW + FRAME_GAP / 2 + 5, cy + CELL + 5);
-
-    drawNumber(startX + frameW + FRAME_GAP + 20, cy, b, '#FFD54F');
-
-  } else if (op === '-' || op === '\u2212') {
-    const frameW = COLS * (CELL + GAP);
-    const totalW = frameW + FRAME_GAP + 30 + FRAME_GAP + frameW;
-    const startX = cx - totalW / 2;
-
-    drawNumber(startX, cy, a, '#42A5F5');
-    ctx.fillStyle = '#FFF';
-    ctx.font = 'bold 24px "Segoe UI", system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('\u2212', startX + frameW + FRAME_GAP / 2 + 5, cy + CELL + 5);
-    drawNumber(startX + frameW + FRAME_GAP + 20, cy, b, '#EF5350');
-  }
-}
-```
-
-### Registration
-
-```js
-registerVisual('ten_frame', {
-  name: 'Ten Frame',
-  description: '2×5 grid showing numbers to 20. Empty cells show "how many more to make 10."',
-  operations: ['add', 'sub'],
-  bandRange: [1, 4],
-  craStage: 'concrete',
-}, renderTenFrame);
-```
-
-### QuizRenderer integration
-
-The QuizRenderer picks the visual based on band:
-
-```js
-// In render(), when hintUsed:
-if (band <= 4 && getVisual('ten_frame')) {
-  getVisual('ten_frame').render(ctx, a, b, op, answer, cx, cy, time);
-} else if (band >= 5 && getVisual('base10_blocks')) {
-  getVisual('base10_blocks').render(ctx, a, b, op, answer, cx, cy, time);
-} else if (getVisual('dots')) {
-  getVisual('dots').render(ctx, a, b, op, answer, cx, cy, time);
-}
-```
-
-Or better: the visual method is on the renderHint and the registry selects:
-
-```js
-const method = cs.renderHint.visualMethod || (band <= 4 ? 'ten_frame' : 'base10_blocks');
-const visual = getVisual(method);
-if (visual) visual.render(ctx, a, b, op, answer, cx, cy, time);
-```
-
-### Files
-
-```
-NEW:  src/presentation/renderers/visuals/ten-frame-visual.js
-MOD:  src/presentation/renderers/quiz-renderer.js (visual selection logic)
-MOD:  index.html (load ten-frame script)
-MOD:  .github/workflows/static.yml (deploy ten-frame script)
-```
+The challenge generator's `render_hint.cra_stage = Concrete` plus `band ≤ 4` and `operation ∈ {Add, Sub}` selects the ten-frame visual. The presentation renderer dispatches off `render_hint.visual_method` (a per-method tag the learner profile chooses) with a default of `TenFrame` for that range.
 
 ## 2. Random Encounters
 
@@ -240,26 +126,24 @@ pub fn pick_encounter(config: &EncounterConfig, rng: &mut impl Rng) -> Encounter
 
 ### Presentation
 
-The encounter system hooks into the player movement update:
+The encounter system hooks into the player movement update in `robot-buddy-game/src/main.rs`. After a successful tile step, increment a step counter, ask the domain whether to trigger an encounter, and if so queue it to fire when the player stops moving:
 
-```js
-// In updatePlayer (characters.js or adapter):
-// After a successful tile step:
-stepsCounter++;
+```rust
+steps_counter += 1;
 
-if (typeof WasmDomain.shouldTriggerEncounter === 'function') {
-  const shouldTrigger = WasmDomain.shouldTriggerEncounter(JSON.stringify({
-    stepsSinceLastEncounter: stepsCounter,
-    minStepsBetween: 15,
-    challengeFreq: profileState.challengeFreq,
-    area: getAreaName(PLAYER.tileX, PLAYER.tileY),
-  }), randomSeed());
+let should_trigger = encounters::should_trigger_encounter(
+    &EncounterRequest {
+        steps_since_last: steps_counter,
+        min_steps_between: 15,
+        challenge_freq: profile.challenge_freq,
+        area: area_for_tile(player.tile_x, player.tile_y),
+    },
+    &mut rng,
+);
 
-  if (shouldTrigger && !PLAYER.moving) {
-    // Queue encounter for when movement stops
-    triggerEncounter();
-    stepsCounter = 0;
-  }
+if should_trigger && !player.moving {
+    trigger_encounter(...);
+    steps_counter = 0;
 }
 ```
 
@@ -302,12 +186,9 @@ The `challenge_context` type provides story framing for the next challenge — "
 
 ### Files
 
-```
-NEW:  robot-buddy-domain/src/encounters.rs
-MOD:  robot-buddy-domain/src/lib.rs (WASM exports for encounter logic)
-MOD:  adapter.js (hook into movement, trigger encounters)
-MOD:  dialogue.js (encounter dialogue handling)
-```
+- `robot-buddy-domain/src/encounters.rs` (new) — `should_trigger_encounter`, encounter type selection, area config.
+- `robot-buddy-game/src/main.rs` — step counter, post-step encounter check, fire on movement stop.
+- `robot-buddy-game/src/ui/dialogue.rs` — render encounter dialogue (uses the existing dialogue box).
 
 ### Events
 

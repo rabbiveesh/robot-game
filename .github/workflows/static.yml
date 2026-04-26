@@ -38,15 +38,15 @@ jobs:
       - name: Run tests
         run: cargo test
 
-      - name: Build WASM
-        run: cargo build --target wasm32-unknown-unknown --release
+      - name: Build WASM and assemble www/
+        run: ./build-wasm.sh
 
       - name: Prepare deploy directory
         run: |
           mkdir -p _site
           cp robot-buddy-game/www/index.html _site/
           cp robot-buddy-game/www/mq_js_bundle.js _site/
-          cp target/wasm32-unknown-unknown/release/robot-buddy-game.wasm _site/
+          cp robot-buddy-game/www/robot-buddy-game.wasm _site/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
