@@ -212,7 +212,7 @@ const BLUE_BTN: Color = Color::new(0.129, 0.588, 0.953, 1.0);
 const SCAFFOLD_BG: Color = Color::new(0.329, 0.431, 0.478, 1.0);
 const GIVEN_TEXT: Color = Color::new(0.20, 0.20, 0.20, 1.0);
 const USER_TEXT: Color = Color::new(0.06, 0.30, 0.55, 1.0);
-const VIOLATION_TINT: Color = Color::new(1.0, 0.4, 0.4, 0.45);
+const VIOLATION_TINT: Color = Color::new(1.0, 0.25, 0.25, 0.65);
 
 const CAGE_TINTS: &[Color] = &[
     Color::new(0.95, 0.93, 0.85, 1.0),
@@ -424,6 +424,7 @@ fn intro_step_data(session: &KenKenSession, layout: &KenKenLayout, step: u8) -> 
             let n = session.puzzle.grid_size as usize;
             let g0 = layout.cells[0][0];
             let g_last = layout.cells[n - 1][n - 1];
+            let nums: String = (1..=n).map(|i| i.to_string()).collect::<Vec<_>>().join(", ");
             (
                 UiRect {
                     x: g0.x,
@@ -431,7 +432,10 @@ fn intro_step_data(session: &KenKenSession, layout: &KenKenLayout, step: u8) -> 
                     w: g_last.x + g_last.w - g0.x,
                     h: g_last.y + g_last.h - g0.y,
                 },
-                "Each row needs every number, just once.\nEvery column too!\n\nTap to keep going...".into(),
+                format!(
+                    "Every row gets {} — each one ONCE, no repeats!\nEvery column too.\n\nTap to keep going...",
+                    nums
+                ),
             )
         }
         1 => {

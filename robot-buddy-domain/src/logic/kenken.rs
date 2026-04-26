@@ -126,8 +126,23 @@ pub fn kenken_reducer(state: KenKenSession, action: KenKenAction) -> KenKenSessi
             }
 
             let validation = validate_placement(&state, row, col, value);
-            let mut grid = state.grid.clone();
-            grid[row as usize][col as usize] = Some(value);
+
+            // Row/column conflicts are rejected — the kid can immediately fix
+            // them by picking a different number, and accepting them silently
+            // lets the kid fill the whole grid into a state that can never
+            // satisfy `is_solved`. Cage-wrong errors are accepted into the
+            // grid because they're multi-cell failures the kid needs to see
+            // and investigate across the cage's cells, not a single bad pick.
+            let grid = match validation {
+                ValidationResult::RowConflict { .. } | ValidationResult::ColConflict { .. } => {
+                    state.grid.clone()
+                }
+                _ => {
+                    let mut g = state.grid.clone();
+                    g[row as usize][col as usize] = Some(value);
+                    g
+                }
+            };
 
             let (last_violation, violations) = match validation {
                 ValidationResult::Valid => (None, state.constraint_violations),
@@ -801,13 +816,27 @@ mod tests {
     }
 
     #[test]
-    fn placing_row_conflict_records_violation() {
+    fn placing_row_conflict_rejects_the_placement() {
         let p = fallback_puzzle(2);
         let s = KenKenSession::new(p);
         // (0,0)=1 is given; placing 1 at (0,1) collides with the row.
         let s = kenken_reducer(s, KenKenAction::CellPlaced { row: 0, col: 1, value: 1 });
+        assert_eq!(s.grid[0][1], None, "row conflict should leave the cell empty");
         assert_eq!(s.last_violation, Some(ValidationResult::RowConflict { col: 0 }));
         assert_eq!(s.constraint_violations, 1);
+    }
+
+    #[test]
+    fn correct_value_after_row_conflict_succeeds() {
+        let p = fallback_puzzle(2);
+        let s = KenKenSession::new(p);
+        // First try: 1 at (0,1) — row conflict, rejected.
+        let s = kenken_reducer(s, KenKenAction::CellPlaced { row: 0, col: 1, value: 1 });
+        assert_eq!(s.grid[0][1], None);
+        // Second try: 2 at (0,1) — no conflict, accepted.
+        let s = kenken_reducer(s, KenKenAction::CellPlaced { row: 0, col: 1, value: 2 });
+        assert_eq!(s.grid[0][1], Some(2));
+        assert_eq!(s.last_violation, None);
     }
 
     #[test]

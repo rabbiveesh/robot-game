@@ -1669,18 +1669,29 @@ fn apply_kenken_intent(ak: &mut ActiveKenKen, intent: ui::kenken::KenKenInput) {
     match intent {
         ui::kenken::KenKenInput::Action(action) => {
             ak.session = kenken::kenken_reducer(ak.session.clone(), action.clone());
-            // Once a placement happens, the user's next click on a different cell
-            // re-establishes selection — but the cell whose value was just placed
-            // should clear so subsequent picker clicks don't accidentally overwrite.
+            // After a valid placement, drop selection so the next picker click
+            // doesn't accidentally overwrite the cell. After a rejected
+            // placement (row/col conflict — see reducer), keep selection so
+            // the kid can immediately try a different number on the same cell
+            // and the violation highlight stays anchored.
             if let KenKenAction::CellPlaced { .. } = action {
-                ak.selected = None;
+                if ak.session.last_violation.is_none() {
+                    ak.selected = None;
+                }
             }
         }
         ui::kenken::KenKenInput::SelectCell(r, c) => {
             ak.selected = Some((r, c));
+            // Clear stale violation feedback when changing selection — the
+            // last_violation hint encodes a coord relative to the previously
+            // selected cell, and would mis-render against a new selection.
+            // Inline because last_violation doubles as a UI hint and selection
+            // state lives outside the reducer.
+            ak.session.last_violation = None;
         }
         ui::kenken::KenKenInput::Deselect => {
             ak.selected = None;
+            ak.session.last_violation = None;
         }
     }
 }
