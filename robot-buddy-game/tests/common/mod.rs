@@ -213,7 +213,7 @@ impl Harness {
     pub fn walk_to_npc(&mut self, kind: NpcKind) {
         let (nx, ny) = self.game.npcs.iter()
             .find(|n| n.kind == kind)
-            .map(|n| (n.tile_x, n.tile_y))
+            .map(|n| (n.entity.tile_x, n.entity.tile_y))
             .unwrap_or_else(|| panic!("no NPC with kind {:?} on current map ('{}')", kind, self.game.map.id));
 
         // Pick a walkable adjacent tile.
@@ -227,7 +227,7 @@ impl Harness {
             cx < self.game.map.width
                 && cy < self.game.map.height
                 && !self.game.map.is_solid(cx, cy)
-                && !self.game.npcs.iter().any(|n| n.tile_x == cx && n.tile_y == cy)
+                && !self.game.npcs.iter().any(|n| n.entity.tile_x == cx && n.entity.tile_y == cy)
         }).unwrap_or_else(|| panic!("no walkable tile adjacent to NPC {:?}", kind));
 
         self.walk_to(adj.0, adj.1);
@@ -428,7 +428,7 @@ fn bfs(
             // Block solid tiles and NPCs. Sparky is mobile and can be pushed past;
             // we don't model him here.
             if game.map.is_solid(np.0, np.1) { continue; }
-            if game.npcs.iter().any(|n| n.tile_x == np.0 && n.tile_y == np.1) { continue; }
+            if game.npcs.iter().any(|n| n.entity.tile_x == np.0 && n.entity.tile_y == np.1) { continue; }
             prev.insert(np, p);
             q.push_back(np);
         }

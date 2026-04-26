@@ -1,6 +1,8 @@
 use macroquad::prelude::*;
-use crate::sprites;
-use crate::tilemap::TILE_SIZE;
+use ::rand::{Rng, rngs::SmallRng};
+use robot_buddy_domain::world::movement::{Direction, MoveIntent};
+use crate::game::Entity;
+use crate::sprites::{self, Dir};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum NpcKind {
@@ -82,24 +84,93 @@ pub enum SpriteType {
     OldOak,
 }
 
+/// Manhattan radius an NPC may wander away from its home tile. Keeps wanderers
+/// from drifting across the whole map; small enough that the player can find
+/// them reliably.
+const WANDER_RADIUS: i32 = 3;
+const WANDER_COOLDOWN_MIN: f32 = 1.5;
+const WANDER_COOLDOWN_MAX: f32 = 3.0;
+
 #[derive(Clone)]
 pub struct Npc {
     pub kind: NpcKind,
-    pub tile_x: usize,
-    pub tile_y: usize,
+    pub entity: Entity,
     pub sprite: SpriteType,
     pub can_receive_gifts: bool,
     pub never_challenge: bool,
     pub is_puzzler: bool,
+    /// If true, this NPC emits random `Move` intents on a cooldown. The
+    /// resolver decides whether each move actually happens; blocked moves
+    /// turn into a Stay for that frame.
+    pub wanders: bool,
+    pub home_tx: usize,
+    pub home_ty: usize,
+    /// Time until the next wander attempt. Counts down only while stationary.
+    pub wander_cooldown: f32,
 }
 
 impl Npc {
     pub fn name(&self) -> &'static str { self.kind.display_name() }
     pub fn id_str(&self) -> &'static str { self.kind.as_str() }
 
+    /// Pixel-level interpolation. No movement decisions here -- those go
+    /// through `next_intent` and the resolver.
+    pub fn animate(&mut self, dt: f32) {
+        self.entity.move_toward_target(dt);
+    }
+
+    /// Decide what this NPC wants to do this frame.
+    ///
+    /// Stationary, non-wandering NPCs always Stay. Wanderers tick down a
+    /// cooldown; when it expires, they roll a random direction. The resolver
+    /// (run after this) decides whether the move actually happens; blocks
+    /// just mean the NPC stays put and rolls again on the next cooldown.
+    ///
+    /// Sets `entity.dir` to face the rolled direction so the NPC visibly
+    /// "looks where it's going" even if the move ends up blocked.
+    pub fn next_intent(&mut self, dt: f32, rng: &mut SmallRng) -> MoveIntent {
+        if !self.wanders { return MoveIntent::Stay; }
+        if self.entity.moving { return MoveIntent::Stay; }
+        self.wander_cooldown -= dt;
+        if self.wander_cooldown > 0.0 { return MoveIntent::Stay; }
+        self.wander_cooldown = WANDER_COOLDOWN_MIN
+            + rng.gen::<f32>() * (WANDER_COOLDOWN_MAX - WANDER_COOLDOWN_MIN);
+
+        let dirs = [Direction::Up, Direction::Down, Direction::Left, Direction::Right];
+        let dir = dirs[rng.gen_range(0..4)];
+        let (dx, dy) = dir.delta();
+        let nx = self.entity.tile_x as i32 + dx;
+        let ny = self.entity.tile_y as i32 + dy;
+        if nx < 0 || ny < 0 { return MoveIntent::Stay; }
+
+        // Tether to home so wanderers don't drift across the whole map. The
+        // resolver handles wall/entity collisions on top.
+        if (nx - self.home_tx as i32).abs() > WANDER_RADIUS
+            || (ny - self.home_ty as i32).abs() > WANDER_RADIUS
+        {
+            return MoveIntent::Stay;
+        }
+
+        self.entity.dir = match dir {
+            Direction::Up => Dir::Up,
+            Direction::Down => Dir::Down,
+            Direction::Left => Dir::Left,
+            Direction::Right => Dir::Right,
+        };
+        MoveIntent::Move(dir)
+    }
+
+    /// Builder: mark this NPC as a wanderer. Sets the initial cooldown so
+    /// wanderers don't all twitch on frame 1.
+    pub fn wandering(mut self) -> Self {
+        self.wanders = true;
+        self.wander_cooldown = WANDER_COOLDOWN_MIN;
+        self
+    }
+
     pub fn draw(&self, time: f32) {
-        let x = self.tile_x as f32 * TILE_SIZE;
-        let y = self.tile_y as f32 * TILE_SIZE;
+        let x = self.entity.x;
+        let y = self.entity.y;
         match self.sprite {
             SpriteType::Mommy => sprites::npcs::draw_mommy(x, y, time),
             SpriteType::Sage => sprites::npcs::draw_sage(x, y, time),
@@ -116,16 +187,24 @@ impl Npc {
             SpriteType::OldOak => sprites::npcs::draw_old_oak(x, y, time),
         }
     }
-
-    pub fn pixel_y(&self) -> f32 {
-        self.tile_y as f32 * TILE_SIZE
-    }
 }
 
-/// Constructor helper — keeps the per-map NPC tables tidy.
+/// Constructor helper -- keeps the per-map NPC tables tidy. Stationary by
+/// default; chain `.wandering()` to opt in.
 fn npc(kind: NpcKind, tx: usize, ty: usize, sprite: SpriteType,
        can_receive_gifts: bool, never_challenge: bool, is_puzzler: bool) -> Npc {
-    Npc { kind, tile_x: tx, tile_y: ty, sprite, can_receive_gifts, never_challenge, is_puzzler }
+    Npc {
+        kind,
+        entity: Entity::new(tx, ty),
+        sprite,
+        can_receive_gifts,
+        never_challenge,
+        is_puzzler,
+        wanders: false,
+        home_tx: tx,
+        home_ty: ty,
+        wander_cooldown: 0.0,
+    }
 }
 
 pub fn npcs_for_map(map_id: &str) -> Vec<Npc> {
@@ -137,8 +216,8 @@ pub fn npcs_for_map(map_id: &str) -> Vec<Npc> {
         ],
         "home" => vec![
             npc(Mommy, 3, 3, S::Mommy, true, false, false),
-            npc(Kid1,  6, 5, S::Kid1,  true, true,  false),
-            npc(Kid2,  8, 5, S::Kid2,  true, true,  false),
+            npc(Kid1,  6, 5, S::Kid1,  true, true,  false).wandering(),
+            npc(Kid2,  8, 5, S::Kid2,  true, true,  false).wandering(),
         ],
         "lab" => vec![
             npc(SageLab, 5, 3, S::Sage, true, false, true),
@@ -191,7 +270,7 @@ pub fn get_interact_target(
         sprites::Dir::Right => (player_tx as i32 + 1, player_ty as i32),
     };
     if tx < 0 || ty < 0 { return None; }
-    npcs.iter().find(|n| n.tile_x == tx as usize && n.tile_y == ty as usize)
+    npcs.iter().find(|n| n.entity.tile_x == tx as usize && n.entity.tile_y == ty as usize)
 }
 
 /// Check if facing Sparky (the robot)

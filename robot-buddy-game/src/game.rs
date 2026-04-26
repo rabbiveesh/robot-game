@@ -124,20 +124,21 @@ pub struct ActiveKenKen {
 
 // ─── Sprites/movement ───────────────────────────────────
 
+#[derive(Clone)]
 pub struct Entity {
     pub x: f32,
     pub y: f32,
     pub tile_x: usize,
     pub tile_y: usize,
-    target_x: f32,
-    target_y: f32,
-    moving: bool,
+    pub target_x: f32,
+    pub target_y: f32,
+    pub moving: bool,
     pub dir: Dir,
     pub frame: u32,
 }
 
 impl Entity {
-    fn new(tile_x: usize, tile_y: usize) -> Self {
+    pub fn new(tile_x: usize, tile_y: usize) -> Self {
         Entity {
             x: tile_x as f32 * TILE_SIZE,
             y: tile_y as f32 * TILE_SIZE,
@@ -151,7 +152,7 @@ impl Entity {
         }
     }
 
-    fn move_toward_target(&mut self, dt: f32) -> bool {
+    pub fn move_toward_target(&mut self, dt: f32) -> bool {
         if !self.moving { return false; }
         let dx = self.target_x - self.x;
         let dy = self.target_y - self.y;
@@ -169,7 +170,7 @@ impl Entity {
         false
     }
 
-    fn start_move(&mut self, nx: usize, ny: usize) {
+    pub fn start_move(&mut self, nx: usize, ny: usize) {
         self.tile_x = nx;
         self.tile_y = ny;
         self.target_x = nx as f32 * TILE_SIZE;
@@ -535,6 +536,7 @@ impl Game {
         } else {
             let a = self.player.move_toward_target(dt);
             self.sparky.animate(dt);
+            for n in &mut self.npcs { n.animate(dt); }
             self.dialogue.update(dt);
             a
         };
@@ -879,9 +881,9 @@ impl Game {
         let mut intents: Vec<(EntityId, MoveIntent)> = Vec::with_capacity(2 + self.npcs.len());
         intents.push((EntityId::Player, player_intent));
         intents.push((EntityId::Sparky, sparky_intent));
-        for (i, _) in self.npcs.iter().enumerate() {
-            // PR 2 will swap Stay for a wander intent here.
-            intents.push((EntityId::Npc(i as u32), MoveIntent::Stay));
+        for (i, n) in self.npcs.iter_mut().enumerate() {
+            let intent = n.next_intent(dt, &mut self.rng);
+            intents.push((EntityId::Npc(i as u32), intent));
         }
 
         let map = &self.map;
@@ -906,8 +908,10 @@ impl Game {
                     }
                     self.sparky.entity.start_move(to.0, to.1);
                 }
-                MoveResolution::Granted { entity: EntityId::Npc(_), .. } => {
-                    // PR 2: dispatch to NPC.start_move.
+                MoveResolution::Granted { entity: EntityId::Npc(i), to, .. } => {
+                    if let Some(n) = self.npcs.get_mut(*i as usize) {
+                        n.entity.start_move(to.0, to.1);
+                    }
                 }
                 _ => {}
             }
@@ -1014,13 +1018,7 @@ impl Game {
         v.push(entity_state(EntityId::Player, &self.player, Solidity::Solid));
         v.push(entity_state(EntityId::Sparky, &self.sparky.entity, Solidity::SoftAfter(0.12)));
         for (i, n) in self.npcs.iter().enumerate() {
-            v.push(EntityState {
-                id: EntityId::Npc(i as u32),
-                tile_x: n.tile_x,
-                tile_y: n.tile_y,
-                moving_to: None, // NPCs are stationary in PR 1
-                solidity: Solidity::Solid,
-            });
+            v.push(entity_state(EntityId::Npc(i as u32), &n.entity, Solidity::Solid));
         }
         v
     }
@@ -1546,7 +1544,7 @@ impl Game {
             renderables.push(Renderable { y: self.player.y, kind: SpriteKind::Player });
             renderables.push(Renderable { y: self.sparky.entity.y, kind: SpriteKind::Sparky });
             for n in &self.npcs {
-                renderables.push(Renderable { y: n.pixel_y(), kind: SpriteKind::Npc(n) });
+                renderables.push(Renderable { y: n.entity.y, kind: SpriteKind::Npc(n) });
             }
             renderables.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap());
 
@@ -1931,7 +1929,7 @@ fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Np
     for (cx, cy) in candidates {
         if cx < map.width && cy < map.height
             && !map.is_solid(cx, cy)
-            && !npcs.iter().any(|n| n.tile_x == cx && n.tile_y == cy)
+            && !npcs.iter().any(|n| n.entity.tile_x == cx && n.entity.tile_y == cy)
         {
             return (cx, cy);
         }
