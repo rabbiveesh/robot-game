@@ -115,20 +115,171 @@ fn talking_to_sparky_can_roll_a_challenge_and_award_dum_dums() {
 }
 
 #[test]
+fn sage_offers_kenken_and_solving_it_completes_the_session() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc("sage");
+
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu,
+        "puzzler NPC should open the menu (Talk + Try a Puzzle)");
+
+    let mark = h.mark();
+    h.select_option("puzzle");
+    h.wait_until(|g| g.state == GameState::KenKen);
+
+    let started_grid = {
+        let ak = h.game.active_kenken().expect("active KenKen after picking 'puzzle'");
+        ak.session.puzzle.grid_size
+    };
+    assert!(started_grid >= 2 && started_grid <= 4,
+        "kenken_level should clamp to 2..=4, got {}", started_grid);
+
+    h.solve_kenken_correctly();
+
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::KenKenStarted { .. })),
+        "expected KenKenStarted; got: {:?}", events,
+    );
+    let resolved = events.iter().find_map(|e| match e {
+        GameEvent::KenKenResolved { correct, hints_used, grid_size, .. } =>
+            Some((*correct, *hints_used, *grid_size)),
+        _ => None,
+    }).expect(&format!("expected KenKenResolved; got: {:?}", events));
+    assert_eq!(resolved, (true, 0, started_grid),
+        "fully solving the puzzle by hand should resolve correct=true with 0 hints");
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::DumDumsAwarded { .. })),
+        "solving a kenken should award dum_dums; got: {:?}", events,
+    );
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
+fn kenken_intro_shows_on_first_puzzle_only() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    assert!(!h.game.profile.kenken_intro_seen,
+        "fresh dev profile should not have seen the intro");
+
+    h.walk_to_npc("sage");
+    h.interact();
+    h.select_option("puzzle");
+    h.wait_until(|g| g.state == GameState::KenKen);
+
+    let step = h.game.active_kenken().unwrap().intro_step;
+    assert_eq!(step, Some(0), "first KenKen should start at intro step 0");
+
+    h.skip_kenken_intro();
+    assert!(h.game.profile.kenken_intro_seen,
+        "finishing the intro should flip the profile flag");
+    assert_eq!(h.game.active_kenken().unwrap().intro_step, None);
+
+    h.solve_kenken_correctly();
+
+    // Second KenKen — no intro this time.
+    h.walk_to_npc("sage");
+    h.interact();
+    h.select_option("puzzle");
+    h.wait_until(|g| g.state == GameState::KenKen);
+    assert_eq!(h.game.active_kenken().unwrap().intro_step, None,
+        "second KenKen should skip the intro");
+}
+
+#[test]
+fn kenken_hint_marks_resolution_as_hint_used() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc("sage");
+    h.interact();
+    h.select_option("puzzle");
+    h.wait_until(|g| g.state == GameState::KenKen);
+
+    // One hint, then solve the rest.
+    h.request_kenken_hint();
+    let mark = h.mark();
+    h.solve_kenken_correctly();
+
+    let events = h.events_since(mark);
+    let hints_used = events.iter().find_map(|e| match e {
+        GameEvent::KenKenResolved { hints_used, .. } => Some(*hints_used),
+        _ => None,
+    }).expect(&format!("expected KenKenResolved; got: {:?}", events));
+    assert_eq!(hints_used, 1, "one hint button click should record one hint");
+}
+
+#[test]
+fn control_room_band_knob_cycles_math_band() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+
+    // Door tile is at (1, 9). Walk to the tile next to it, then step onto it.
+    h.walk_to(2, 9);
+    let mark = h.mark();
+    h.step_through_portal(KeyCode::Left, "control");
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e,
+            GameEvent::MapTransitioned { to, .. } if to == "control")),
+        "expected MapTransitioned to 'control'; got: {:?}", events,
+    );
+
+    let before = h.game.profile.math_band;
+    h.walk_to_npc("ctrl_band");
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Playing);
+    let after = h.game.profile.math_band;
+    let expected = if before >= 10 { 1 } else { before + 1 };
+    assert_eq!(after, expected,
+        "ctrl_band should cycle math_band: {} → {}", before, after);
+}
+
+#[test]
+fn control_room_intro_reset_replays_kenken_intro() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+
+    // Mark intro as already-seen by walking through it once.
+    h.walk_to_npc("sage");
+    h.interact();
+    h.select_option("puzzle");
+    h.wait_until(|g| g.state == GameState::KenKen);
+    h.skip_kenken_intro();
+    assert!(h.game.profile.kenken_intro_seen);
+    h.solve_kenken_correctly();
+
+    // Walk to control room and reset the intro flag.
+    h.walk_to(2, 9);
+    h.step_through_portal(macroquad::prelude::KeyCode::Left, "control");
+    h.walk_to_npc("ctrl_intro_reset");
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    assert!(!h.game.profile.kenken_intro_seen,
+        "ctrl_intro_reset should clear the intro flag");
+}
+
+#[test]
 fn walk_to_npc_then_interact_starts_dialogue() {
     let mut h = Harness::new(42);
     h.start_dev_game();
 
-    // The sage is the second sprite in the dev gallery row. walk_to_npc
-    // pathfinds to an adjacent walkable tile and turns to face them.
-    h.walk_to_npc("sage");
+    // Mommy in the dev gallery has only the "talk" option (gifts off, no puzzle,
+    // no challenge). walk_to_npc pathfinds to an adjacent walkable tile and turns
+    // to face them.
+    h.walk_to_npc("mommy");
 
     let mark = h.mark();
     h.interact();
 
-    // Sage in the dev map has only the "talk" option. Stronger than asserting
-    // state==Dialogue: assert the menu was *skipped* — no transition through
-    // InteractionMenu — and DialogueStarted fired.
+    // Stronger than asserting state==Dialogue: assert the menu was *skipped* — no
+    // transition through InteractionMenu — and DialogueStarted fired.
     let events = h.events_since(mark);
     assert!(
         events.iter().any(|e| matches!(e, GameEvent::DialogueStarted { .. })),

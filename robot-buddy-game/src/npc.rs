@@ -22,6 +22,7 @@ pub struct Npc {
     pub sprite: SpriteType,
     pub can_receive_gifts: bool,
     pub never_challenge: bool,
+    pub is_puzzler: bool,
 }
 
 impl Npc {
@@ -54,52 +55,69 @@ pub fn npcs_for_map(map_id: &str) -> Vec<Npc> {
     match map_id {
         "overworld" => vec![
             Npc { id: "sage", name: "Professor Gizmo", tile_x: 12, tile_y: 12,
-                sprite: SpriteType::Sage, can_receive_gifts: true, never_challenge: false },
+                sprite: SpriteType::Sage, can_receive_gifts: true, never_challenge: false, is_puzzler: true },
         ],
         "home" => vec![
             Npc { id: "mommy", name: "Mommy", tile_x: 3, tile_y: 3,
-                sprite: SpriteType::Mommy, can_receive_gifts: true, never_challenge: false },
+                sprite: SpriteType::Mommy, can_receive_gifts: true, never_challenge: false, is_puzzler: false },
             Npc { id: "kid_1", name: "Tali", tile_x: 6, tile_y: 5,
-                sprite: SpriteType::Kid1, can_receive_gifts: true, never_challenge: true },
+                sprite: SpriteType::Kid1, can_receive_gifts: true, never_challenge: true, is_puzzler: false },
             Npc { id: "kid_2", name: "Noa", tile_x: 8, tile_y: 5,
-                sprite: SpriteType::Kid2, can_receive_gifts: true, never_challenge: true },
+                sprite: SpriteType::Kid2, can_receive_gifts: true, never_challenge: true, is_puzzler: false },
         ],
         "lab" => vec![
             Npc { id: "sage_lab", name: "Professor Gizmo", tile_x: 5, tile_y: 3,
-                sprite: SpriteType::Sage, can_receive_gifts: true, never_challenge: false },
+                sprite: SpriteType::Sage, can_receive_gifts: true, never_challenge: false, is_puzzler: true },
         ],
         "shop" => vec![
             Npc { id: "shopkeeper", name: "Bolt the Shopkeeper", tile_x: 5, tile_y: 2,
-                sprite: SpriteType::Shopkeeper, can_receive_gifts: true, never_challenge: false },
+                sprite: SpriteType::Shopkeeper, can_receive_gifts: true, never_challenge: false, is_puzzler: false },
         ],
         "dream" => vec![
             Npc { id: "dream_sage", name: "???", tile_x: 15, tile_y: 8,
-                sprite: SpriteType::Sage, can_receive_gifts: false, never_challenge: false },
+                sprite: SpriteType::Sage, can_receive_gifts: false, never_challenge: false, is_puzzler: false },
         ],
         "doghouse" => vec![
             Npc { id: "glitch_dog", name: "B0RK.exe", tile_x: 7, tile_y: 5,
-                sprite: SpriteType::Dog, can_receive_gifts: true, never_challenge: false },
+                sprite: SpriteType::Dog, can_receive_gifts: true, never_challenge: false, is_puzzler: false },
         ],
         "grove" => vec![
             Npc { id: "grove_spirit", name: "Old Oak", tile_x: 6, tile_y: 4,
-                sprite: SpriteType::OldOak, can_receive_gifts: true, never_challenge: false },
+                sprite: SpriteType::OldOak, can_receive_gifts: true, never_challenge: false, is_puzzler: false },
+        ],
+        "control" => vec![
+            // Dev knob bay — each NPC is one control. game.rs intercepts ctrl_*
+            // ids before the normal interaction flow and applies the effect.
+            Npc { id: "ctrl_band", name: "Band Knob", tile_x: 2, tile_y: 2,
+                sprite: SpriteType::Sage, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
+            Npc { id: "ctrl_kenken_level", name: "KenKen Knob", tile_x: 5, tile_y: 2,
+                sprite: SpriteType::Shopkeeper, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
+            Npc { id: "ctrl_cra_reset", name: "CRA Reset", tile_x: 8, tile_y: 2,
+                sprite: SpriteType::OldOak, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
+            Npc { id: "ctrl_intro_reset", name: "Intro Reset", tile_x: 10, tile_y: 2,
+                sprite: SpriteType::Dog, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
+            Npc { id: "ctrl_trigger_kenken", name: "Trigger KenKen", tile_x: 3, tile_y: 5,
+                sprite: SpriteType::Kid1, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
+            Npc { id: "ctrl_trigger_challenge", name: "Trigger Challenge", tile_x: 8, tile_y: 5,
+                sprite: SpriteType::Kid2, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
         ],
         "dev" => vec![
             // Sprite gallery — one of each NPC, lined up. Natural talk = TTS test.
+            // Sage flagged as puzzler so dev/test flows can deterministically open a KenKen.
             Npc { id: "mommy", name: "Mommy", tile_x: 2, tile_y: 3,
-                sprite: SpriteType::Mommy, can_receive_gifts: false, never_challenge: true },
+                sprite: SpriteType::Mommy, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
             Npc { id: "sage", name: "Professor Gizmo", tile_x: 4, tile_y: 3,
-                sprite: SpriteType::Sage, can_receive_gifts: false, never_challenge: true },
+                sprite: SpriteType::Sage, can_receive_gifts: false, never_challenge: true, is_puzzler: true },
             Npc { id: "shopkeeper", name: "Bolt the Shopkeeper", tile_x: 6, tile_y: 3,
-                sprite: SpriteType::Shopkeeper, can_receive_gifts: false, never_challenge: true },
+                sprite: SpriteType::Shopkeeper, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
             Npc { id: "kid_1", name: "Tali", tile_x: 8, tile_y: 3,
-                sprite: SpriteType::Kid1, can_receive_gifts: false, never_challenge: true },
+                sprite: SpriteType::Kid1, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
             Npc { id: "kid_2", name: "Noa", tile_x: 10, tile_y: 3,
-                sprite: SpriteType::Kid2, can_receive_gifts: false, never_challenge: true },
+                sprite: SpriteType::Kid2, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
             Npc { id: "glitch_dog", name: "B0RK.exe", tile_x: 12, tile_y: 3,
-                sprite: SpriteType::Dog, can_receive_gifts: false, never_challenge: true },
+                sprite: SpriteType::Dog, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
             Npc { id: "grove_spirit", name: "Old Oak", tile_x: 13, tile_y: 3,
-                sprite: SpriteType::OldOak, can_receive_gifts: false, never_challenge: true },
+                sprite: SpriteType::OldOak, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
         ],
         _ => vec![],
     }

@@ -10,6 +10,7 @@ use macroquad::prelude::KeyCode;
 use robot_buddy_game::game::{Game, GameEvent, GameState};
 use robot_buddy_game::input::FrameInput;
 use robot_buddy_game::save::InMemoryBackend;
+use robot_buddy_game::ui;
 
 pub const SCREEN: (f32, f32) = (960.0, 720.0);
 pub const DT: f32 = 1.0 / 60.0;
@@ -275,6 +276,101 @@ impl Harness {
     /// Convenience alias matching the user's example wording.
     pub fn answer_correctly(&mut self) {
         self.answer_challenge_correctly();
+    }
+
+    /// Hold a direction key until the player's current map id changes to
+    /// `dest_map`. Use when stepping onto a portal tile — `walk_to` panics
+    /// in that case because the player lands on the destination map (so the
+    /// arrival check against the source coords never fires).
+    pub fn step_through_portal(&mut self, dir: KeyCode, dest_map: &str) {
+        for _ in 0..60 {
+            if self.game.map.id == dest_map {
+                return;
+            }
+            self.hold(dir);
+        }
+        panic!("never transitioned to map '{}' (still on '{}')", dest_map, self.game.map.id);
+    }
+
+    // ─── KenKen helpers ──────────────────────────────────
+
+    /// Place `value` at (row, col) in the active KenKen by clicking the cell
+    /// then clicking the matching number picker. Mirrors how a real player
+    /// would interact: cell select → value pick. Auto-skips intro if showing.
+    pub fn place_kenken_cell(&mut self, row: u8, col: u8, value: u8) {
+        self.skip_kenken_intro();
+        let (cell_x, cell_y, picker_x, picker_y) = {
+            let ak = self.game.active_kenken().expect("place_kenken_cell: no active KenKen");
+            let layout = ui::kenken::layout(&ak.session, SCREEN);
+            let cell = layout.cells[row as usize][col as usize];
+            let picker = &layout.pickers[(value - 1) as usize].rect;
+            (
+                cell.x + cell.w / 2.0,
+                cell.y + cell.h / 2.0,
+                picker.x + picker.w / 2.0,
+                picker.y + picker.h / 2.0,
+            )
+        };
+        self.click(cell_x, cell_y);
+        self.click(picker_x, picker_y);
+    }
+
+    /// Click the Hint button on the active KenKen. Auto-skips intro if showing.
+    pub fn request_kenken_hint(&mut self) {
+        self.skip_kenken_intro();
+        let (x, y) = {
+            let ak = self.game.active_kenken().expect("request_kenken_hint: no active KenKen");
+            let layout = ui::kenken::layout(&ak.session, SCREEN);
+            (layout.hint_btn.x + layout.hint_btn.w / 2.0,
+             layout.hint_btn.y + layout.hint_btn.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// If the first-time intro overlay is showing, tap Space until it
+    /// finishes. No-op once `kenken_intro_seen` is set on the profile.
+    pub fn skip_kenken_intro(&mut self) {
+        // Bound the loop — INTRO_STEPS plus slack — so a stuck intro can't
+        // hang the test forever.
+        for _ in 0..(ui::kenken::INTRO_STEPS as usize + 4) {
+            let still_in_intro = self
+                .game
+                .active_kenken()
+                .map(|ak| ak.intro_step.is_some())
+                .unwrap_or(false);
+            if !still_in_intro {
+                return;
+            }
+            self.press(macroquad::prelude::KeyCode::Space);
+        }
+        panic!("kenken intro never finished after enough advances");
+    }
+
+    /// Fill in every empty cell with the puzzle's known solution. After the
+    /// final cell, presses Space to dismiss the celebration screen and lands
+    /// back in `Playing`. Auto-skips the first-time intro overlay if showing.
+    pub fn solve_kenken_correctly(&mut self) {
+        self.skip_kenken_intro();
+
+        let fills = {
+            let ak = self.game.active_kenken().expect("solve_kenken_correctly: no active KenKen");
+            let n = ak.session.puzzle.grid_size as usize;
+            let mut fills: Vec<(u8, u8, u8)> = Vec::new();
+            for r in 0..n {
+                for c in 0..n {
+                    if ak.session.grid[r][c].is_none() {
+                        fills.push((r as u8, c as u8, ak.session.puzzle.solution[r][c]));
+                    }
+                }
+            }
+            fills
+        };
+        for (r, c, v) in fills {
+            self.place_kenken_cell(r, c, v);
+        }
+        // Dismiss completion screen.
+        self.press(KeyCode::Space);
+        self.wait_until(|g| g.state == GameState::Playing);
     }
 
     // ─── Event-log access ────────────────────────────────

@@ -38,6 +38,7 @@ pub fn get_area_name(map_id: &str, tx: usize, ty: usize) -> &'static str {
         "doghouse" => "D0GH0USE.exe",
         "grove" => "Hidden Grove",
         "dev" => "Dev Zone",
+        "control" => "Control Room",
         _ => "???",
     }
 }
@@ -221,11 +222,11 @@ impl DebugOverlay {
             let window_acc = profile.rolling_window.operation_accuracy(op);
             let acc_str = match window_acc {
                 Some(a) => format!("{:.0}%", a * 100.0),
-                None => "—".into(),
+                None => "--".into(),
             };
             let lifetime_str = match stats.accuracy() {
                 Some(a) => format!("{:.0}% ({}/{})", a * 100.0, stats.correct, stats.attempts),
-                None => "—".into(),
+                None => "--".into(),
             };
             draw_text(&format!("  {:?}: recent {} | total {}", op, acc_str, lifetime_str),
                 lx, ly, 14.0, white);
@@ -235,7 +236,7 @@ impl DebugOverlay {
 
         // Response time + consecutive wrong
         let avg_rt = profile.rolling_window.avg_response_time();
-        let rt_str = if avg_rt > 0.0 { format!("{:.0}ms", avg_rt) } else { "—".into() };
+        let rt_str = if avg_rt > 0.0 { format!("{:.0}ms", avg_rt) } else { "--".into() };
         let consec = profile.rolling_window.consecutive_wrong();
         draw_text(&format!("Avg response: {}  Wrong streak: {}", rt_str, consec),
             lx, ly, 16.0, white);

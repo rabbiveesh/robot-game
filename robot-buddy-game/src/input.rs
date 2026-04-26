@@ -5,11 +5,22 @@
 //! read from this struct — they never touch macroquad input directly.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use macroquad::prelude::{
     KeyCode, MouseButton,
     get_char_pressed, is_key_down, is_key_pressed,
-    is_mouse_button_pressed, mouse_position,
+    is_mouse_button_down, is_mouse_button_pressed, mouse_position,
 };
+
+// Edge detection state for the left mouse button. Why we maintain this in
+// addition to macroquad's `is_mouse_button_pressed`: on native (macOS in
+// particular) the `pressed` flag occasionally misses a click — the press
+// event lands during `next_frame().await` but the flag is cleared before our
+// next `capture()` samples it. Tracking the previous frame's
+// `is_mouse_button_down` lets us synthesize our own "rising edge" signal and
+// OR it with macroquad's, so a click only goes missing if BOTH signals miss
+// it. Single-threaded callers only.
+static PREV_MOUSE_DOWN: AtomicBool = AtomicBool::new(false);
 
 /// Every key the game cares about. Capture polls macroquad for each.
 const TRACKED_KEYS: &[KeyCode] = &[
@@ -17,7 +28,7 @@ const TRACKED_KEYS: &[KeyCode] = &[
     KeyCode::W, KeyCode::A, KeyCode::S, KeyCode::D,
     KeyCode::Space, KeyCode::Enter,
     KeyCode::Backspace, KeyCode::Tab, KeyCode::Escape,
-    KeyCode::Key1, KeyCode::Key2, KeyCode::Key3,
+    KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4,
     KeyCode::P, KeyCode::T, KeyCode::E,
 ];
 
@@ -45,7 +56,10 @@ impl FrameInput {
             if is_key_down(k) { input.keys_down.insert(k); }
         }
         input.mouse_pos = mouse_position();
-        input.mouse_clicked = is_mouse_button_pressed(MouseButton::Left);
+        let down = is_mouse_button_down(MouseButton::Left);
+        let prev = PREV_MOUSE_DOWN.swap(down, Ordering::Relaxed);
+        let edge_pressed = down && !prev;
+        input.mouse_clicked = edge_pressed || is_mouse_button_pressed(MouseButton::Left);
         while let Some(c) = get_char_pressed() {
             input.chars_typed.push(c);
         }

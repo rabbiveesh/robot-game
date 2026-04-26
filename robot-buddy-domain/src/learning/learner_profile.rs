@@ -26,7 +26,18 @@ pub struct LearnerProfile {
     pub text_skip_count: u32,
     pub rolling_window: RollingWindow,
     pub operation_stats: OperationStats,
+    #[serde(default = "default_kenken_level")]
+    pub kenken_level: u8,
+    #[serde(default)]
+    pub pattern_level: u8,
+    #[serde(default = "default_logic_confidence")]
+    pub logic_confidence: f64,
+    #[serde(default)]
+    pub kenken_intro_seen: bool,
 }
+
+fn default_kenken_level() -> u8 { 2 }
+fn default_logic_confidence() -> f64 { 0.5 }
 
 impl LearnerProfile {
     pub fn new() -> Self {
@@ -53,6 +64,10 @@ impl LearnerProfile {
             text_skip_count: 0,
             rolling_window: RollingWindow::new(20),
             operation_stats: OperationStats::new(),
+            kenken_level: default_kenken_level(),
+            pattern_level: 0,
+            logic_confidence: default_logic_confidence(),
+            kenken_intro_seen: false,
         }
     }
 }
@@ -95,6 +110,17 @@ pub enum LearnerEvent {
         stretch_threshold: f64,
         text_speed: f64,
     },
+    #[serde(rename = "KENKEN_ATTEMPTED")]
+    KenKenAttempted {
+        correct: bool,
+        grid_size: u8,
+        hints_used: u8,
+        constraint_violations: u8,
+        #[serde(default)]
+        response_time_ms: Option<f64>,
+    },
+    #[serde(rename = "KENKEN_INTRO_SEEN")]
+    KenKenIntroSeen,
 }
 
 // ─── Helpers ────────────────────────────────────────────
@@ -310,6 +336,43 @@ pub fn learner_reducer(state: LearnerProfile, event: LearnerEvent) -> LearnerPro
                 ..state
             }
         }
+
+        LearnerEvent::KenKenAttempted {
+            correct, grid_size, hints_used, constraint_violations, response_time_ms: _,
+        } => {
+            // Confidence drifts up on clean wins, down on hint-heavy or wrong attempts.
+            // Bumps grid size on three consecutive clean wins at the current level —
+            // the same shape as CRA progression.
+            let mut conf = state.logic_confidence;
+            if correct && hints_used == 0 && constraint_violations == 0 {
+                conf = (conf + 0.1).min(1.0);
+            } else if correct && hints_used <= 1 {
+                conf = (conf + 0.03).min(1.0);
+            } else if !correct {
+                conf = (conf - 0.05).max(0.0);
+            } else {
+                conf = (conf - 0.02).max(0.0);
+            }
+
+            // Promote grid size when confidence saturates at the current level.
+            let mut level = state.kenken_level;
+            let at_current = grid_size == state.kenken_level;
+            if at_current && correct && hints_used == 0 && conf >= 0.9 && level < 4 {
+                level += 1;
+                conf = 0.5; // reset on promotion to keep difficulty fair
+            }
+
+            LearnerProfile {
+                kenken_level: level,
+                logic_confidence: conf,
+                ..state
+            }
+        }
+
+        LearnerEvent::KenKenIntroSeen => LearnerProfile {
+            kenken_intro_seen: true,
+            ..state
+        },
     }
 }
 
