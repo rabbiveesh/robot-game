@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 use robot_buddy_domain::learning::learner_profile::LearnerProfile;
 use robot_buddy_domain::types::Operation;
+use crate::input::FrameInput;
 
 // ─── AREA NAME ──────────────────────────────────────────
 
@@ -74,8 +75,8 @@ impl DumDumHud {
         }
     }
 
-    pub fn draw(&self, count: u32) {
-        let sw = screen_width();
+    pub fn draw(&self, count: u32, screen: (f32, f32)) {
+        let sw = screen.0;
         let bg_w = 80.0;
         let bg_h = 44.0;
         let x = sw - bg_w - 12.0;
@@ -119,23 +120,36 @@ impl DumDumHud {
 
 pub struct DebugOverlay {
     pub visible: bool,
+    /// Last drawn export button rect — set by `draw()`, read by `is_export_clicked()`
+    /// from step(). One-frame-stale clicks; in tests with no render, stays None.
+    last_export_rect: Option<(f32, f32, f32, f32)>,
 }
 
 impl DebugOverlay {
     pub fn new() -> Self {
-        DebugOverlay { visible: false }
+        DebugOverlay { visible: false, last_export_rect: None }
     }
 
     pub fn toggle(&mut self) {
         self.visible = !self.visible;
     }
 
-    /// Draw the debug overlay. Returns true if the Export button was clicked.
-    pub fn draw(&self, map_id: &str, tx: usize, ty: usize, dum_dums: u32, play_time: f32,
-                profile: &LearnerProfile, challenges: usize, correct: usize) -> bool {
-        if !self.visible { return false; }
+    /// True iff the export button was clicked this frame (using last frame's rect).
+    /// step() can call this without touching macroquad.
+    pub fn is_export_clicked(&self, input: &FrameInput) -> bool {
+        if !self.visible || !input.mouse_clicked { return false; }
+        let Some((x, y, w, h)) = self.last_export_rect else { return false; };
+        let (mx, my) = input.mouse_pos;
+        mx >= x && mx <= x + w && my >= y && my <= y + h
+    }
 
-        let sw = screen_width();
+    /// Draw the debug overlay.
+    pub fn draw(&mut self, map_id: &str, tx: usize, ty: usize, dum_dums: u32, play_time: f32,
+                profile: &LearnerProfile, challenges: usize, correct: usize,
+                screen: (f32, f32)) {
+        if !self.visible { return; }
+
+        let (sw, _) = screen;
         let panel_w = 380.0;
         let panel_h = 620.0;
         let x = sw - panel_w - 10.0;
@@ -241,22 +255,15 @@ impl DebugOverlay {
         let btn_h = 28.0;
         let btn_x = lx;
         let btn_y = ly;
-        let (mx, my) = mouse_position();
-        let hover = mx >= btn_x && mx <= btn_x + btn_w && my >= btn_y && my <= btn_y + btn_h;
-        let btn_color = if hover {
-            Color::from_rgba(0, 200, 100, 255)
-        } else {
-            Color::from_rgba(0, 160, 80, 255)
-        };
-        draw_rectangle(btn_x, btn_y, btn_w, btn_h, btn_color);
+        self.last_export_rect = Some((btn_x, btn_y, btn_w, btn_h));
+        // No hover effect now — `draw` no longer reads input. Visual loss is acceptable
+        // since the debug overlay is parent-tooling, not gameplay.
+        draw_rectangle(btn_x, btn_y, btn_w, btn_h, Color::from_rgba(0, 160, 80, 255));
         let etw = measure_text("Export Session", None, 16, 1.0).width;
         draw_text("Export Session", btn_x + btn_w / 2.0 - etw / 2.0, btn_y + 19.0, 16.0, WHITE);
 
-        let clicked = is_mouse_button_pressed(MouseButton::Left) && hover;
         ly += btn_h + 10.0;
 
         draw_text("P close  |  E export", lx, ly, 14.0, Color::from_rgba(100, 100, 120, 255));
-
-        clicked
     }
 }

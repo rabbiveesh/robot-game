@@ -1,5 +1,6 @@
 use macroquad::prelude::*;
 use crate::settings::{self, TextSpeed};
+use crate::input::FrameInput;
 
 pub enum SettingsResult {
     Close,
@@ -36,9 +37,8 @@ fn round_rect(x: f32, y: f32, w: f32, h: f32, r: f32, color: Color) {
 }
 
 /// Render the overlay and capture click regions for hit testing.
-fn layout() -> (f32, f32, f32, f32, Vec<Row>) {
-    let sw = screen_width();
-    let sh = screen_height();
+fn layout(screen: (f32, f32)) -> (f32, f32, f32, f32, Vec<Row>) {
+    let (sw, sh) = screen;
     let panel_w = (sw - 80.0).min(480.0);
     let panel_h = 470.0;
     let panel_x = (sw - panel_w) / 2.0;
@@ -86,12 +86,11 @@ fn layout() -> (f32, f32, f32, f32, Vec<Row>) {
     (panel_x, panel_y, panel_w, panel_h, rows)
 }
 
-pub fn draw() {
-    let sw = screen_width();
-    let sh = screen_height();
+pub fn draw(screen: (f32, f32)) {
+    let (sw, sh) = screen;
     draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.75));
 
-    let (panel_x, panel_y, panel_w, panel_h, rows) = layout();
+    let (panel_x, panel_y, panel_w, panel_h, rows) = layout(screen);
 
     round_rect(panel_x, panel_y, panel_w, panel_h, 16.0, PANEL_BG);
     draw_rectangle_lines(panel_x, panel_y, panel_w, panel_h, 3.0, ACCENT);
@@ -147,16 +146,16 @@ pub fn draw() {
 }
 
 /// Handle input; returns a result if the overlay should close.
-pub fn handle_input() -> Option<SettingsResult> {
-    if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::T) {
+pub fn handle_input(input: &FrameInput, screen: (f32, f32)) -> Option<SettingsResult> {
+    if input.pressed(KeyCode::Escape) || input.pressed(KeyCode::T) {
         return Some(SettingsResult::Close);
     }
 
-    if !is_mouse_button_pressed(MouseButton::Left) {
+    if !input.mouse_clicked {
         return None;
     }
-    let (mx, my) = mouse_position();
-    let (_, _, _, _, rows) = layout();
+    let (mx, my) = input.mouse_pos;
+    let (_, _, _, _, rows) = layout(screen);
     for row in rows {
         let (x, y, w, h) = row.rect;
         if mx >= x && mx <= x + w && my >= y && my <= y + h {
