@@ -38,6 +38,7 @@ pub fn get_area_name(map_id: &str, tx: usize, ty: usize) -> &'static str {
         "doghouse" => "D0GH0USE.exe",
         "grove" => "Hidden Grove",
         "dev" => "Dev Zone",
+        "control" => "Control Room",
         _ => "???",
     }
 }

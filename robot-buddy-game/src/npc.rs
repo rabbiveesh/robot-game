@@ -85,6 +85,22 @@ pub fn npcs_for_map(map_id: &str) -> Vec<Npc> {
             Npc { id: "grove_spirit", name: "Old Oak", tile_x: 6, tile_y: 4,
                 sprite: SpriteType::OldOak, can_receive_gifts: true, never_challenge: false, is_puzzler: false },
         ],
+        "control" => vec![
+            // Dev knob bay — each NPC is one control. game.rs intercepts ctrl_*
+            // ids before the normal interaction flow and applies the effect.
+            Npc { id: "ctrl_band", name: "Band Knob", tile_x: 2, tile_y: 2,
+                sprite: SpriteType::Sage, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
+            Npc { id: "ctrl_kenken_level", name: "KenKen Knob", tile_x: 5, tile_y: 2,
+                sprite: SpriteType::Shopkeeper, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
+            Npc { id: "ctrl_cra_reset", name: "CRA Reset", tile_x: 8, tile_y: 2,
+                sprite: SpriteType::OldOak, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
+            Npc { id: "ctrl_intro_reset", name: "Intro Reset", tile_x: 10, tile_y: 2,
+                sprite: SpriteType::Dog, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
+            Npc { id: "ctrl_trigger_kenken", name: "Trigger KenKen", tile_x: 3, tile_y: 5,
+                sprite: SpriteType::Kid1, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
+            Npc { id: "ctrl_trigger_challenge", name: "Trigger Challenge", tile_x: 8, tile_y: 5,
+                sprite: SpriteType::Kid2, can_receive_gifts: false, never_challenge: true, is_puzzler: false },
+        ],
         "dev" => vec![
             // Sprite gallery — one of each NPC, lined up. Natural talk = TTS test.
             // Sage flagged as puzzler so dev/test flows can deterministically open a KenKen.

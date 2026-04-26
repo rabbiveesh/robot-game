@@ -278,6 +278,20 @@ impl Harness {
         self.answer_challenge_correctly();
     }
 
+    /// Hold a direction key until the player's current map id changes to
+    /// `dest_map`. Use when stepping onto a portal tile — `walk_to` panics
+    /// in that case because the player lands on the destination map (so the
+    /// arrival check against the source coords never fires).
+    pub fn step_through_portal(&mut self, dir: KeyCode, dest_map: &str) {
+        for _ in 0..60 {
+            if self.game.map.id == dest_map {
+                return;
+            }
+            self.hold(dir);
+        }
+        panic!("never transitioned to map '{}' (still on '{}')", dest_map, self.game.map.id);
+    }
+
     // ─── KenKen helpers ──────────────────────────────────
 
     /// Place `value` at (row, col) in the active KenKen by clicking the cell

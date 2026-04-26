@@ -210,6 +210,62 @@ fn kenken_hint_marks_resolution_as_hint_used() {
 }
 
 #[test]
+fn control_room_band_knob_cycles_math_band() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+
+    // Door tile is at (1, 9). Walk to the tile next to it, then step onto it.
+    h.walk_to(2, 9);
+    let mark = h.mark();
+    h.step_through_portal(KeyCode::Left, "control");
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e,
+            GameEvent::MapTransitioned { to, .. } if to == "control")),
+        "expected MapTransitioned to 'control'; got: {:?}", events,
+    );
+
+    let before = h.game.profile.math_band;
+    h.walk_to_npc("ctrl_band");
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Playing);
+    let after = h.game.profile.math_band;
+    let expected = if before >= 10 { 1 } else { before + 1 };
+    assert_eq!(after, expected,
+        "ctrl_band should cycle math_band: {} → {}", before, after);
+}
+
+#[test]
+fn control_room_intro_reset_replays_kenken_intro() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+
+    // Mark intro as already-seen by walking through it once.
+    h.walk_to_npc("sage");
+    h.interact();
+    h.select_option("puzzle");
+    h.wait_until(|g| g.state == GameState::KenKen);
+    h.skip_kenken_intro();
+    assert!(h.game.profile.kenken_intro_seen);
+    h.solve_kenken_correctly();
+
+    // Walk to control room and reset the intro flag.
+    h.walk_to(2, 9);
+    h.step_through_portal(macroquad::prelude::KeyCode::Left, "control");
+    h.walk_to_npc("ctrl_intro_reset");
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    assert!(!h.game.profile.kenken_intro_seen,
+        "ctrl_intro_reset should clear the intro flag");
+}
+
+#[test]
 fn walk_to_npc_then_interact_starts_dialogue() {
     let mut h = Harness::new(42);
     h.start_dev_game();

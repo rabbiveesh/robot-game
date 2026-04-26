@@ -74,6 +74,9 @@ pub fn all_portals() -> &'static [Portal] {
         Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true },
         Portal { from_map: "dream", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true },
         Portal { from_map: "grove", from_x: 5, from_y: 8, to_map: "overworld", to_x: 15, to_y: 1, dir: Dir::Down, secret: false },
+        // Dev → Control Room (knob bay for testing puzzle parameters in isolation)
+        Portal { from_map: "dev", from_x: 1, from_y: 9, to_map: "control", to_x: 6, to_y: 1, dir: Dir::Down, secret: false },
+        Portal { from_map: "control", from_x: 6, from_y: 7, to_map: "dev", to_x: 1, to_y: 9, dir: Dir::Up, secret: false },
     ]
 }
 
@@ -276,7 +279,7 @@ impl Map {
     #[allow(non_snake_case)]
     pub fn dev() -> Self {
         use Tile::*;
-        let (Wl, WF, Rg, Tb, Bs, Ch) = (Wall, WoodFloor, Rug, Table, Bookshelf, Chest);
+        let (Wl, WF, Rg, Tb, Bs, Ch, Dr) = (Wall, WoodFloor, Rug, Table, Bookshelf, Chest, Door);
         Map {
             id: "dev", width: 16, height: 12, render_mode: RenderMode::Normal,
             tiles: vec![
@@ -289,9 +292,32 @@ impl Map {
                 vec![Wl,WF,WF,WF,WF,WF,WF,Ch,WF,Ch,WF,WF,WF,WF,WF,Wl],
                 vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
                 vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
-                vec![Wl,WF,WF,WF,WF,WF,Rg,Rg,Rg,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,Dr,WF,WF,WF,WF,Rg,Rg,Rg,WF,WF,WF,WF,WF,WF,Wl],
                 vec![Wl,WF,WF,WF,WF,WF,Rg,WF,Rg,WF,WF,WF,WF,WF,WF,Wl],
                 vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
+            ],
+        }
+    }
+
+    /// Knob bay for dev/test runs. Each NPC is a single-purpose control —
+    /// cycle a profile field, reset a flag, or fire a fresh puzzle. Reachable
+    /// via the Door tile in the dev map's lower-left corner.
+    #[allow(non_snake_case)]
+    pub fn control() -> Self {
+        use Tile::*;
+        let (Wl, WF, Dr) = (Wall, WoodFloor, Door);
+        Map {
+            id: "control", width: 12, height: 9, render_mode: RenderMode::Normal,
+            tiles: vec![
+                vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,Dr,WF,WF,WF,WF,Wl],
+                vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
             ],
         }
     }
@@ -306,6 +332,7 @@ impl Map {
             "doghouse" => Self::doghouse(),
             "grove" => Self::grove(),
             "dev" => Self::dev(),
+            "control" => Self::control(),
             _ => Self::overworld(),
         }
     }

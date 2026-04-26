@@ -873,6 +873,15 @@ impl Game {
                 self.player.tile_x, self.player.tile_y, self.player.dir, &self.npcs
             ).map(|n| (n.id.to_string(), n.name.to_string(), n.can_receive_gifts, n.never_challenge, n.is_puzzler, n)) {
                 let (target_id, target_name, can_receive_gifts, never_challenge, is_puzzler, target_ref) = target;
+
+                // Dev knob bay NPCs short-circuit the normal interaction flow.
+                // Each ctrl_* id maps to one effect — cycle a profile field,
+                // reset a flag, or fire a fresh puzzle.
+                if target_id.starts_with("ctrl_") {
+                    self.apply_dev_control(&target_id);
+                    return;
+                }
+
                 let npc_info = NpcInfo {
                     id: target_id.clone(),
                     can_receive_gifts: Some(can_receive_gifts),
@@ -1073,6 +1082,70 @@ impl Game {
                 let save_data = self.gather_save_data();
                 self.save_backend.save_to(self.active_slot, &save_data);
                 self.auto_save_timer = 0.0;
+            }
+        }
+    }
+
+    /// Dev knob effects. Single dispatch on ctrl_* id. Direct profile
+    /// mutation here is intentional — these are debugging tools, not
+    /// gameplay events, and going through the learner reducer would mean
+    /// inventing fake events for every knob. The `dev` map (and its child
+    /// `control` map) is the only place ctrl_* NPCs exist, so this can't
+    /// fire from a real game.
+    fn apply_dev_control(&mut self, ctrl_id: &str) {
+        let line = |text: &str| DialogueLine {
+            speaker: "Knob".into(),
+            text: text.into(),
+        };
+        match ctrl_id {
+            "ctrl_band" => {
+                self.profile.math_band = if self.profile.math_band >= 10 { 1 } else { self.profile.math_band + 1 };
+                self.start_dialogue(vec![line(&format!("BEEP. Math band is now {}.", self.profile.math_band))]);
+                self.set_state(GameState::Dialogue);
+            }
+            "ctrl_kenken_level" => {
+                self.profile.kenken_level = match self.profile.kenken_level {
+                    2 => 3,
+                    3 => 4,
+                    _ => 2,
+                };
+                let n = self.profile.kenken_level;
+                self.start_dialogue(vec![line(&format!("BEEP. KenKen grid is now {}x{}.", n, n))]);
+                self.set_state(GameState::Dialogue);
+            }
+            "ctrl_cra_reset" => {
+                for stage in self.profile.cra_stages.values_mut() {
+                    *stage = CraStage::Concrete;
+                }
+                self.start_dialogue(vec![line("All operation CRA stages reset to Concrete.")]);
+                self.set_state(GameState::Dialogue);
+            }
+            "ctrl_intro_reset" => {
+                self.profile.kenken_intro_seen = false;
+                self.start_dialogue(vec![line("KenKen intro flag cleared. Next puzzle replays the tutorial.")]);
+                self.set_state(GameState::Dialogue);
+            }
+            "ctrl_trigger_kenken" => {
+                let ak = start_kenken(&mut self.rng, &self.profile, self.game_time, ctrl_id.into());
+                self.events.push(GameEvent::KenKenStarted {
+                    grid_size: ak.session.puzzle.grid_size,
+                    source: ctrl_id.into(),
+                });
+                self.active_kenken = Some(ak);
+                self.set_state(GameState::KenKen);
+            }
+            "ctrl_trigger_challenge" => {
+                let ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
+                self.events.push(GameEvent::ChallengeStarted {
+                    question: ac.challenge.display_text.clone(),
+                });
+                audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                self.active_challenge = Some(ac);
+                self.set_state(GameState::Challenge);
+            }
+            _ => {
+                self.start_dialogue(vec![line(&format!("Unknown control: {}", ctrl_id))]);
+                self.set_state(GameState::Dialogue);
             }
         }
     }
