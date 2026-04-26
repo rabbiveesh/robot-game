@@ -58,9 +58,10 @@ Replace hard band levels with a weighted probability distribution around a cente
 
 ## Implementation
 
-Implemented in commit `84b0717`. 96 tests passing. Key files:
+Originally implemented in commit `84b0717`. The Rust port carries the same design forward in `robot-buddy-domain/src/learning/`:
 
-- `src/domain/learning/challenge-generator.js` — `bandDistribution()`, `sampleFromDistribution()`, challenge generation samples from distribution
-- `src/domain/learning/learner-profile.js` — `shouldPromote()`, `shouldDemote()`, spread width adaptation, `streakToPromote` removed
-- `src/domain/learning/rolling-window.js` — `accuracyAtBand()`, `accuracyAboveBand()`
-- `adapter.js` — passes `centerBand` and `spreadWidth` through events and save data
+- `challenge_generator.rs` — `band_distribution`, `sample_from_distribution`, challenge generation samples from the distribution
+- `learner_profile.rs` — `should_promote`, `should_demote`, spread-width adaptation; `streak_to_promote` removed
+- `rolling_window.rs` — `accuracy_at_band`, `accuracy_above_band`
+
+`center_band` and `spread_width` flow through `LearnerEvent::PuzzleAttempted` and the save data with no boundary translation — the game crate consumes domain types directly.

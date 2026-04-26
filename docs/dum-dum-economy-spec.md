@@ -123,6 +123,3 @@ We don't need a dedicated "economy dial." The spending events feed into existing
 - Should Sparky's mood/energy be visually affected by Dum Dum gifts? (More gifts = happier/bouncier Sparky? Could be a visible feedback loop that motivates giving.)
 - Can Dum Dums be shared between save files? (Sibling economy? "Your brother saved 30 Dum Dums for you." Probably too complex for now.)
 
-## Presentation Migration
-
-**See `docs/presentation-migration.md` for migration trigger and plan.**

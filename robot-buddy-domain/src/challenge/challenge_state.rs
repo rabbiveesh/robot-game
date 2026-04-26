@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::types::{CraStage, Phase};
+use crate::economy::rewards::{Reward, determine_reward};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,13 +41,6 @@ impl VoiceState {
     pub fn reset() -> Self {
         VoiceState { listening: false, confirming: false, confirm_number: None, retries: 0, text: None }
     }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Reward {
-    pub reward_type: String,
-    pub amount: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,7 +86,7 @@ pub fn challenge_reducer(state: ChallengeState, action: ChallengeAction) -> Chal
                     phase: Phase::Complete,
                     correct: Some(true),
                     attempts,
-                    reward: Some(Reward { reward_type: "dum_dum".into(), amount: 1 }),
+                    reward: determine_reward(true),
                     feedback: Some(DisplaySpeech {
                         display: "Amazing! You got it!".into(),
                         speech: "Amazing! You got it!".into(),

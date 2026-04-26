@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use super::give::can_give;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +36,7 @@ pub fn get_interaction_options(npc: &NpcInfo, player_state: &PlayerState) -> Vec
     }];
 
     let can_receive = npc.can_receive_gifts.unwrap_or(true);
-    if can_receive && player_state.dum_dums > 0 {
+    if can_receive && can_give(player_state.dum_dums) {
         options.push(InteractionOption {
             option_type: "give".into(),
             label: "Give Dum Dum".into(),

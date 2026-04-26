@@ -304,12 +304,7 @@ Balance generation reuses `generate_numbers` from the challenge generator — sa
 
 ### KenKenRenderer
 
-```
-src/presentation/renderers/
-  kenken-renderer.js
-```
-
-Canvas grid. Thick lines for cage boundaries, thin for cell boundaries. Numbers in cells. Cage target+operation label in top-left corner of each cage. Tap a cell → show number picker (1 to grid_size). Wrong placement → conflicting cell highlights red briefly (natural consequence). Complete → celebration.
+Lives in `robot-buddy-game/src/ui/` alongside the other challenge renderers. Grid drawing — thick lines for cage boundaries, thin for cell boundaries. Numbers in cells. Cage target+operation label in top-left corner of each cage. Tap a cell → show number picker (1 to grid_size). Wrong placement → conflicting cell highlights red briefly (natural consequence). Complete → celebration.
 
 Show-me: highlights the most constrained cell + explains why ("This row already has 1 and 3, so this cell must be 2").
 
@@ -397,19 +392,18 @@ The reducer validates each placement and tracks constraint violations. The prese
 
 **Phase 1: KenKen**
 - `robot-buddy-domain/src/logic/kenken.rs` — generation, validation, hints, solver
-- `KenKenRenderer` in JS — grid, tap to place, cage labels, conflict highlighting
+- `KenKenRenderer` in `robot-buddy-game/src/ui/` — grid, tap to place, cage labels, conflict highlighting
 - Wire into challenge lifecycle with InProgress phase
 - Adaptive system filters cage operations by arithmetic band
-- Boundary tests for KenKenPuzzle struct
 
 **Phase 2: Pattern sequences**
 - `robot-buddy-domain/src/logic/patterns.rs` — generation, validation
-- `PatternRenderer` in JS — sequence display, choices, animations
+- `PatternRenderer` in `robot-buddy-game/src/ui/` — sequence display, choices, animations
 - Picture patterns (4yo) and numeric patterns (7yo)
 
 **Phase 3: Balance puzzles**
 - `robot-buddy-domain/src/logic/balance.rs` — generation (reuses number gen)
-- `BalanceRenderer` in JS — scale visual, tipping animation
+- `BalanceRenderer` in `robot-buddy-game/src/ui/` — scale visual, tipping animation
 - Uses existing band system for number difficulty
 
 **Phase 4: Mini Sudoku**

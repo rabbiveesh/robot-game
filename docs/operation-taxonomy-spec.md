@@ -299,23 +299,6 @@ sub-skill weighting:
   - 'strong sub-skill gets ~60% of attempts within its operation'
 ```
 
-## Files Changed
-
-```
-src/domain/learning/
-  challenge-generator.js   — classify functions, sub-skill targeting in generateNumbers,
-                             two-pass weighting (operation then sub-skill)
-  operation-stats.js       — expanded with fine-grained sub-skills, dual recording
-  learner-profile.js       — reducer records subSkill in window entries and stats
-
-test/domain/learning/
-  challenge-generator.test.js — classification tests, targeted generation tests
-  operation-stats.test.js     — (new file or expanded) dual recording tests
-  learner-profile.test.js     — sub-skill in events tests
-
-adapter.js                 — pass subSkill through events, classify legacy challenges
-```
-
 ## Feature Vectors (ship now, analyze later)
 
 Every generated problem includes a feature vector stored in the event. This is cheap to compute and enables dynamic sub-skill discovery in the future without schema changes.

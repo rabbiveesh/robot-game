@@ -18,7 +18,6 @@ Base-10 blocks are concrete (they're objects), not representational. A number li
 - Kid counts them
 - Good for: numbers 1-10, basic addition/subtraction
 - Breaks at: ~15 (too many to count, becomes tedious)
-- Current implementation: `renderDotVisual` in dialogue.js
 
 #### Ten-frame (2×5 grid of dots)
 - Standard early math tool
@@ -160,29 +159,17 @@ Dots are NOT available past band 4. Nobody counts 47 dots.
 
 ### Rendering Each Method
 
-Each method is a renderer function:
+Visual renderers live in `robot-buddy-game/src/ui/visuals.rs` (and any future per-method files in `robot-buddy-game/src/visuals/`). Methods to implement:
 
-```
-src/presentation/renderers/visuals/
-  dots-visual.js             # Individual dots in groups (band 1-4)
-  ten-frame-visual.js        # 2×5 grid (band 1-4)
-  base10-blocks-visual.js    # Tens rods + ones cubes (band 3+)
-  array-visual.js            # Rows × columns grid (multiplication)
-  number-line-visual.js      # Horizontal line with jumps (all bands)
-  bar-model-visual.js        # Parts/whole rectangles (bonds, word problems)
-  grouped-objects-visual.js  # Dum Dum icons grouped by 5 (all bands, in-game flavor)
-```
+- Dots — individual dots in groups (band 1–4)
+- Ten-frame — 2×5 grid (band 1–4)
+- Base-10 blocks — tens rods + ones cubes (band 3+)
+- Array — rows × columns grid (multiplication)
+- Number line — horizontal line with jumps (all bands)
+- Bar model — parts/whole rectangles (bonds, word problems)
+- Grouped objects — Dum Dum icons grouped by 5 (all bands, in-game flavor)
 
-Each visual renderer implements:
-```js
-{
-  render(ctx, a, b, op, answer, cx, cy, time): void
-  // cx, cy = center position for the visual
-  // a, b = operands, op = operation symbol, answer = correct answer
-}
-```
-
-The QuizRenderer calls the appropriate visual renderer based on `challengeState.renderHint.visualMethod` when `hintUsed` is true.
+Each renderer is a pure function: takes the operands (`a`, `b`), operation, and a screen rect; returns a layout struct with everything to draw. The `draw_visual` companion puts pixels on the screen. The challenge renderer dispatches based on `ChallengeState::render_hint.cra_stage` and a per-method tag chosen by the learner profile.
 
 ### Domain Changes
 

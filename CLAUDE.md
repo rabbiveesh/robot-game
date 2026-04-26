@@ -4,12 +4,11 @@ A math education RPG for kids (ages 4-10). Zelda-style top-down tile game where 
 
 ## Project State
 
-- **`main` branch**: Working prototype. Playable at https://rabbiveesh.github.io/robot-game/
-  - Vanilla JS, no build step, flat file structure (sprites.js, world.js, characters.js, dialogue.js, game.js, index.html)
-  - Global mutable state everywhere — this is the prototype, not the target architecture
-  - Features: tile map, player movement, robot companion, NPC dialogue, math challenges, 3 save slots, TTS, secret areas
+- **`main` branch**: Vanilla-JS prototype (still deployed at https://rabbiveesh.github.io/robot-game/ until macroquad migration lands).
 
-- **`adaptive-learning-design` branch**: Design specs for the real architecture (docs/ only, no code)
+- **`macroquad-migration` branch (current)**: Pure Rust. Domain crate + macroquad game crate, one WASM binary, no JS.
+
+- **`adaptive-learning-design` branch**: Design specs for the architecture (docs/ only, no code).
   - `docs/adaptive-learning-spec.md` — learner profiles, intake quiz, frustration detection, CRA progression
   - `docs/rpg-quest-spec.md` — math as gameplay, story-embedded puzzles, quest system
   - `docs/architecture-spec.md` — DDD architecture, domain model, reducer pattern, project layout
@@ -18,62 +17,56 @@ A math education RPG for kids (ages 4-10). Zelda-style top-down tile game where 
 
 These are NOT optional. Every PR must respect these:
 
-1. **The domain is Rust.** All game logic lives in `robot-buddy-domain/`. No browser APIs, no JS interop in domain code. `cargo test` must pass. Adding a field to a domain struct? The compiler finds every place that needs updating.
+1. **The domain is Rust.** All game logic lives in `robot-buddy-domain/`. No browser APIs in domain code. `cargo test` must pass. Adding a field to a domain struct? The compiler finds every place that needs updating.
 
 2. **State mutations happen ONLY through reducers.** `learner_reducer(state, event) → new_state`. Rust ownership enforces this — you can't mutate the old state. The event log is the source of truth.
 
-3. **All randomness is seeded.** Domain functions take `&mut impl Rng`. In production, seeded from `Math.random()` at the bridge. In tests, `SmallRng::seed_from_u64(42)`. No global RNG state.
+3. **All randomness is seeded.** Domain functions take `&mut impl Rng`. In tests, `SmallRng::seed_from_u64(42)`. No global RNG state.
 
-4. **The WASM boundary is the most dangerous part of the codebase.** Serde silently drops fields with wrong names (`responseTimeMs` vs `response_time_ms`) instead of crashing. A camelCase mismatch = silent data loss = the adaptive system runs on wrong data with no error. EVERY struct that crosses the boundary MUST have:
-   - `#[serde(rename_all = "camelCase")]` on the struct
-   - An integration test that round-trips the struct JS→Rust→JS and checks EVERY field
-   - The integration test suite (`test/integration/wasm-bridge.test.js`) is the GATE — if a struct isn't tested there, assume the boundary is broken for that struct
+4. **The game must never time-pressure a child.** No countdown timers on challenges, ever. We measure response time silently for the adaptive system, but the child never sees a clock.
 
-5. **The game must never time-pressure a child.** No countdown timers on challenges, ever. We measure response time silently for the adaptive system, but the child never sees a clock.
+5. **Pass the Broccoli Test.** For every math interaction, ask: "Would this be more fun with the math removed?" If yes, the math is chocolate-covered broccoli and the design is wrong. The math must BE the gameplay.
 
-6. **Pass the Broccoli Test.** For every math interaction, ask: "Would this be more fun with the math removed?" If yes, the math is chocolate-covered broccoli and the design is wrong. The math must BE the gameplay.
+6. **No labels shown to kids.** The child never sees "Easy", "Band 3", skill levels, or any indication they're being assessed. The adaptive system is invisible. Parent dashboard is the only place this is visible.
 
-7. **No labels shown to kids.** The child never sees "Easy", "Band 3", skill levels, or any indication they're being assessed. The adaptive system is invisible. Parent dashboard is the only place this is visible.
+7. **Fail gracefully.** Wrong answers have natural in-game consequences (Sparky's battery drains, door doesn't open, merchant says "hmm that's not right"). Never a red X, never "WRONG!", never punishment.
 
-8. **Fail gracefully.** Wrong answers have natural in-game consequences (Sparky's battery drains, door doesn't open, merchant says "hmm that's not right"). Never a red X, never "WRONG!", never punishment.
-
-9. **Every domain struct crossing the WASM boundary needs a boundary test.** Not optional. Not "we'll add it later." If you add a new struct to `lib.rs` exports, add the boundary test in the same PR. The Rust compiler guards the domain. The boundary tests guard the bridge. Neither alone is sufficient.
+8. **Tests express intent, not implementation.** Default to resilient tests that use helpers (`game.walk_to_npc("kid_1")`, `game.interact()`, `game.select_option("give")`, `game.answer_correctly()`). These break only when gameplay behavior changes. Use fragile tests (hardcoded coordinates, frame counts, pixel positions) ONLY when specifically protecting a layout or timing contract.
 
 ## Tech Stack
 
-- **Domain**: Rust → WASM (wasm-bindgen + serde). All game logic.
-- **Domain tests**: `cargo test` (58 tests)
-- **Presentation**: Vanilla JS, Canvas 2D
-- **Infrastructure tests**: Vitest (speech recognition parser)
-- **Build**: wasm-pack (domain), rollup (infrastructure JS)
-- **CI**: GitHub Actions: cargo test + wasm-pack build + vitest + deploy to Pages
+- **One language: Rust.** Domain crate + macroquad game crate, single WASM binary.
+- **Tests**: `cargo test` (62 tests, all in domain crate).
+- **Build**: `cargo build --target wasm32-unknown-unknown --release` → `target/wasm32-unknown-unknown/release/robot-buddy-game.wasm`.
+- **CI**: GitHub Actions: `cargo test` + WASM build + deploy to Pages. No Node, no npm.
 
 ## Project Layout
 
 ```
-robot-buddy-domain/           # Rust crate → WASM
+Cargo.toml                       # workspace root
+
+robot-buddy-domain/              # Pure Rust domain (no browser deps)
   src/
-    lib.rs                    # WASM exports
-    types.rs                  # Shared enums (Operation, SubSkill, CraStage, Phase)
-    learning/                 # Profile reducer, challenge gen, frustration, intake
-    challenge/                # Lifecycle state machine
-    economy/                  # Rewards, gifts
+    lib.rs                       # pub mod types/learning/challenge/economy
+    types.rs                     # Shared enums (Operation, SubSkill, CraStage, Phase)
+    learning/                    # Profile reducer, challenge gen, frustration, intake
+    challenge/                   # Lifecycle state machine
+    economy/                     # Rewards, gifts, interaction options
     bin/
-      simulate.rs             # CLI learning simulator
-      simulate_challenge.rs   # CLI challenge simulator
+      simulate.rs                # CLI learning simulator
 
-src/presentation/             # JS renderers
-  renderers/
-    quiz-renderer.js
-    visuals/base10-blocks-visual.js
-  dev-zone.js
-
-src/infrastructure/           # JS browser APIs
-  speech-recognition.js
-
-# Legacy JS (game shell, being migrated)
-game.js, dialogue.js, sprites.js, world.js, characters.js
-adapter.js, wasm-bridge.js
+robot-buddy-game/                # Macroquad game (depends on domain)
+  Cargo.toml
+  index.html                     # WASM loader (source — copied into www/ by build)
+  src/
+    main.rs                      # game loop, state machine
+    tilemap.rs, npc.rs, save.rs, session.rs, settings.rs
+    sprites/                     # player, robot, npcs
+    ui/                          # challenge, dialogue, hud, interaction_menu, title_screen, settings_overlay, visuals
+    visuals/                     # math visualization renderers
+    audio/                       # TTS via miniquad plugin
+    net/                         # AI dialogue fetch
+  www/                           # build output (gitignored except index.html)
 ```
 
 ## Architecture Decision Records
@@ -93,41 +86,28 @@ ADRs document key design decisions, their context, and consequences. Read these 
 ## Commands
 
 ```bash
-# Domain (Rust)
-cd robot-buddy-domain && cargo test           # 58 domain tests
-wasm-pack build robot-buddy-domain --target web --out-dir ../dist/wasm
+# Test
+cargo test                                                    # 62 domain tests
 
-# Presentation (JS)
-npx vitest run                                # Infrastructure tests
-npm run build                                 # Rollup JS bundles
+# Build WASM
+cargo build --target wasm32-unknown-unknown --release
 
-# Simulate
-cargo run --manifest-path robot-buddy-domain/Cargo.toml --bin simulate -- --profile gifted
+# Assemble www/ (WASM + macroquad JS bundle + index.html)
+./build-wasm.sh
 
-# Dev
-npx serve .                                   # Local server (WASM needs HTTP)
+# Serve locally
+cd robot-buddy-game/www && npx serve .
+
+# Simulate adaptive learning
+cargo run -p robot-buddy-domain --bin simulate -- --profile gifted
 ```
-
-## Presentation Layer Debt
-
-The legacy flat files (dialogue.js, game.js, world.js, sprites.js, characters.js) are the original prototype. They work but accumulate debt with every feature. The domain is Rust (clean, tested, type-safe). The presentation is legacy JS (not clean).
-
-**DO NOT migrate the presentation layer as a standalone project.** Each feature triggers migration of the specific part it needs. See `docs/presentation-migration.md` for:
-- Which feature triggers which migration
-- Recommended migration order
-- What each legacy file splits into
-- When to delete each legacy file
-
-The adapter (`adapter.js`) is the bridge and is intentionally ugly. It dies when the presentation migration is complete.
 
 ## For Implementers
 
 Read these specs before writing code:
-1. `docs/architecture-spec.md` — start here. Rust domain + JS presentation.
+1. `docs/architecture-spec.md` — start here.
 2. `docs/adaptive-learning-spec.md` — how the learning system works
 3. `docs/challenge-lifecycle-spec.md` — challenge state machine + CRA feedback loop
 4. `docs/rpg-quest-spec.md` — how quests and story-embedded math work (future)
 
-Before building any presentation feature, check `docs/presentation-migration.md`.
-
-Domain changes go in `robot-buddy-domain/` (Rust). Run `cargo test` before committing. Presentation changes go in JS legacy files or `src/presentation/`.
+Domain changes go in `robot-buddy-domain/` (logic, no rendering). Game changes go in `robot-buddy-game/` (rendering, input, state machine). Run `cargo test` before committing.

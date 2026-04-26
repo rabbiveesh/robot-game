@@ -423,6 +423,10 @@ pub struct Numbers {
     pub a: i32,
     pub b: i32,
     pub op: String,
+    #[serde(default)]
+    pub format: String, // "standard" or "bond"
+    #[serde(default)]
+    pub bond_total: Option<i32>,
 }
 
 /// Minimal profile shape needed for challenge generation
@@ -505,6 +509,8 @@ pub fn generate_challenge(profile: &ChallengeProfile, rng: &mut impl Rng) -> Cha
             a: nums.a,
             b: nums.b,
             op: nums.op,
+            format: nums.format,
+            bond_total: nums.bond_total,
         },
     }
 }

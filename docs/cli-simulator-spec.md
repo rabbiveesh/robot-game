@@ -40,7 +40,7 @@ cargo run --bin simulate -- --profile gifted --seed 42
 
 ### Output
 
-Same format as the old JS simulator — colored terminal output:
+Colored terminal output:
 
 ```
 ═══════════════════════════════════════════════════
@@ -86,7 +86,7 @@ Same format as the old JS simulator — colored terminal output:
 
 ### Simulated Kid Profiles
 
-Same 4 profiles as the JS version, now as Rust structs:
+Four profiles, defined as Rust structs:
 
 ```rust
 struct KidProfile {
