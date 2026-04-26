@@ -1,18 +1,7 @@
 use macroquad::prelude::*;
 
-mod tilemap;
-mod sprites;
-mod npc;
-mod ui;
-mod save;
-mod audio;
-mod session;
-mod settings;
-mod input;
-mod game;
-
-use input::FrameInput;
-use game::{Game, GAME_W, GAME_H};
+use robot_buddy_game::input::FrameInput;
+use robot_buddy_game::game::{Game, GAME_W, GAME_H};
 
 fn window_conf() -> Conf {
     Conf {
