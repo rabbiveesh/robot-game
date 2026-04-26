@@ -9,6 +9,7 @@ mod common;
 
 use common::Harness;
 use robot_buddy_game::game::{GameEvent, GameState};
+use robot_buddy_game::npc::NpcKind;
 
 #[test]
 fn new_game_form_takes_name_and_starts_intake() {
@@ -118,7 +119,7 @@ fn talking_to_sparky_can_roll_a_challenge_and_award_dum_dums() {
 fn sage_offers_kenken_and_solving_it_completes_the_session() {
     let mut h = Harness::new(7);
     h.start_dev_game();
-    h.walk_to_npc("sage");
+    h.walk_to_npc(NpcKind::Sage);
 
     h.interact();
     assert_eq!(h.game.state, GameState::InteractionMenu,
@@ -163,7 +164,7 @@ fn kenken_intro_shows_on_first_puzzle_only() {
     assert!(!h.game.profile.kenken_intro_seen,
         "fresh dev profile should not have seen the intro");
 
-    h.walk_to_npc("sage");
+    h.walk_to_npc(NpcKind::Sage);
     h.interact();
     h.select_option("puzzle");
     h.wait_until(|g| g.state == GameState::KenKen);
@@ -179,7 +180,7 @@ fn kenken_intro_shows_on_first_puzzle_only() {
     h.solve_kenken_correctly();
 
     // Second KenKen — no intro this time.
-    h.walk_to_npc("sage");
+    h.walk_to_npc(NpcKind::Sage);
     h.interact();
     h.select_option("puzzle");
     h.wait_until(|g| g.state == GameState::KenKen);
@@ -191,7 +192,7 @@ fn kenken_intro_shows_on_first_puzzle_only() {
 fn kenken_hint_marks_resolution_as_hint_used() {
     let mut h = Harness::new(7);
     h.start_dev_game();
-    h.walk_to_npc("sage");
+    h.walk_to_npc(NpcKind::Sage);
     h.interact();
     h.select_option("puzzle");
     h.wait_until(|g| g.state == GameState::KenKen);
@@ -227,7 +228,7 @@ fn control_room_band_knob_cycles_math_band() {
     );
 
     let before = h.game.profile.math_band;
-    h.walk_to_npc("ctrl_band");
+    h.walk_to_npc(NpcKind::CtrlBand);
     h.interact();
     h.wait_until(|g| g.state == GameState::Dialogue);
     h.finish_dialogue();
@@ -244,7 +245,7 @@ fn control_room_intro_reset_replays_kenken_intro() {
     h.start_dev_game();
 
     // Mark intro as already-seen by walking through it once.
-    h.walk_to_npc("sage");
+    h.walk_to_npc(NpcKind::Sage);
     h.interact();
     h.select_option("puzzle");
     h.wait_until(|g| g.state == GameState::KenKen);
@@ -255,7 +256,7 @@ fn control_room_intro_reset_replays_kenken_intro() {
     // Walk to control room and reset the intro flag.
     h.walk_to(2, 9);
     h.step_through_portal(macroquad::prelude::KeyCode::Left, "control");
-    h.walk_to_npc("ctrl_intro_reset");
+    h.walk_to_npc(NpcKind::CtrlIntroReset);
     h.interact();
     h.wait_until(|g| g.state == GameState::Dialogue);
     h.finish_dialogue();
@@ -273,7 +274,7 @@ fn walk_to_npc_then_interact_starts_dialogue() {
     // Mommy in the dev gallery has only the "talk" option (gifts off, no puzzle,
     // no challenge). walk_to_npc pathfinds to an adjacent walkable tile and turns
     // to face them.
-    h.walk_to_npc("mommy");
+    h.walk_to_npc(NpcKind::Mommy);
 
     let mark = h.mark();
     h.interact();

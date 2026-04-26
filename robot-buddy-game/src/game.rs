@@ -31,6 +31,10 @@ use robot_buddy_domain::logic::kenken::{
     self, KenKenAction, KenKenPhase, KenKenSession, cage_ops_for_band, generate_kenken,
 };
 use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel};
+use robot_buddy_domain::world::movement::{
+    Direction, EntityId, EntityState, GridDims, MoveIntent, MoveResolution,
+    Solidity, resolve_moves,
+};
 
 use crate::tilemap::{self, Map, TILE_SIZE};
 use crate::sprites::{self, Dir};
@@ -120,20 +124,21 @@ pub struct ActiveKenKen {
 
 // ─── Sprites/movement ───────────────────────────────────
 
+#[derive(Clone)]
 pub struct Entity {
     pub x: f32,
     pub y: f32,
     pub tile_x: usize,
     pub tile_y: usize,
-    target_x: f32,
-    target_y: f32,
-    moving: bool,
+    pub target_x: f32,
+    pub target_y: f32,
+    pub moving: bool,
     pub dir: Dir,
     pub frame: u32,
 }
 
 impl Entity {
-    fn new(tile_x: usize, tile_y: usize) -> Self {
+    pub fn new(tile_x: usize, tile_y: usize) -> Self {
         Entity {
             x: tile_x as f32 * TILE_SIZE,
             y: tile_y as f32 * TILE_SIZE,
@@ -147,7 +152,7 @@ impl Entity {
         }
     }
 
-    fn move_toward_target(&mut self, dt: f32) -> bool {
+    pub fn move_toward_target(&mut self, dt: f32) -> bool {
         if !self.moving { return false; }
         let dx = self.target_x - self.x;
         let dy = self.target_y - self.y;
@@ -165,7 +170,7 @@ impl Entity {
         false
     }
 
-    fn start_move(&mut self, nx: usize, ny: usize) {
+    pub fn start_move(&mut self, nx: usize, ny: usize) {
         self.tile_x = nx;
         self.tile_y = ny;
         self.target_x = nx as f32 * TILE_SIZE;
@@ -193,35 +198,61 @@ impl Sparky {
         }
     }
 
-    fn update(&mut self, dt: f32, player_tx: usize, player_ty: usize) {
+    /// Pixel-level interpolation toward the current target. Pure animation,
+    /// no movement decisions. The decision lives in `next_intent`.
+    fn animate(&mut self, dt: f32) {
         self.entity.move_toward_target(dt);
+    }
 
-        if !self.entity.moving && !self.follow_queue.is_empty() {
-            let dx = (self.entity.tile_x as i32 - player_tx as i32).abs();
-            let dy = (self.entity.tile_y as i32 - player_ty as i32).abs();
-            if dx + dy <= 1 {
-                self.follow_queue.clear();
-                let fdx = player_tx as i32 - self.entity.tile_x as i32;
-                let fdy = player_ty as i32 - self.entity.tile_y as i32;
-                if fdx < 0 { self.entity.dir = Dir::Left; }
-                else if fdx > 0 { self.entity.dir = Dir::Right; }
-                else if fdy < 0 { self.entity.dir = Dir::Up; }
-                else if fdy > 0 { self.entity.dir = Dir::Down; }
-                return;
-            }
+    /// Decide what Sparky wants to do this frame. Called once per frame while
+    /// stationary; returns `Stay` if mid-step or queue-empty. Sets `dir` as a
+    /// side-effect so Sparky faces the player even when not moving (or when
+    /// the resolver later denies the move).
+    ///
+    /// Pops the queue ONLY when returning a Move intent — if the resolver
+    /// denies the move, the apply phase doesn't pop, so Sparky retries next
+    /// frame.
+    fn next_intent(&mut self, player_tx: usize, player_ty: usize) -> MoveIntent {
+        if self.entity.moving { return MoveIntent::Stay; }
+        if self.follow_queue.is_empty() { return MoveIntent::Stay; }
 
-            let (nx, ny) = self.follow_queue.remove(0);
-            if nx == player_tx && ny == player_ty {
-                return;
-            }
-            let dx = nx as i32 - self.entity.tile_x as i32;
-            let dy = ny as i32 - self.entity.tile_y as i32;
-            if dx < 0 { self.entity.dir = Dir::Left; }
-            else if dx > 0 { self.entity.dir = Dir::Right; }
-            else if dy < 0 { self.entity.dir = Dir::Up; }
-            else if dy > 0 { self.entity.dir = Dir::Down; }
-            self.entity.start_move(nx, ny);
+        // Already adjacent: drop the queue, just face the player.
+        let dx_abs = (self.entity.tile_x as i32 - player_tx as i32).abs();
+        let dy_abs = (self.entity.tile_y as i32 - player_ty as i32).abs();
+        if dx_abs + dy_abs <= 1 {
+            self.follow_queue.clear();
+            let fdx = player_tx as i32 - self.entity.tile_x as i32;
+            let fdy = player_ty as i32 - self.entity.tile_y as i32;
+            if fdx < 0 { self.entity.dir = Dir::Left; }
+            else if fdx > 0 { self.entity.dir = Dir::Right; }
+            else if fdy < 0 { self.entity.dir = Dir::Up; }
+            else if fdy > 0 { self.entity.dir = Dir::Down; }
+            return MoveIntent::Stay;
         }
+
+        // Peek the next queue entry. Don't pop -- the apply phase pops on grant.
+        let (nx, ny) = self.follow_queue[0];
+        if nx == player_tx && ny == player_ty {
+            // Next step would land on the player. Skip it and try again next frame.
+            self.follow_queue.remove(0);
+            return MoveIntent::Stay;
+        }
+        let dx = nx as i32 - self.entity.tile_x as i32;
+        let dy = ny as i32 - self.entity.tile_y as i32;
+        let dir = match (dx.signum(), dy.signum()) {
+            (-1, 0) => Direction::Left,
+            ( 1, 0) => Direction::Right,
+            (0, -1) => Direction::Up,
+            (0,  1) => Direction::Down,
+            _ => return MoveIntent::Stay,
+        };
+        self.entity.dir = match dir {
+            Direction::Up => Dir::Up,
+            Direction::Down => Dir::Down,
+            Direction::Left => Dir::Left,
+            Direction::Right => Dir::Right,
+        };
+        MoveIntent::Move(dir)
     }
 }
 
@@ -314,8 +345,10 @@ pub struct Game {
     debug_overlay: DebugOverlay,
     settings_open: bool,
 
-    // Movement helper
-    sparky_push_timer: f32,
+    // Soft-block pressure per entity (driver of `Solidity::SoftAfter`).
+    // Today only Sparky uses it; pressure accumulates while the player walks
+    // into him and clears once the player either changes direction or moves.
+    pressure: HashMap<EntityId, f32>,
 
     // Diagnostics + RNG
     rng: SmallRng,
@@ -371,7 +404,7 @@ impl Game {
             dum_dum_hud: DumDumHud::new(),
             debug_overlay: DebugOverlay::new(),
             settings_open: false,
-            sparky_push_timer: 0.0,
+            pressure: HashMap::new(),
             rng: SmallRng::seed_from_u64(seed),
             events: Vec::new(),
             session_log: session::SessionLog::new(),
@@ -496,12 +529,14 @@ impl Game {
             }
         }
 
-        // Movement + animations
+        // Pixel-level interpolation only (no movement decisions). Tile-grid
+        // decisions live in the resolver, dispatched from step_playing.
         let arrived = if self.settings_open {
             false
         } else {
             let a = self.player.move_toward_target(dt);
-            self.sparky.update(dt, self.player.tile_x, self.player.tile_y);
+            self.sparky.animate(dt);
+            for n in &mut self.npcs { n.animate(dt); }
             self.dialogue.update(dt);
             a
         };
@@ -816,41 +851,69 @@ impl Game {
     }
 
     fn step_playing(&mut self, input: &FrameInput, dt: f32) {
-        // Movement
-        if !self.player.moving {
-            let mut nx = self.player.tile_x as i32;
-            let mut ny = self.player.tile_y as i32;
-            let mut moved = false;
+        // ── Movement: collect intents, resolve, apply ───────────────────
+        let player_intent = read_player_intent(input, &mut self.player);
+        let sparky_intent = if self.sparky.entity.moving {
+            MoveIntent::Stay
+        } else {
+            self.sparky.next_intent(self.player.tile_x, self.player.tile_y)
+        };
 
-            if input.down(KeyCode::Up) || input.down(KeyCode::W) {
-                ny -= 1; self.player.dir = Dir::Up; moved = true;
-            } else if input.down(KeyCode::Down) || input.down(KeyCode::S) {
-                ny += 1; self.player.dir = Dir::Down; moved = true;
-            } else if input.down(KeyCode::Left) || input.down(KeyCode::A) {
-                nx -= 1; self.player.dir = Dir::Left; moved = true;
-            } else if input.down(KeyCode::Right) || input.down(KeyCode::D) {
-                nx += 1; self.player.dir = Dir::Right; moved = true;
+        // Soft-block pressure: today only the player presses against Sparky.
+        // Increment while the player is trying to walk into Sparky's tile;
+        // reset otherwise. NPCs don't generate pressure in PR 1.
+        let pressing_sparky = match player_intent {
+            MoveIntent::Move(d) => {
+                let (dx, dy) = d.delta();
+                let nx = self.player.tile_x as i32 + dx;
+                let ny = self.player.tile_y as i32 + dy;
+                nx == self.sparky.entity.tile_x as i32 && ny == self.sparky.entity.tile_y as i32
             }
+            MoveIntent::Stay => false,
+        };
+        if pressing_sparky {
+            *self.pressure.entry(EntityId::Sparky).or_insert(0.0) += dt;
+        } else {
+            self.pressure.remove(&EntityId::Sparky);
+        }
 
-            let npc_blocks = self.npcs.iter()
-                .any(|n| n.tile_x == nx as usize && n.tile_y == ny as usize);
-            let pushing_sparky = moved
-                && nx as usize == self.sparky.entity.tile_x
-                && ny as usize == self.sparky.entity.tile_y;
-            if pushing_sparky {
-                self.sparky_push_timer += dt;
-            } else {
-                self.sparky_push_timer = 0.0;
-            }
-            let sparky_blocks = pushing_sparky && self.sparky_push_timer < 0.12;
-            if moved && nx >= 0 && ny >= 0
-                && (nx as usize) < self.map.width && (ny as usize) < self.map.height
-                && !self.map.is_solid(nx as usize, ny as usize)
-                && !sparky_blocks && !npc_blocks
-            {
-                self.sparky_push_timer = 0.0;
-                self.sparky.record_player_pos(self.player.tile_x, self.player.tile_y);
-                self.player.start_move(nx as usize, ny as usize);
+        let states = self.snapshot_entities();
+        let mut intents: Vec<(EntityId, MoveIntent)> = Vec::with_capacity(2 + self.npcs.len());
+        intents.push((EntityId::Player, player_intent));
+        intents.push((EntityId::Sparky, sparky_intent));
+        for (i, n) in self.npcs.iter_mut().enumerate() {
+            let intent = n.next_intent(dt, &mut self.rng);
+            intents.push((EntityId::Npc(i as u32), intent));
+        }
+
+        let map = &self.map;
+        let resolutions = resolve_moves(
+            &states,
+            &intents,
+            GridDims { width: map.width, height: map.height },
+            |x, y| map.is_solid(x, y),
+            &self.pressure,
+        );
+
+        for res in &resolutions {
+            match res {
+                MoveResolution::Granted { entity: EntityId::Player, to, .. } => {
+                    self.sparky.record_player_pos(self.player.tile_x, self.player.tile_y);
+                    self.player.start_move(to.0, to.1);
+                    self.pressure.clear();
+                }
+                MoveResolution::Granted { entity: EntityId::Sparky, to, .. } => {
+                    if !self.sparky.follow_queue.is_empty() {
+                        self.sparky.follow_queue.remove(0);
+                    }
+                    self.sparky.entity.start_move(to.0, to.1);
+                }
+                MoveResolution::Granted { entity: EntityId::Npc(i), to, .. } => {
+                    if let Some(n) = self.npcs.get_mut(*i as usize) {
+                        n.entity.start_move(to.0, to.1);
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -871,14 +934,16 @@ impl Game {
                 self.set_state(GameState::Dialogue);
             } else if let Some(target) = npc::get_interact_target(
                 self.player.tile_x, self.player.tile_y, self.player.dir, &self.npcs
-            ).map(|n| (n.id.to_string(), n.name.to_string(), n.can_receive_gifts, n.never_challenge, n.is_puzzler, n)) {
-                let (target_id, target_name, can_receive_gifts, never_challenge, is_puzzler, target_ref) = target;
+            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n)) {
+                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, target_ref) = target;
+                let target_id = target_kind.as_str().to_string();
+                let target_name = target_kind.display_name().to_string();
 
                 // Dev knob bay NPCs short-circuit the normal interaction flow.
-                // Each ctrl_* id maps to one effect — cycle a profile field,
+                // Each ctrl_* kind maps to one effect -- cycle a profile field,
                 // reset a flag, or fire a fresh puzzle.
-                if target_id.starts_with("ctrl_") {
-                    self.apply_dev_control(&target_id);
+                if target_kind.is_dev_control() {
+                    self.apply_dev_control(target_kind);
                     return;
                 }
 
@@ -943,6 +1008,19 @@ impl Game {
                 }
             }
         }
+    }
+
+    /// Build the per-frame snapshot the resolver consumes. Player and Sparky
+    /// always present; NPCs follow in `Vec` order so `EntityId::Npc(i)`
+    /// matches the index in `self.npcs`.
+    fn snapshot_entities(&self) -> Vec<EntityState> {
+        let mut v = Vec::with_capacity(2 + self.npcs.len());
+        v.push(entity_state(EntityId::Player, &self.player, Solidity::Solid));
+        v.push(entity_state(EntityId::Sparky, &self.sparky.entity, Solidity::SoftAfter(0.12)));
+        for (i, n) in self.npcs.iter().enumerate() {
+            v.push(entity_state(EntityId::Npc(i as u32), &n.entity, Solidity::Solid));
+        }
+        v
     }
 
     fn step_dialogue(&mut self, input: &FrameInput) {
@@ -1086,24 +1164,25 @@ impl Game {
         }
     }
 
-    /// Dev knob effects. Single dispatch on ctrl_* id. Direct profile
-    /// mutation here is intentional — these are debugging tools, not
-    /// gameplay events, and going through the learner reducer would mean
-    /// inventing fake events for every knob. The `dev` map (and its child
-    /// `control` map) is the only place ctrl_* NPCs exist, so this can't
+    /// Dev knob effects. Exhaustive match on the dev-control NpcKind variants.
+    /// Direct profile mutation here is intentional -- these are debugging
+    /// tools, not gameplay events, and going through the learner reducer would
+    /// mean inventing fake events for every knob. The `dev` map (and its child
+    /// `control` map) is the only place dev-control NPCs exist, so this can't
     /// fire from a real game.
-    fn apply_dev_control(&mut self, ctrl_id: &str) {
+    fn apply_dev_control(&mut self, kind: npc::NpcKind) {
+        use npc::NpcKind::*;
         let line = |text: &str| DialogueLine {
             speaker: "Knob".into(),
             text: text.into(),
         };
-        match ctrl_id {
-            "ctrl_band" => {
+        match kind {
+            CtrlBand => {
                 self.profile.math_band = if self.profile.math_band >= 10 { 1 } else { self.profile.math_band + 1 };
                 self.start_dialogue(vec![line(&format!("BEEP. Math band is now {}.", self.profile.math_band))]);
                 self.set_state(GameState::Dialogue);
             }
-            "ctrl_kenken_level" => {
+            CtrlKenkenLevel => {
                 self.profile.kenken_level = match self.profile.kenken_level {
                     2 => 3,
                     3 => 4,
@@ -1113,28 +1192,29 @@ impl Game {
                 self.start_dialogue(vec![line(&format!("BEEP. KenKen grid is now {}x{}.", n, n))]);
                 self.set_state(GameState::Dialogue);
             }
-            "ctrl_cra_reset" => {
+            CtrlCraReset => {
                 for stage in self.profile.cra_stages.values_mut() {
                     *stage = CraStage::Concrete;
                 }
                 self.start_dialogue(vec![line("All operation CRA stages reset to Concrete.")]);
                 self.set_state(GameState::Dialogue);
             }
-            "ctrl_intro_reset" => {
+            CtrlIntroReset => {
                 self.profile.kenken_intro_seen = false;
                 self.start_dialogue(vec![line("KenKen intro flag cleared. Next puzzle replays the tutorial.")]);
                 self.set_state(GameState::Dialogue);
             }
-            "ctrl_trigger_kenken" => {
-                let ak = start_kenken(&mut self.rng, &self.profile, self.game_time, ctrl_id.into());
+            CtrlTriggerKenken => {
+                let source = kind.as_str().to_string();
+                let ak = start_kenken(&mut self.rng, &self.profile, self.game_time, source.clone());
                 self.events.push(GameEvent::KenKenStarted {
                     grid_size: ak.session.puzzle.grid_size,
-                    source: ctrl_id.into(),
+                    source,
                 });
                 self.active_kenken = Some(ak);
                 self.set_state(GameState::KenKen);
             }
-            "ctrl_trigger_challenge" => {
+            CtrlTriggerChallenge => {
                 let ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
                 self.events.push(GameEvent::ChallengeStarted {
                     question: ac.challenge.display_text.clone(),
@@ -1143,8 +1223,9 @@ impl Game {
                 self.active_challenge = Some(ac);
                 self.set_state(GameState::Challenge);
             }
-            _ => {
-                self.start_dialogue(vec![line(&format!("Unknown control: {}", ctrl_id))]);
+            // Non-dev kinds shouldn't reach here -- caller gates on is_dev_control.
+            other => {
+                self.start_dialogue(vec![line(&format!("Unknown control: {}", other.as_str()))]);
                 self.set_state(GameState::Dialogue);
             }
         }
@@ -1271,7 +1352,7 @@ impl Game {
                         self.start_dialogue(lines);
                     } else {
                         // Pull lines first to free the borrow before start_dialogue.
-                        let lines = self.npcs.iter().find(|n| n.id == self.menu_target_id)
+                        let lines = self.npcs.iter().find(|n| n.id_str() == self.menu_target_id)
                             .map(|target| {
                                 let lines = npc_dialogue_lines(target, &mut self.rng);
                                 lines
@@ -1463,7 +1544,7 @@ impl Game {
             renderables.push(Renderable { y: self.player.y, kind: SpriteKind::Player });
             renderables.push(Renderable { y: self.sparky.entity.y, kind: SpriteKind::Sparky });
             for n in &self.npcs {
-                renderables.push(Renderable { y: n.pixel_y(), kind: SpriteKind::Npc(n) });
+                renderables.push(Renderable { y: n.entity.y, kind: SpriteKind::Npc(n) });
             }
             renderables.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap());
 
@@ -1745,50 +1826,97 @@ fn sparky_dialogue_lines(rng: &mut SmallRng) -> Vec<DialogueLine> {
     vec![DialogueLine { speaker: "Sparky".into(), text: lines[idx].into() }]
 }
 
+/// Build an `EntityState` for the resolver. Inverts Entity's "tile_x = dest
+/// while moving" convention: the resolver wants `tile_x/tile_y` to be the
+/// SOURCE tile (the one the entity is visibly leaving) and `moving_to` to
+/// hold the destination, so both are reserved against other intents.
+fn entity_state(id: EntityId, e: &Entity, solidity: Solidity) -> EntityState {
+    if !e.moving {
+        return EntityState { id, tile_x: e.tile_x, tile_y: e.tile_y, moving_to: None, solidity };
+    }
+    // Pixel `(target_x - x)/TILE_SIZE` rounds to the signed tile-delta
+    // remaining; subtracting from the (post-start_move) tile coords recovers
+    // the source.
+    let dx_rem = ((e.target_x - e.x) / TILE_SIZE).round() as i32;
+    let dy_rem = ((e.target_y - e.y) / TILE_SIZE).round() as i32;
+    let src_x = (e.tile_x as i32 - dx_rem).max(0) as usize;
+    let src_y = (e.tile_y as i32 - dy_rem).max(0) as usize;
+    EntityState { id, tile_x: src_x, tile_y: src_y, moving_to: Some((e.tile_x, e.tile_y)), solidity }
+}
+
+/// Translate held arrow/WASD keys into a `MoveIntent` and update `player.dir`
+/// to match. Setting `dir` even when the move ends up blocked is intentional:
+/// pressing into a wall should still turn the player so they're "facing" what
+/// they want to interact with.
+///
+/// Returns `Stay` if the player is already mid-step (no new intent until they
+/// settle on a tile) or no movement key is held.
+fn read_player_intent(input: &FrameInput, player: &mut Entity) -> MoveIntent {
+    if player.moving { return MoveIntent::Stay; }
+    let dir = if input.down(KeyCode::Up) || input.down(KeyCode::W) {
+        Some((Direction::Up, Dir::Up))
+    } else if input.down(KeyCode::Down) || input.down(KeyCode::S) {
+        Some((Direction::Down, Dir::Down))
+    } else if input.down(KeyCode::Left) || input.down(KeyCode::A) {
+        Some((Direction::Left, Dir::Left))
+    } else if input.down(KeyCode::Right) || input.down(KeyCode::D) {
+        Some((Direction::Right, Dir::Right))
+    } else {
+        None
+    };
+    match dir {
+        Some((d, sprite_dir)) => { player.dir = sprite_dir; MoveIntent::Move(d) }
+        None => MoveIntent::Stay,
+    }
+}
+
 fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
-    let lines: &[&str] = match npc.id {
-        "mommy" => &[
+    use npc::NpcKind::*;
+    let lines: &[&str] = match npc.kind {
+        Mommy => &[
             "Hi sweetie! I'm so proud of you for exploring!",
             "You and Sparky make the best team!",
             "I love you! Keep being amazing!",
         ],
-        "sage" | "sage_lab" => &[
+        Sage | SageLab => &[
             "Ahhhh, young adventurer! The stars told me you'd come!",
             "Welcome! I am Professor Gizmo, master of numbers!",
             "The ancient scrolls speak of a hero... and I think it's YOU!",
         ],
-        "kid_1" => &[
+        Kid1 => &[
             "Wanna see me do a cartwheel? Watch! ...okay I can't actually do one yet.",
             "Sparky is SO COOL! I wish I had a robot friend!",
             "Did you know frogs can jump SUPER far? Like, really far!",
         ],
-        "kid_2" => &[
+        Kid2 => &[
             "Hi... um... do you like bugs? I found a really cool one.",
             "Sparky beeped at me and I think that means he likes me!",
             "Do you think clouds are soft? I think they're soft.",
         ],
-        "shopkeeper" => &[
+        Shopkeeper => &[
             "Welcome to my shop! Everything costs Dum Dums!",
             "I've got the finest wares in all of Robot Village!",
         ],
-        "dream_sage" => &[
+        DreamSage => &[
             "You are dreaming... or are you? The numbers whisper here...",
             "In dreams, 2 + 2 can be anything... but it's still 4.",
         ],
-        "glitch_dog" => &[
+        GlitchDog => &[
             "BORK BORK! sys.treat.exe... GOOD BOY overflow!",
             "Woof! *static* I am... a good boy? BORK.dll loaded!",
             "fetch(ball) returned: UNDEFINED... but I still love you!",
         ],
-        "grove_spirit" => &[
+        GroveSpirit => &[
             "How... did you find this place? The trees have hidden it for ages...",
             "It's dangerous to go alone... take this!",
             "The leaves whisper your name... they say you are very clever.",
         ],
-        _ => &["Hello there!"],
+        // Dev-control NPCs go through apply_dev_control, never this path.
+        CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
+        | CtrlTriggerKenken | CtrlTriggerChallenge => &["Hello there!"],
     };
     let idx = rng.gen_range(0..lines.len());
-    vec![DialogueLine { speaker: npc.name.into(), text: lines[idx].into() }]
+    vec![DialogueLine { speaker: npc.name().into(), text: lines[idx].into() }]
 }
 
 fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Npc]) -> (usize, usize) {
@@ -1801,7 +1929,7 @@ fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Np
     for (cx, cy) in candidates {
         if cx < map.width && cy < map.height
             && !map.is_solid(cx, cy)
-            && !npcs.iter().any(|n| n.tile_x == cx && n.tile_y == cy)
+            && !npcs.iter().any(|n| n.entity.tile_x == cx && n.entity.tile_y == cy)
         {
             return (cx, cy);
         }

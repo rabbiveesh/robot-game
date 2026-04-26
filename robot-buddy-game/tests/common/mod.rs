@@ -9,6 +9,7 @@
 use macroquad::prelude::KeyCode;
 use robot_buddy_game::game::{Game, GameEvent, GameState};
 use robot_buddy_game::input::FrameInput;
+use robot_buddy_game::npc::NpcKind;
 use robot_buddy_game::save::InMemoryBackend;
 use robot_buddy_game::ui;
 
@@ -207,13 +208,13 @@ impl Harness {
         }
     }
 
-    /// Walk to a tile adjacent to the named NPC, then face them. Combine with
-    /// `interact()` to start a conversation.
-    pub fn walk_to_npc(&mut self, id: &str) {
+    /// Walk to a tile adjacent to the given NPC kind, then face them. Combine
+    /// with `interact()` to start a conversation.
+    pub fn walk_to_npc(&mut self, kind: NpcKind) {
         let (nx, ny) = self.game.npcs.iter()
-            .find(|n| n.id == id)
-            .map(|n| (n.tile_x, n.tile_y))
-            .unwrap_or_else(|| panic!("no NPC with id '{}' on current map ('{}')", id, self.game.map.id));
+            .find(|n| n.kind == kind)
+            .map(|n| (n.entity.tile_x, n.entity.tile_y))
+            .unwrap_or_else(|| panic!("no NPC with kind {:?} on current map ('{}')", kind, self.game.map.id));
 
         // Pick a walkable adjacent tile.
         let candidates = [
@@ -226,8 +227,8 @@ impl Harness {
             cx < self.game.map.width
                 && cy < self.game.map.height
                 && !self.game.map.is_solid(cx, cy)
-                && !self.game.npcs.iter().any(|n| n.tile_x == cx && n.tile_y == cy)
-        }).unwrap_or_else(|| panic!("no walkable tile adjacent to NPC '{}'", id));
+                && !self.game.npcs.iter().any(|n| n.entity.tile_x == cx && n.entity.tile_y == cy)
+        }).unwrap_or_else(|| panic!("no walkable tile adjacent to NPC {:?}", kind));
 
         self.walk_to(adj.0, adj.1);
 
@@ -427,7 +428,7 @@ fn bfs(
             // Block solid tiles and NPCs. Sparky is mobile and can be pushed past;
             // we don't model him here.
             if game.map.is_solid(np.0, np.1) { continue; }
-            if game.npcs.iter().any(|n| n.tile_x == np.0 && n.tile_y == np.1) { continue; }
+            if game.npcs.iter().any(|n| n.entity.tile_x == np.0 && n.entity.tile_y == np.1) { continue; }
             prev.insert(np, p);
             q.push_back(np);
         }
