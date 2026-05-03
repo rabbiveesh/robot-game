@@ -307,6 +307,13 @@ pub struct Game {
     pub sparky: Sparky,
     pub camera: GameCamera,
     pub npcs: Vec<npc::Npc>,
+    /// NPCs that belong to maps the player isn't on right now. Wandering NPCs
+    /// who stepped through a portal accumulate here under the destination map
+    /// id; on map change we swap the current `npcs` vec with whatever's stashed
+    /// for the new map (or fall back to `npcs_for_map`'s default roster on
+    /// first visit). Reset on new game / load — saves only persist the current
+    /// map's NPC layout, off-map wanderers snap back to defaults.
+    pub npcs_offstage: HashMap<String, Vec<npc::Npc>>,
     pub dreaming: bool,
 
     // Time
@@ -377,6 +384,7 @@ impl Game {
             sparky: Sparky::new(14, 13),
             camera: GameCamera { x: 0.0, y: 0.0 },
             npcs,
+            npcs_offstage: HashMap::new(),
             dreaming: false,
             game_time: 0.0,
             play_time: 0.0,
@@ -531,12 +539,18 @@ impl Game {
 
         // Pixel-level interpolation only (no movement decisions). Tile-grid
         // decisions live in the resolver, dispatched from step_playing.
+        // Capture which NPCs *just* finished their slide this frame so the
+        // portal handler only fires once per arrival, not every frame they
+        // sit on a portal tile waiting to wander again.
+        let mut arrived_npcs: Vec<usize> = Vec::new();
         let arrived = if self.settings_open {
             false
         } else {
             let a = self.player.move_toward_target(dt);
             self.sparky.animate(dt);
-            for n in &mut self.npcs { n.animate(dt); }
+            for (i, n) in self.npcs.iter_mut().enumerate() {
+                if n.animate(dt) { arrived_npcs.push(i); }
+            }
             self.dialogue.update(dt);
             a
         };
@@ -544,6 +558,13 @@ impl Game {
         // Portal check after arrival
         if arrived && self.state == GameState::Playing {
             self.handle_portal();
+            // The map just changed; the indices in arrived_npcs reference the
+            // pre-swap roster. Drop them so we don't teleport someone twice.
+            arrived_npcs.clear();
+        }
+
+        if self.state == GameState::Playing && !arrived_npcs.is_empty() {
+            self.handle_npc_portals(&arrived_npcs);
         }
 
         self.camera.follow(self.player.x, self.player.y, &self.map, GAME_W, GAME_H);
@@ -651,6 +672,7 @@ impl Game {
 
                         self.map = Map::by_id("dev");
                         self.npcs = npc::npcs_for_map(self.map.id);
+                        self.npcs_offstage.clear();
                         self.player = Entity::new(7, 10);
                         self.player.dir = Dir::Up;
                         self.sparky = Sparky::new(8, 10);
@@ -677,6 +699,7 @@ impl Game {
                         self.player = Entity::new(14, 12);
                         self.sparky = Sparky::new(14, 13);
                         self.npcs = npc::npcs_for_map(self.map.id);
+                        self.npcs_offstage.clear();
                         self.camera = GameCamera { x: 0.0, y: 0.0 };
 
                         let save_data = self.gather_save_data();
@@ -881,8 +904,16 @@ impl Game {
         let mut intents: Vec<(EntityId, MoveIntent)> = Vec::with_capacity(2 + self.npcs.len());
         intents.push((EntityId::Player, player_intent));
         intents.push((EntityId::Sparky, sparky_intent));
+        // Snapshot the camera rect once so the wander gate doesn't re-borrow
+        // self mid-iteration. Off-screen wanderers freeze: no cooldown tick,
+        // no random direction roll. The kid you can't see isn't burning RNG.
+        let cam = (self.camera.x, self.camera.y);
         for (i, n) in self.npcs.iter_mut().enumerate() {
-            let intent = n.next_intent(dt, &mut self.rng);
+            let intent = if npc_in_camera(cam, n) {
+                n.next_intent(dt, &mut self.rng)
+            } else {
+                MoveIntent::Stay
+            };
             intents.push((EntityId::Npc(i as u32), intent));
         }
 
@@ -1443,6 +1474,143 @@ impl Game {
         }
     }
 
+    /// Bounce any NPC currently on `(x, y)` of the current map to the nearest
+    /// free tile. Used after the player teleports onto a tile so a wanderer
+    /// that drifted onto the entry point doesn't end up standing on the
+    /// player. No-op if the tile is already clear.
+    fn displace_npcs_at(&mut self, x: usize, y: usize) {
+        let map_w = self.map.width;
+        let map_h = self.map.height;
+        for i in 0..self.npcs.len() {
+            if self.npcs[i].entity.tile_x != x || self.npcs[i].entity.tile_y != y {
+                continue;
+            }
+            let map = &self.map;
+            let player = (self.player.tile_x, self.player.tile_y);
+            let sparky = (self.sparky.entity.tile_x, self.sparky.entity.tile_y);
+            // Borrow-checker dance: snapshot the other NPCs' tiles so the
+            // closure below doesn't reborrow self.npcs.
+            let others: Vec<(usize, usize)> = self.npcs.iter().enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, n)| (n.entity.tile_x, n.entity.tile_y))
+                .collect();
+            let (nx, ny) = npc::find_npc_spawn_spot(
+                x, y, map_w, map_h,
+                |cx, cy| map.is_solid(cx, cy),
+                |cx, cy| (cx, cy) == player || (cx, cy) == sparky
+                    || others.iter().any(|t| *t == (cx, cy)),
+            );
+            // If find_npc_spawn_spot couldn't find a free tile (returned the
+            // original) we leave them in place — better than overlapping
+            // someone else.
+            if (nx, ny) != (x, y) {
+                let n = &mut self.npcs[i];
+                n.entity.tile_x = nx;
+                n.entity.tile_y = ny;
+                n.entity.x = nx as f32 * TILE_SIZE;
+                n.entity.y = ny as f32 * TILE_SIZE;
+                n.entity.target_x = n.entity.x;
+                n.entity.target_y = n.entity.y;
+                n.entity.moving = false;
+                n.home_tx = nx;
+                n.home_ty = ny;
+            }
+        }
+    }
+
+    /// Walk the just-arrived NPCs and teleport any that landed on a portal
+    /// tile to the portal's destination. Called from `step` after pixel
+    /// animation finishes for the frame.
+    ///
+    /// Indices in `arrived` are valid for the *current* `self.npcs` ordering
+    /// at the start of this method. Removing entries shifts indices, so we
+    /// process them in descending order and re-check the index bound.
+    fn handle_npc_portals(&mut self, arrived: &[usize]) {
+        // Highest-index first so removals don't invalidate earlier indices.
+        let mut sorted: Vec<usize> = arrived.iter().copied().collect();
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+
+        for i in sorted {
+            if i >= self.npcs.len() { continue; }
+            // Dev controls don't migrate — they're knobs bolted to the floor.
+            if self.npcs[i].kind.is_dev_control() { continue; }
+            let (tx, ty) = (self.npcs[i].entity.tile_x, self.npcs[i].entity.tile_y);
+            let portal = match tilemap::check_portal(self.map.id, tx, ty) {
+                Some(p) => p,
+                None => continue,
+            };
+            self.transfer_npc_through_portal(i, portal);
+        }
+    }
+
+    /// Move NPC at index `i` of `self.npcs` to the portal's destination map
+    /// + tile. Resolves blocking by spiraling outward via
+    /// `npc::find_npc_spawn_spot`. If the destination is the current map the
+    /// NPC stays in `self.npcs`; otherwise it goes into
+    /// `npcs_offstage[dest_map]` to be picked up next time the player visits.
+    fn transfer_npc_through_portal(&mut self, i: usize, portal: &tilemap::Portal) {
+        let dest_map = portal.to_map;
+        let target_x = portal.to_x;
+        let target_y = portal.to_y;
+
+        // Resolve a non-blocking landing tile on the destination map.
+        let (dest_x, dest_y) = if dest_map == self.map.id {
+            // Same map (rare — most portals jump). Avoid landing on the
+            // player, Sparky, or another NPC already here.
+            let map = &self.map;
+            let player = (self.player.tile_x, self.player.tile_y);
+            let sparky = (self.sparky.entity.tile_x, self.sparky.entity.tile_y);
+            let others: Vec<(usize, usize)> = self.npcs.iter().enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, n)| (n.entity.tile_x, n.entity.tile_y))
+                .collect();
+            npc::find_npc_spawn_spot(
+                target_x, target_y, map.width, map.height,
+                |cx, cy| map.is_solid(cx, cy),
+                |cx, cy| (cx, cy) == player || (cx, cy) == sparky
+                    || others.iter().any(|t| *t == (cx, cy)),
+            )
+        } else {
+            // Different map: load it briefly to inspect terrain. The only
+            // entities on a non-current map are whatever's stashed in
+            // npcs_offstage[dest_map] (no player, no Sparky there).
+            let dest_geometry = Map::by_id(dest_map);
+            let empty_vec: Vec<npc::Npc> = Vec::new();
+            let occupants = self.npcs_offstage.get(dest_map).unwrap_or(&empty_vec);
+            let occupant_tiles: Vec<(usize, usize)> = occupants.iter()
+                .map(|n| (n.entity.tile_x, n.entity.tile_y))
+                .collect();
+            npc::find_npc_spawn_spot(
+                target_x, target_y, dest_geometry.width, dest_geometry.height,
+                |cx, cy| dest_geometry.is_solid(cx, cy),
+                |cx, cy| occupant_tiles.iter().any(|t| *t == (cx, cy)),
+            )
+        };
+
+        let mut npc_obj = self.npcs.remove(i);
+        npc_obj.entity.tile_x = dest_x;
+        npc_obj.entity.tile_y = dest_y;
+        npc_obj.entity.x = dest_x as f32 * TILE_SIZE;
+        npc_obj.entity.y = dest_y as f32 * TILE_SIZE;
+        npc_obj.entity.target_x = npc_obj.entity.x;
+        npc_obj.entity.target_y = npc_obj.entity.y;
+        npc_obj.entity.moving = false;
+        // Re-anchor the wander tether to the new spot so the NPC stays around
+        // the portal exit instead of trying to drift back toward its original
+        // home tile (which is now on a different map entirely).
+        npc_obj.home_tx = dest_x;
+        npc_obj.home_ty = dest_y;
+
+        if dest_map == self.map.id {
+            self.npcs.push(npc_obj);
+        } else {
+            self.npcs_offstage
+                .entry(dest_map.to_string())
+                .or_insert_with(Vec::new)
+                .push(npc_obj);
+        }
+    }
+
     fn handle_portal(&mut self) {
         let portal = match tilemap::check_portal(self.map.id, self.player.tile_x, self.player.tile_y) {
             Some(p) => p,
@@ -1466,7 +1634,14 @@ impl Game {
         if self.dreaming && self.map.render_mode == tilemap::RenderMode::Normal {
             self.map.render_mode = tilemap::RenderMode::Dream;
         }
-        self.npcs = npc::npcs_for_map(self.map.id);
+        // Stash the map we're leaving so wanderers there don't reset on
+        // re-entry, then pop the destination's NPC roster (or fall back to the
+        // map's default roster on first visit).
+        let leaving = std::mem::take(&mut self.npcs);
+        self.npcs_offstage.insert(from_map.clone(), leaving);
+        self.npcs = self.npcs_offstage
+            .remove(self.map.id)
+            .unwrap_or_else(|| npc::npcs_for_map(self.map.id));
 
         self.player.tile_x = dest_x;
         self.player.tile_y = dest_y;
@@ -1476,6 +1651,11 @@ impl Game {
         self.player.target_y = self.player.y;
         self.player.moving = false;
         self.player.dir = portal.dir;
+
+        // Make sure the player isn't crowded out by a wanderer that
+        // accumulated on the entry tile while we were away. If anyone's there,
+        // bounce them to the nearest free tile.
+        self.displace_npcs_at(dest_x, dest_y);
 
         let sparky_pos = find_sparky_spot(dest_x, dest_y, &self.map, &self.npcs);
         self.sparky.entity.tile_x = sparky_pos.0;
@@ -1652,6 +1832,7 @@ impl Game {
 
         self.map = Map::by_id(&save_data.map_id);
         self.npcs = npc::npcs_for_map(self.map.id);
+        self.npcs_offstage.clear();
 
         self.player.tile_x = save_data.player_x;
         self.player.tile_y = save_data.player_y;
@@ -1917,6 +2098,19 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
     };
     let idx = rng.gen_range(0..lines.len());
     vec![DialogueLine { speaker: npc.name().into(), text: lines[idx].into() }]
+}
+
+/// True iff any pixel of the NPC's tile rect overlaps the camera viewport.
+/// Used to gate wander cooldown ticks — off-screen wanderers freeze in place
+/// so unseen rooms don't burn RNG and don't have characters drifting around
+/// out of sight.
+fn npc_in_camera(cam: (f32, f32), n: &npc::Npc) -> bool {
+    let x = n.entity.x;
+    let y = n.entity.y;
+    x + TILE_SIZE > cam.0
+        && x < cam.0 + GAME_W
+        && y + TILE_SIZE > cam.1
+        && y < cam.1 + GAME_H
 }
 
 fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Npc]) -> (usize, usize) {

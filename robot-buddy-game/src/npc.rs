@@ -114,9 +114,12 @@ impl Npc {
     pub fn id_str(&self) -> &'static str { self.kind.as_str() }
 
     /// Pixel-level interpolation. No movement decisions here -- those go
-    /// through `next_intent` and the resolver.
-    pub fn animate(&mut self, dt: f32) {
-        self.entity.move_toward_target(dt);
+    /// through `next_intent` and the resolver. Returns true on the frame the
+    /// NPC's pixel position catches up to its tile target — game.rs uses that
+    /// signal to fire portal teleports without re-triggering on subsequent
+    /// frames the NPC sits on the same tile.
+    pub fn animate(&mut self, dt: f32) -> bool {
+        self.entity.move_toward_target(dt)
     }
 
     /// Decide what this NPC wants to do this frame.
@@ -257,6 +260,46 @@ pub fn npcs_for_map(map_id: &str) -> Vec<Npc> {
         ],
         _ => vec![],
     }
+}
+
+/// Walk an NPC arriving at `(target_x, target_y)` to the closest non-blocking
+/// tile. `is_solid` reports terrain walls; `is_occupied` reports player /
+/// Sparky / other NPCs already on the destination map. Used after a portal
+/// transfer so a teleporting NPC never lands on top of the player or another
+/// entity. Falls back to the original target if nothing nearby is free.
+pub fn find_npc_spawn_spot<S, O>(
+    target_x: usize,
+    target_y: usize,
+    map_w: usize,
+    map_h: usize,
+    is_solid: S,
+    is_occupied: O,
+) -> (usize, usize)
+where
+    S: Fn(usize, usize) -> bool,
+    O: Fn(usize, usize) -> bool,
+{
+    let blocked = |x: usize, y: usize| -> bool {
+        x >= map_w || y >= map_h || is_solid(x, y) || is_occupied(x, y)
+    };
+    if !blocked(target_x, target_y) { return (target_x, target_y); }
+    // Spiral outwards in Manhattan rings up to radius 5. Past that we just
+    // give up and stack on the target — the wander step will naturally
+    // de-stack on the next frame because tiles only carry one NPC.
+    for radius in 1..=5_i32 {
+        for dx in -radius..=radius {
+            for dy in -radius..=radius {
+                if dx.abs() + dy.abs() != radius { continue; }
+                let nx = target_x as i32 + dx;
+                let ny = target_y as i32 + dy;
+                if nx < 0 || ny < 0 { continue; }
+                let (nx, ny) = (nx as usize, ny as usize);
+                if blocked(nx, ny) { continue; }
+                return (nx, ny);
+            }
+        }
+    }
+    (target_x, target_y)
 }
 
 /// Check if the player is facing an NPC and return it
