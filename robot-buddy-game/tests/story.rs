@@ -416,6 +416,311 @@ fn player_portaling_onto_offstage_npc_displaces_them() {
 }
 
 #[test]
+fn pushing_a_wandering_kid_shoves_them_one_tile_and_player_takes_their_spot() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    // Wandering NPCs are tagged `Solidity::PushableAfter(0.18)` in the
+    // resolver snapshot. Holding direction into one for ~0.18s should pop
+    // them one tile in that direction and slide the player onto their spot.
+    let mut h = Harness::new(1);
+    h.start_dev_game();
+
+    // Switch to the home map directly. Same trick as
+    // `wandering_npc_walking_onto_portal_transfers_to_destination_map`:
+    // the push behavior doesn't depend on the journey to home, only on the
+    // map's layout (open WoodFloor corridor along row 5).
+    h.game.map = Map::home();
+    h.game.npcs = npc_mod::npcs_for_map("home");
+    h.game.npcs_offstage.clear();
+
+    // Park Sparky in a corner so his follow path can't wander into the
+    // push corridor and block (5,5).
+    h.game.sparky.entity.tile_x = 1;
+    h.game.sparky.entity.tile_y = 1;
+    h.game.sparky.entity.x = 1.0 * 48.0;
+    h.game.sparky.entity.y = 1.0 * 48.0;
+    h.game.sparky.entity.target_x = h.game.sparky.entity.x;
+    h.game.sparky.entity.target_y = h.game.sparky.entity.y;
+    h.game.sparky.entity.moving = false;
+
+    // Pin Kid1 at (4,5) and freeze their wander roll so the only force that
+    // moves them is the player's push.
+    let kid_idx = h.game.npcs.iter()
+        .position(|n| n.kind == NpcKind::Kid1)
+        .expect("home spawns a Kid1");
+    {
+        let n = &mut h.game.npcs[kid_idx];
+        n.entity.tile_x = 4;
+        n.entity.tile_y = 5;
+        n.entity.x = 4.0 * 48.0;
+        n.entity.y = 5.0 * 48.0;
+        n.entity.target_x = n.entity.x;
+        n.entity.target_y = n.entity.y;
+        n.entity.moving = false;
+        n.wander_cooldown = 9999.0;
+    }
+    // Kid2 and Mommy could wander into / sit on the push destination —
+    // park them well clear and freeze their cooldowns too.
+    for n in h.game.npcs.iter_mut() {
+        if n.kind == NpcKind::Kid1 { continue; }
+        n.entity.tile_x = 1;
+        n.entity.tile_y = 2;
+        n.entity.x = 1.0 * 48.0;
+        n.entity.y = 2.0 * 48.0;
+        n.entity.target_x = n.entity.x;
+        n.entity.target_y = n.entity.y;
+        n.entity.moving = false;
+        n.wander_cooldown = 9999.0;
+    }
+
+    // Player at (3,5), facing the kid at (4,5). Push will send the kid to
+    // (5,5) — clear WoodFloor — and slide the player onto (4,5).
+    h.game.player.tile_x = 3;
+    h.game.player.tile_y = 5;
+    h.game.player.x = 3.0 * 48.0;
+    h.game.player.y = 5.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    // Lean Right. Pressure builds at dt=1/60 per frame; threshold 0.18s
+    // is ~11 frames of holding before the push fires. tile_x/tile_y update
+    // the instant `start_move` runs, so we don't need to wait for the slide
+    // to finish — but we DO need to stop before the player settles and a
+    // second lean rolls into a second push (~27 frames per cycle). 25 is in
+    // the safe middle.
+    for _ in 0..25 {
+        h.hold(KeyCode::Right);
+    }
+
+    let kid = h.game.npcs.iter().find(|n| n.kind == NpcKind::Kid1)
+        .expect("Kid1 still on home map after push");
+    assert_eq!((kid.entity.tile_x, kid.entity.tile_y), (5, 5),
+        "Kid1 should be shoved one tile right of their original (4,5) spot");
+    assert_eq!((h.game.player.tile_x, h.game.player.tile_y), (4, 5),
+        "player should now sit on Kid1's old tile (4,5)");
+}
+
+#[test]
+fn npc_mid_slide_does_not_overshoot_when_a_huge_dt_arrives() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    // In the browser, a backgrounded tab can pause requestAnimationFrame for
+    // seconds; when it resumes, macroquad reports a single huge dt for that
+    // frame. `move_toward_target` advances pixels by MOVE_SPEED * dt — without
+    // a clamp, an NPC mid-slide flies hundreds of tiles past their target and
+    // then "ghost walks" back at normal speed on subsequent normal-dt frames.
+    let mut h = Harness::new(1);
+    h.start_dev_game();
+
+    h.game.map = Map::home();
+    h.game.npcs = npc_mod::npcs_for_map("home");
+    h.game.npcs_offstage.clear();
+
+    let kid_idx = h.game.npcs.iter()
+        .position(|n| n.kind == NpcKind::Kid1)
+        .expect("home spawns a Kid1");
+    {
+        let n = &mut h.game.npcs[kid_idx];
+        n.entity.tile_x = 4;
+        n.entity.tile_y = 5;
+        n.entity.x = 4.0 * 48.0;
+        n.entity.y = 5.0 * 48.0;
+        n.entity.target_x = n.entity.x;
+        n.entity.target_y = n.entity.y;
+        n.entity.moving = false;
+        n.wander_cooldown = 9999.0;
+    }
+    // Manually start a slide one tile right. (5,5) is open WoodFloor.
+    h.game.npcs[kid_idx].entity.start_move(5, 5);
+
+    // One frame with a 30-second dt (tab was hidden ~30s, then refocused).
+    // tile_x already updated to (5,5); target_x = 5 * 48 = 240. The kid is
+    // mid-pixel-slide somewhere short of 240. With unbounded step the kid
+    // would zoom past target by thousands of pixels.
+    h.game.step(&robot_buddy_game::input::FrameInput::empty(), 30.0, common::SCREEN);
+
+    let kid = &h.game.npcs[kid_idx];
+    assert_eq!((kid.entity.tile_x, kid.entity.tile_y), (5, 5),
+        "tile coords should still reflect the destination");
+    let target_px = (5.0 * 48.0, 5.0 * 48.0);
+    assert!(
+        (kid.entity.x - target_px.0).abs() < 0.5
+            && (kid.entity.y - target_px.1).abs() < 0.5,
+        "after a huge dt the kid should be snapped to the target tile, not \
+         overshooting it. target=({}, {}), got=({}, {})",
+        target_px.0, target_px.1, kid.entity.x, kid.entity.y,
+    );
+    assert!(!kid.entity.moving,
+        "snapping to target should also clear `moving`, otherwise the next \
+         normal frame will see dist≈0 and idle correctly but the entity will \
+         look 'stuck on' for one extra render");
+}
+
+#[test]
+fn pushing_a_wandering_kid_onto_a_portal_transfers_them() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    // Push and the NPC-portal handler need to compose. Pushing a kid onto a
+    // portal tile should transfer them to the destination map's stash, same
+    // as if they'd wandered there on their own. Player and pushee slide for
+    // the same number of frames and arrive together — the arrival bookkeeping
+    // has to handle that without dropping the NPC's portal trigger.
+    let mut h = Harness::new(1);
+    h.start_dev_game();
+
+    h.game.map = Map::home();
+    h.game.npcs = npc_mod::npcs_for_map("home");
+    h.game.npcs_offstage.clear();
+
+    h.game.sparky.entity.tile_x = 1;
+    h.game.sparky.entity.tile_y = 1;
+    h.game.sparky.entity.x = 1.0 * 48.0;
+    h.game.sparky.entity.y = 1.0 * 48.0;
+    h.game.sparky.entity.target_x = h.game.sparky.entity.x;
+    h.game.sparky.entity.target_y = h.game.sparky.entity.y;
+    h.game.sparky.entity.moving = false;
+
+    // Park Kid1 right next to the home → overworld door at (4,6). One push
+    // east lands them on the portal.
+    let kid_idx = h.game.npcs.iter()
+        .position(|n| n.kind == NpcKind::Kid1)
+        .expect("home spawns a Kid1");
+    {
+        let n = &mut h.game.npcs[kid_idx];
+        n.entity.tile_x = 3;
+        n.entity.tile_y = 6;
+        n.entity.x = 3.0 * 48.0;
+        n.entity.y = 6.0 * 48.0;
+        n.entity.target_x = n.entity.x;
+        n.entity.target_y = n.entity.y;
+        n.entity.moving = false;
+        n.wander_cooldown = 9999.0;
+    }
+    for n in h.game.npcs.iter_mut() {
+        if n.kind == NpcKind::Kid1 { continue; }
+        n.entity.tile_x = 1;
+        n.entity.tile_y = 2;
+        n.entity.x = 1.0 * 48.0;
+        n.entity.y = 2.0 * 48.0;
+        n.entity.target_x = n.entity.x;
+        n.entity.target_y = n.entity.y;
+        n.entity.moving = false;
+        n.wander_cooldown = 9999.0;
+    }
+
+    // Player at (2,6), pushing Right.
+    h.game.player.tile_x = 2;
+    h.game.player.tile_y = 6;
+    h.game.player.x = 2.0 * 48.0;
+    h.game.player.y = 6.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    // Pressure build is ~11 frames; once the push fires both entities are
+    // mid-step and ignore further input. Release as soon as the push triggers
+    // so the player doesn't follow the kid onto the portal in a chain push.
+    for _ in 0..12 {
+        h.hold(KeyCode::Right);
+    }
+    // Idle through the slide + portal-handler arrival.
+    h.advance(20);
+
+    assert_eq!(h.game.map.id, "home",
+        "player should still be on home — only the kid crossed the portal");
+    assert!(
+        !h.game.npcs.iter().any(|n| n.kind == NpcKind::Kid1),
+        "Kid1 should have left the home roster after being pushed onto the portal; \
+         current kinds: {:?}",
+        h.game.npcs.iter().map(|n| n.kind).collect::<Vec<_>>(),
+    );
+    let stash = h.game.npcs_offstage.get("overworld")
+        .expect("overworld stash should exist after the push-portal transfer");
+    assert!(
+        stash.iter().any(|n| n.kind == NpcKind::Kid1),
+        "Kid1 should now live in npcs_offstage['overworld']; got kinds: {:?}",
+        stash.iter().map(|n| n.kind).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn pressing_into_a_kid_with_no_room_to_go_blocks_player() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    // If the kid's would-be destination is a wall, push fails and the player
+    // stays blocked — same outcome as walking into any solid NPC.
+    let mut h = Harness::new(1);
+    h.start_dev_game();
+
+    h.game.map = Map::home();
+    h.game.npcs = npc_mod::npcs_for_map("home");
+    h.game.npcs_offstage.clear();
+
+    h.game.sparky.entity.tile_x = 1;
+    h.game.sparky.entity.tile_y = 1;
+    h.game.sparky.entity.x = 1.0 * 48.0;
+    h.game.sparky.entity.y = 1.0 * 48.0;
+    h.game.sparky.entity.target_x = h.game.sparky.entity.x;
+    h.game.sparky.entity.target_y = h.game.sparky.entity.y;
+    h.game.sparky.entity.moving = false;
+
+    // Pin Kid1 right against the right wall (col 8 is the last floor col;
+    // col 9 is Wall). Pushing Right into Kid1 has nowhere for them to go.
+    let kid_idx = h.game.npcs.iter()
+        .position(|n| n.kind == NpcKind::Kid1)
+        .expect("home spawns a Kid1");
+    {
+        let n = &mut h.game.npcs[kid_idx];
+        n.entity.tile_x = 8;
+        n.entity.tile_y = 5;
+        n.entity.x = 8.0 * 48.0;
+        n.entity.y = 5.0 * 48.0;
+        n.entity.target_x = n.entity.x;
+        n.entity.target_y = n.entity.y;
+        n.entity.moving = false;
+        n.wander_cooldown = 9999.0;
+    }
+    for n in h.game.npcs.iter_mut() {
+        if n.kind == NpcKind::Kid1 { continue; }
+        n.entity.tile_x = 1;
+        n.entity.tile_y = 2;
+        n.entity.x = 1.0 * 48.0;
+        n.entity.y = 2.0 * 48.0;
+        n.entity.target_x = n.entity.x;
+        n.entity.target_y = n.entity.y;
+        n.entity.moving = false;
+        n.wander_cooldown = 9999.0;
+    }
+
+    h.game.player.tile_x = 7;
+    h.game.player.tile_y = 5;
+    h.game.player.x = 7.0 * 48.0;
+    h.game.player.y = 5.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    for _ in 0..60 {
+        h.hold(KeyCode::Right);
+    }
+
+    // Nobody moved.
+    let kid = h.game.npcs.iter().find(|n| n.kind == NpcKind::Kid1).unwrap();
+    assert_eq!((kid.entity.tile_x, kid.entity.tile_y), (8, 5),
+        "kid pinned to wall has no push destination — should stay put");
+    assert_eq!((h.game.player.tile_x, h.game.player.tile_y), (7, 5),
+        "player should remain blocked when push has no destination");
+}
+
+#[test]
 fn walk_to_npc_then_interact_starts_dialogue() {
     let mut h = Harness::new(42);
     h.start_dev_game();

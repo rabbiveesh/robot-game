@@ -157,14 +157,20 @@ impl Entity {
         let dx = self.target_x - self.x;
         let dy = self.target_y - self.y;
         let dist = (dx * dx + dy * dy).sqrt();
-        if dist < 2.0 {
+        let step = MOVE_SPEED * dt;
+        // Clamp to the remaining distance. Without this, a single huge dt
+        // (e.g. browser tab regaining focus after being backgrounded) sends
+        // pixel position thousands of px past the target, and subsequent
+        // normal-dt frames "ghost walk" the entity slowly back toward its
+        // tile target. Treat any step that would reach or pass target as
+        // arrival.
+        if step >= dist || dist < 2.0 {
             self.x = self.target_x;
             self.y = self.target_y;
             self.moving = false;
             self.frame += 1;
             return true;
         }
-        let step = MOVE_SPEED * dt;
         self.x += dx / dist * step;
         self.y += dy / dist * step;
         false
@@ -557,10 +563,16 @@ impl Game {
 
         // Portal check after arrival
         if arrived && self.state == GameState::Playing {
+            let prev_map = self.map.id;
             self.handle_portal();
-            // The map just changed; the indices in arrived_npcs reference the
-            // pre-swap roster. Drop them so we don't teleport someone twice.
-            arrived_npcs.clear();
+            // Only drop the NPC arrival list if the player actually swapped
+            // maps — otherwise the indices are still valid, and a co-arriving
+            // pushed NPC (player + pushee start their slides on the same
+            // frame, so they finish on the same frame) would lose its own
+            // portal trigger.
+            if self.map.id != prev_map {
+                arrived_npcs.clear();
+            }
         }
 
         if self.state == GameState::Playing && !arrived_npcs.is_empty() {
@@ -882,22 +894,37 @@ impl Game {
             self.sparky.next_intent(self.player.tile_x, self.player.tile_y)
         };
 
-        // Soft-block pressure: today only the player presses against Sparky.
-        // Increment while the player is trying to walk into Sparky's tile;
-        // reset otherwise. NPCs don't generate pressure in PR 1.
-        let pressing_sparky = match player_intent {
+        // Soft-block / push pressure: figure out which entity (if any) sits on
+        // the tile the player is trying to walk into this frame, and accumulate
+        // pressure on just that entity. Switching targets resets — pressure
+        // belongs to the lean you're holding right now.
+        let pressing_target: Option<EntityId> = match player_intent {
             MoveIntent::Move(d) => {
                 let (dx, dy) = d.delta();
                 let nx = self.player.tile_x as i32 + dx;
                 let ny = self.player.tile_y as i32 + dy;
-                nx == self.sparky.entity.tile_x as i32 && ny == self.sparky.entity.tile_y as i32
+                if nx < 0 || ny < 0 {
+                    None
+                } else {
+                    let (nx, ny) = (nx as usize, ny as usize);
+                    if self.sparky.entity.tile_x == nx && self.sparky.entity.tile_y == ny {
+                        Some(EntityId::Sparky)
+                    } else {
+                        self.npcs.iter().enumerate()
+                            .find(|(_, n)| n.entity.tile_x == nx && n.entity.tile_y == ny)
+                            .map(|(i, _)| EntityId::Npc(i as u32))
+                    }
+                }
             }
-            MoveIntent::Stay => false,
+            MoveIntent::Stay => None,
         };
-        if pressing_sparky {
-            *self.pressure.entry(EntityId::Sparky).or_insert(0.0) += dt;
-        } else {
-            self.pressure.remove(&EntityId::Sparky);
+        match pressing_target {
+            Some(id) => {
+                let prev = self.pressure.get(&id).copied().unwrap_or(0.0);
+                self.pressure.clear();
+                self.pressure.insert(id, prev + dt);
+            }
+            None => self.pressure.clear(),
         }
 
         let states = self.snapshot_entities();
@@ -1049,7 +1076,16 @@ impl Game {
         v.push(entity_state(EntityId::Player, &self.player, Solidity::Solid));
         v.push(entity_state(EntityId::Sparky, &self.sparky.entity, Solidity::SoftAfter(0.12)));
         for (i, n) in self.npcs.iter().enumerate() {
-            v.push(entity_state(EntityId::Npc(i as u32), &n.entity, Solidity::Solid));
+            // Wanderers are loose creatures who shuffle around — leaning into
+            // them shoves them aside. Stationary "rooted" NPCs (Mommy, Sage,
+            // shopkeeper, dev knobs) stay solid; pushing them around would feel
+            // off-character.
+            let solidity = if n.wanders {
+                Solidity::PushableAfter(0.18)
+            } else {
+                Solidity::Solid
+            };
+            v.push(entity_state(EntityId::Npc(i as u32), &n.entity, solidity));
         }
         v
     }
