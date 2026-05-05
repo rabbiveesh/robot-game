@@ -51,10 +51,18 @@ pub enum MoveIntent {
 /// are treated as passable for the duration of this frame's resolution. This
 /// is how Sparky becomes phase-through after the player presses into him for
 /// 0.12s — the legacy `sparky_push_timer` becomes one row of this map.
+///
+/// `PushableAfter(threshold)` is the Sokoban-style cousin of `SoftAfter`. Once
+/// pressure crosses the threshold, the pusher doesn't phase through — instead
+/// the pushed entity slides one tile in the pusher's direction (if the next
+/// tile is free), and the pusher takes the vacated tile. Failed pushes (next
+/// tile is a wall, off-grid, or occupied) leave the pusher blocked. Mid-step
+/// pushees can't be pushed; the pusher just blocks until they settle.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Solidity {
     Solid,
     SoftAfter(f32),
+    PushableAfter(f32),
 }
 
 /// Snapshot of an entity's position the resolver sees this frame. The game
@@ -129,9 +137,20 @@ where
     // resolving onto the same empty tile.
     let mut reserved: HashSet<(usize, usize)> = HashSet::new();
 
+    // Entities that have already been moved this frame as the pushee of a push.
+    // When their own intent comes up later in `intents`, we drop it (Stayed)
+    // so we don't double-move them or fight a granted push with a regular grant.
+    let mut pushed_this_frame: HashSet<EntityId> = HashSet::new();
+
     let mut resolutions = Vec::with_capacity(intents.len());
 
     for (id, intent) in intents {
+        if pushed_this_frame.contains(id) {
+            // Already moved as a pushee; their original intent collapses to Stayed.
+            resolutions.push(MoveResolution::Stayed { entity: *id });
+            continue;
+        }
+
         let from = match entities.iter().find(|e| e.id == *id) {
             Some(s) => (s.tile_x, s.tile_y),
             // Caller passed an intent for an unknown entity. Treat as Stayed
@@ -176,10 +195,31 @@ where
         }
         if let Some(&other_id) = occ.get(&to) {
             if other_id != *id {
-                let passable = match solidity_of.get(&other_id).copied().unwrap_or(Solidity::Solid) {
+                let other_solidity = solidity_of.get(&other_id).copied().unwrap_or(Solidity::Solid);
+                let passable = match other_solidity {
                     Solidity::Solid => false,
                     Solidity::SoftAfter(threshold) => {
                         pressure_against.get(&other_id).copied().unwrap_or(0.0) >= threshold
+                    }
+                    Solidity::PushableAfter(threshold) => {
+                        let pressure_ok = pressure_against.get(&other_id).copied().unwrap_or(0.0) >= threshold;
+                        if pressure_ok && try_push(
+                            other_id, dir, &occ, &reserved, entities,
+                            grid, &is_wall, &mut resolutions,
+                        ) {
+                            // Pushee was granted a move out of `to`. Reserve its
+                            // new tile and tag it so its own intent later in the
+                            // loop becomes a no-op.
+                            if let Some(MoveResolution::Granted { to: pdest, .. }) = resolutions.last() {
+                                reserved.insert(*pdest);
+                            }
+                            pushed_this_frame.insert(other_id);
+                            // The pusher takes `to`. Fall through to the grant
+                            // logic below by treating the tile as now-passable.
+                            true
+                        } else {
+                            false
+                        }
                     }
                 };
                 if !passable {
@@ -194,6 +234,52 @@ where
     }
 
     resolutions
+}
+
+/// Attempt to grant a push of `pushee` one tile in `dir`. Pushes the resolution
+/// directly into `resolutions` and returns true on success. A push fails (and
+/// nothing is appended) when the pushee is mid-step, off-grid in the push
+/// direction, into a wall, or into a tile already occupied/reserved.
+fn try_push<W>(
+    pushee: EntityId,
+    dir: Direction,
+    occ: &HashMap<(usize, usize), EntityId>,
+    reserved: &HashSet<(usize, usize)>,
+    entities: &[EntityState],
+    grid: GridDims,
+    is_wall: &W,
+    resolutions: &mut Vec<MoveResolution>,
+) -> bool
+where
+    W: Fn(usize, usize) -> bool,
+{
+    let pushee_state = match entities.iter().find(|e| e.id == pushee) {
+        Some(e) => e,
+        None => return false,
+    };
+    // Mid-step pushees: their tile bookkeeping (source vs. destination) makes
+    // a clean push ambiguous. Wait until they settle.
+    if pushee_state.moving_to.is_some() { return false; }
+
+    let (dx, dy) = dir.delta();
+    let px = pushee_state.tile_x as i32 + dx;
+    let py = pushee_state.tile_y as i32 + dy;
+    if px < 0 || py < 0 { return false; }
+    let dest = (px as usize, py as usize);
+    if dest.0 >= grid.width || dest.1 >= grid.height { return false; }
+    if is_wall(dest.0, dest.1) { return false; }
+    if reserved.contains(&dest) { return false; }
+    // Any other entity (including a chain-pushable) blocks. Single-tile push only.
+    if let Some(&other) = occ.get(&dest) {
+        if other != pushee { return false; }
+    }
+
+    resolutions.push(MoveResolution::Granted {
+        entity: pushee,
+        from: (pushee_state.tile_x, pushee_state.tile_y),
+        to: dest,
+    });
+    true
 }
 
 #[cfg(test)]
@@ -323,6 +409,161 @@ mod tests {
         assert_eq!(r[1], MoveResolution::Blocked {
             entity: EntityId::Npc(2), reason: BlockReason::Entity(EntityId::Npc(1)),
         });
+    }
+
+    fn pushable(id: EntityId, x: usize, y: usize, threshold: f32) -> EntityState {
+        EntityState {
+            id, tile_x: x, tile_y: y, moving_to: None,
+            solidity: Solidity::PushableAfter(threshold),
+        }
+    }
+
+    #[test]
+    fn pushable_blocks_until_pressure_threshold_met() {
+        // Player at (5,5), Kid at (6,5), free tile at (7,5). Pushing Right
+        // should stay blocked until pressure on Kid >= 0.18.
+        let states = [
+            entity(EntityId::Player, 5, 5),
+            pushable(EntityId::Npc(1), 6, 5, 0.18),
+        ];
+        let intents = [
+            (EntityId::Player, MoveIntent::Move(Direction::Right)),
+            (EntityId::Npc(1), MoveIntent::Stay),
+        ];
+
+        let mut p = HashMap::new();
+        p.insert(EntityId::Npc(1), 0.10);
+        let r = resolve_moves(&states, &intents, dims(10, 10), no_walls, &p);
+        assert_eq!(r[0], MoveResolution::Blocked {
+            entity: EntityId::Player, reason: BlockReason::Entity(EntityId::Npc(1)),
+        });
+        // Kid stays put.
+        assert_eq!(r[1], MoveResolution::Stayed { entity: EntityId::Npc(1) });
+    }
+
+    #[test]
+    fn pushable_grants_pushee_and_pusher_when_destination_is_free() {
+        let states = [
+            entity(EntityId::Player, 5, 5),
+            pushable(EntityId::Npc(1), 6, 5, 0.18),
+        ];
+        let intents = [
+            (EntityId::Player, MoveIntent::Move(Direction::Right)),
+            (EntityId::Npc(1), MoveIntent::Stay),
+        ];
+
+        let mut p = HashMap::new();
+        p.insert(EntityId::Npc(1), 0.18);
+        let r = resolve_moves(&states, &intents, dims(10, 10), no_walls, &p);
+
+        // Pushee resolution is appended first, then the pusher's grant. The
+        // kid's own Stay intent later in the list collapses to Stayed.
+        assert_eq!(r.len(), 3);
+        assert_eq!(r[0], MoveResolution::Granted {
+            entity: EntityId::Npc(1), from: (6, 5), to: (7, 5),
+        });
+        assert_eq!(r[1], MoveResolution::Granted {
+            entity: EntityId::Player, from: (5, 5), to: (6, 5),
+        });
+        assert_eq!(r[2], MoveResolution::Stayed { entity: EntityId::Npc(1) });
+    }
+
+    #[test]
+    fn pushable_into_wall_blocks_pusher() {
+        let states = [
+            entity(EntityId::Player, 5, 5),
+            pushable(EntityId::Npc(1), 6, 5, 0.18),
+        ];
+        let intents = [(EntityId::Player, MoveIntent::Move(Direction::Right))];
+        // Wall at (7,5) — kid has nowhere to go.
+        let is_wall = |x: usize, y: usize| x == 7 && y == 5;
+
+        let mut p = HashMap::new();
+        p.insert(EntityId::Npc(1), 0.50);
+        let r = resolve_moves(&states, &intents, dims(10, 10), is_wall, &p);
+        assert_eq!(r[0], MoveResolution::Blocked {
+            entity: EntityId::Player, reason: BlockReason::Entity(EntityId::Npc(1)),
+        });
+    }
+
+    #[test]
+    fn pushable_into_off_grid_blocks_pusher() {
+        // Kid is on the right edge; pushing Right takes them off-grid.
+        let states = [
+            entity(EntityId::Player, 8, 5),
+            pushable(EntityId::Npc(1), 9, 5, 0.18),
+        ];
+        let intents = [(EntityId::Player, MoveIntent::Move(Direction::Right))];
+        let mut p = HashMap::new();
+        p.insert(EntityId::Npc(1), 0.30);
+        let r = resolve_moves(&states, &intents, dims(10, 10), no_walls, &p);
+        assert_eq!(r[0], MoveResolution::Blocked {
+            entity: EntityId::Player, reason: BlockReason::Entity(EntityId::Npc(1)),
+        });
+    }
+
+    #[test]
+    fn pushable_into_other_entity_blocks_pusher_no_chain() {
+        // Two kids in a row: pushing the first would chain into the second,
+        // which we deliberately don't support — push fails.
+        let states = [
+            entity(EntityId::Player, 5, 5),
+            pushable(EntityId::Npc(1), 6, 5, 0.18),
+            pushable(EntityId::Npc(2), 7, 5, 0.18),
+        ];
+        let intents = [(EntityId::Player, MoveIntent::Move(Direction::Right))];
+        let mut p = HashMap::new();
+        p.insert(EntityId::Npc(1), 0.30);
+        let r = resolve_moves(&states, &intents, dims(10, 10), no_walls, &p);
+        assert_eq!(r[0], MoveResolution::Blocked {
+            entity: EntityId::Player, reason: BlockReason::Entity(EntityId::Npc(1)),
+        });
+    }
+
+    #[test]
+    fn pushable_during_pushees_own_step_blocks_until_settled() {
+        // Kid is mid-step from (6,5) to (7,5). Pressure is satisfied, but the
+        // resolver shouldn't try to push a moving entity — too ambiguous.
+        let mut kid = pushable(EntityId::Npc(1), 6, 5, 0.18);
+        kid.moving_to = Some((7, 5));
+        let states = [entity(EntityId::Player, 5, 5), kid];
+        let intents = [(EntityId::Player, MoveIntent::Move(Direction::Right))];
+
+        let mut p = HashMap::new();
+        p.insert(EntityId::Npc(1), 0.50);
+        let r = resolve_moves(&states, &intents, dims(10, 10), no_walls, &p);
+        assert_eq!(r[0], MoveResolution::Blocked {
+            entity: EntityId::Player, reason: BlockReason::Entity(EntityId::Npc(1)),
+        });
+    }
+
+    #[test]
+    fn push_overrides_pushees_own_move_intent() {
+        // Kid wants to wander Up while the player pushes them Right. The push
+        // wins; the kid's own Move intent collapses to Stayed once it's their
+        // turn in the loop.
+        let states = [
+            entity(EntityId::Player, 5, 5),
+            pushable(EntityId::Npc(1), 6, 5, 0.18),
+        ];
+        let intents = [
+            (EntityId::Player, MoveIntent::Move(Direction::Right)),
+            (EntityId::Npc(1), MoveIntent::Move(Direction::Up)),
+        ];
+
+        let mut p = HashMap::new();
+        p.insert(EntityId::Npc(1), 0.20);
+        let r = resolve_moves(&states, &intents, dims(10, 10), no_walls, &p);
+        assert_eq!(r[0], MoveResolution::Granted {
+            entity: EntityId::Npc(1), from: (6, 5), to: (7, 5),
+        });
+        assert_eq!(r[1], MoveResolution::Granted {
+            entity: EntityId::Player, from: (5, 5), to: (6, 5),
+        });
+        assert_eq!(r[2], MoveResolution::Stayed { entity: EntityId::Npc(1) });
+        // No move Up — the (6,4) tile is untouched.
+        assert!(r.iter().all(|res| !matches!(res,
+            MoveResolution::Granted { entity: EntityId::Npc(1), to: (6, 4), .. })));
     }
 
     #[test]
