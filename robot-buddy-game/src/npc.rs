@@ -88,9 +88,53 @@ pub enum SpriteType {
 /// Manhattan radius an NPC may wander away from its home tile. Keeps wanderers
 /// from drifting across the whole map; small enough that the player can find
 /// them reliably.
-const WANDER_RADIUS: i32 = 3;
-const WANDER_COOLDOWN_MIN: f32 = 1.5;
-const WANDER_COOLDOWN_MAX: f32 = 3.0;
+pub const WANDER_RADIUS: i32 = 3;
+pub const WANDER_COOLDOWN_MIN: f32 = 1.5;
+pub const WANDER_COOLDOWN_MAX: f32 = 3.0;
+
+/// Roll a tethered wander intent. Returns `Stay` if `moving` is true, the
+/// cooldown is still warm, the random direction would go off-grid, or it
+/// would exceed `radius` from `home`. When it returns `Move`, also returns
+/// the matching facing direction so the caller can update the entity's
+/// sprite (we always set facing even on blocked rolls — feels alive).
+///
+/// Shared by stationary-roster NPCs (via `Npc::next_intent`) and by parked
+/// Sparky idling near Professor Gizmo. The two only differ in where their
+/// cooldown and entity live; the dice-roll itself is identical.
+pub fn next_wander_intent(
+    at: (usize, usize),
+    moving: bool,
+    home: (usize, usize),
+    radius: i32,
+    cooldown: &mut f32,
+    dt: f32,
+    rng: &mut SmallRng,
+) -> (MoveIntent, Option<Dir>) {
+    if moving { return (MoveIntent::Stay, None); }
+    *cooldown -= dt;
+    if *cooldown > 0.0 { return (MoveIntent::Stay, None); }
+    *cooldown = WANDER_COOLDOWN_MIN
+        + rng.gen::<f32>() * (WANDER_COOLDOWN_MAX - WANDER_COOLDOWN_MIN);
+
+    let dirs = [Direction::Up, Direction::Down, Direction::Left, Direction::Right];
+    let dir = dirs[rng.gen_range(0..4)];
+    let (dx, dy) = dir.delta();
+    let nx = at.0 as i32 + dx;
+    let ny = at.1 as i32 + dy;
+    if nx < 0 || ny < 0 { return (MoveIntent::Stay, None); }
+
+    if (nx - home.0 as i32).abs() > radius || (ny - home.1 as i32).abs() > radius {
+        return (MoveIntent::Stay, None);
+    }
+
+    let face = match dir {
+        Direction::Up => Dir::Up,
+        Direction::Down => Dir::Down,
+        Direction::Left => Dir::Left,
+        Direction::Right => Dir::Right,
+    };
+    (MoveIntent::Move(dir), Some(face))
+}
 
 #[derive(Clone)]
 pub struct Npc {
@@ -195,34 +239,16 @@ impl Npc {
     /// "looks where it's going" even if the move ends up blocked.
     pub fn next_intent(&mut self, dt: f32, rng: &mut SmallRng) -> MoveIntent {
         if !self.wanders { return MoveIntent::Stay; }
-        if self.entity.moving { return MoveIntent::Stay; }
-        self.wander_cooldown -= dt;
-        if self.wander_cooldown > 0.0 { return MoveIntent::Stay; }
-        self.wander_cooldown = WANDER_COOLDOWN_MIN
-            + rng.gen::<f32>() * (WANDER_COOLDOWN_MAX - WANDER_COOLDOWN_MIN);
-
-        let dirs = [Direction::Up, Direction::Down, Direction::Left, Direction::Right];
-        let dir = dirs[rng.gen_range(0..4)];
-        let (dx, dy) = dir.delta();
-        let nx = self.entity.tile_x as i32 + dx;
-        let ny = self.entity.tile_y as i32 + dy;
-        if nx < 0 || ny < 0 { return MoveIntent::Stay; }
-
-        // Tether to home so wanderers don't drift across the whole map. The
-        // resolver handles wall/entity collisions on top.
-        if (nx - self.home_tx as i32).abs() > WANDER_RADIUS
-            || (ny - self.home_ty as i32).abs() > WANDER_RADIUS
-        {
-            return MoveIntent::Stay;
-        }
-
-        self.entity.dir = match dir {
-            Direction::Up => Dir::Up,
-            Direction::Down => Dir::Down,
-            Direction::Left => Dir::Left,
-            Direction::Right => Dir::Right,
-        };
-        MoveIntent::Move(dir)
+        let (intent, face) = next_wander_intent(
+            (self.entity.tile_x, self.entity.tile_y),
+            self.entity.moving,
+            (self.home_tx, self.home_ty),
+            WANDER_RADIUS,
+            &mut self.wander_cooldown,
+            dt, rng,
+        );
+        if let Some(f) = face { self.entity.dir = f; }
+        intent
     }
 
     /// Builder: mark this NPC as a wanderer. Sets the initial cooldown so

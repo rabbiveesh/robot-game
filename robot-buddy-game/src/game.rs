@@ -265,6 +265,10 @@ pub struct Game {
     /// rendered, soft-blocked, and interactable when the player is on his
     /// parked map. When the player gifts him a dum dum, he rejoins.
     pub sparky_parked: bool,
+    /// Wander cooldown for parked Sparky. Ticks down only while parked AND
+    /// the player is on his home map; reset to a small initial delay on
+    /// park so he doesn't twitch on the same frame he's swapped out.
+    sparky_wander_cooldown: f32,
     pub dreaming: bool,
 
     // Time
@@ -339,6 +343,7 @@ impl Game {
             npcs_offstage: HashMap::new(),
             companion: None,
             sparky_parked: false,
+            sparky_wander_cooldown: 0.0,
             dreaming: false,
             game_time: 0.0,
             play_time: 0.0,
@@ -636,6 +641,7 @@ impl Game {
                         self.npcs_offstage.clear();
                         self.companion = None;
                         self.sparky_parked = false;
+                        self.sparky_wander_cooldown = 0.0;
                         self.player = Entity::new(7, 10);
                         self.player.dir = Dir::Up;
                         self.sparky = Follower::new(8, 10);
@@ -665,6 +671,7 @@ impl Game {
                         self.npcs_offstage.clear();
                         self.companion = None;
                         self.sparky_parked = false;
+                        self.sparky_wander_cooldown = 0.0;
                         self.camera = GameCamera { x: 0.0, y: 0.0 };
 
                         let save_data = self.gather_save_data();
@@ -843,10 +850,26 @@ impl Game {
         let player_intent = read_player_intent(input, &mut self.player);
         let player_at = (self.player.tile_x, self.player.tile_y);
         let sparky_here = self.sparky_is_here();
-        // Active Sparky follows; parked Sparky just stands. Off-map parked
-        // Sparky doesn't even appear in the resolver — see below.
-        let sparky_intent = if self.sparky_parked || self.sparky.entity.moving {
+        // Active Sparky follows the player's path; parked Sparky idles near
+        // Professor Gizmo with the same wander roll a kid uses. Off-map
+        // parked Sparky doesn't appear in the resolver — see snapshot below.
+        let sparky_intent = if self.sparky.entity.moving {
             MoveIntent::Stay
+        } else if self.sparky_parked {
+            if sparky_here {
+                let (intent, face) = npc::next_wander_intent(
+                    (self.sparky.entity.tile_x, self.sparky.entity.tile_y),
+                    false,
+                    (SPARKY_HOME_TX, SPARKY_HOME_TY),
+                    npc::WANDER_RADIUS,
+                    &mut self.sparky_wander_cooldown,
+                    dt, &mut self.rng,
+                );
+                if let Some(f) = face { self.sparky.entity.dir = f; }
+                intent
+            } else {
+                MoveIntent::Stay
+            }
         } else {
             self.sparky.next_intent(player_at)
         };
@@ -1060,12 +1083,22 @@ impl Game {
     /// the index in `self.npcs`.
     fn snapshot_entities(&self) -> Vec<EntityState> {
         let mut v = Vec::with_capacity(3 + self.npcs.len());
-        v.push(entity_state(EntityId::Player, &self.player, Solidity::Solid));
+        v.push(entity_state(EntityId::Player, &self.player, Solidity::Solid, false));
         if self.sparky_is_here() {
-            v.push(entity_state(EntityId::Sparky, &self.sparky.entity, Solidity::SoftAfter(0.12)));
+            // Active Sparky soft-blocks (player squeezes past after pressure)
+            // and phases through other entities while retracing. Parked Sparky
+            // is just another loose creature near Gizmo — pushable like a kid,
+            // and obeys collisions like one.
+            let (sparky_solidity, sparky_phasing) = if self.sparky_parked {
+                (Solidity::PushableAfter(0.18), false)
+            } else {
+                (Solidity::SoftAfter(0.12), true)
+            };
+            v.push(entity_state(EntityId::Sparky, &self.sparky.entity, sparky_solidity, sparky_phasing));
         }
         if let Some(c) = self.companion.as_ref() {
-            v.push(entity_state(EntityId::Companion, &c.entity, Solidity::SoftAfter(0.12)));
+            // Companion is a follower — same rules as active Sparky.
+            v.push(entity_state(EntityId::Companion, &c.entity, Solidity::SoftAfter(0.12), true));
         }
         for (i, n) in self.npcs.iter().enumerate() {
             // Wanderers are loose creatures who shuffle around — leaning into
@@ -1077,7 +1110,7 @@ impl Game {
             } else {
                 Solidity::Solid
             };
-            v.push(entity_state(EntityId::Npc(i as u32), &n.entity, solidity));
+            v.push(entity_state(EntityId::Npc(i as u32), &n.entity, solidity, false));
         }
         v
     }
@@ -1542,6 +1575,8 @@ impl Game {
         self.sparky.entity.moving = false;
         self.sparky.entity.dir = Dir::Down;
         self.sparky.pathing.clear();
+        // Initial wander delay so he settles for a beat before twitching.
+        self.sparky_wander_cooldown = npc::WANDER_COOLDOWN_MIN;
     }
 
     /// Sparky rejoins the player as buddy. Teleports him to a spot adjacent
@@ -2110,6 +2145,13 @@ impl Game {
         self.sparky.entity.moving = false;
         self.sparky.pathing.clear();
         self.sparky_parked = save_data.sparky_parked;
+        // Fresh cooldown after load — wander roll won't fire on the first
+        // frame, and only ticks if Sparky's parked AND on his home map.
+        self.sparky_wander_cooldown = if save_data.sparky_parked {
+            npc::WANDER_COOLDOWN_MIN
+        } else {
+            0.0
+        };
     }
 }
 
@@ -2270,9 +2312,13 @@ fn sparky_dialogue_lines(rng: &mut SmallRng) -> Vec<DialogueLine> {
 /// while moving" convention: the resolver wants `tile_x/tile_y` to be the
 /// SOURCE tile (the one the entity is visibly leaving) and `moving_to` to
 /// hold the destination, so both are reserved against other intents.
-fn entity_state(id: EntityId, e: &Entity, solidity: Solidity) -> EntityState {
+fn entity_state(id: EntityId, e: &Entity, solidity: Solidity, phasing: bool) -> EntityState {
     if !e.moving {
-        return EntityState { id, tile_x: e.tile_x, tile_y: e.tile_y, moving_to: None, solidity };
+        return EntityState {
+            id, tile_x: e.tile_x, tile_y: e.tile_y,
+            moving_to: None, solidity,
+            phase_through_entities: phasing,
+        };
     }
     // Pixel `(target_x - x)/TILE_SIZE` rounds to the signed tile-delta
     // remaining; subtracting from the (post-start_move) tile coords recovers
@@ -2281,7 +2327,11 @@ fn entity_state(id: EntityId, e: &Entity, solidity: Solidity) -> EntityState {
     let dy_rem = ((e.target_y - e.y) / TILE_SIZE).round() as i32;
     let src_x = (e.tile_x as i32 - dx_rem).max(0) as usize;
     let src_y = (e.tile_y as i32 - dy_rem).max(0) as usize;
-    EntityState { id, tile_x: src_x, tile_y: src_y, moving_to: Some((e.tile_x, e.tile_y)), solidity }
+    EntityState {
+        id, tile_x: src_x, tile_y: src_y,
+        moving_to: Some((e.tile_x, e.tile_y)), solidity,
+        phase_through_entities: phasing,
+    }
 }
 
 /// Translate held arrow/WASD keys into a `MoveIntent` and update `player.dir`

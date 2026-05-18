@@ -75,6 +75,11 @@ pub enum Solidity {
 /// pixel-level interpolation hasn't caught up to their tile coords yet). The
 /// resolver reserves *both* `(tile_x, tile_y)` and `moving_to` so other
 /// entities can't walk into a tile that's about to be claimed.
+///
+/// `phase_through_entities` lets a mover ignore other entities on the
+/// destination tile. Walls and out-of-bounds still block. Used for the
+/// player's followers (Sparky, the companion NPC) so they can retrace the
+/// player's path without getting wedged behind a wandering NPC. Default false.
 #[derive(Clone, Debug)]
 pub struct EntityState {
     pub id: EntityId,
@@ -82,6 +87,7 @@ pub struct EntityState {
     pub tile_y: usize,
     pub moving_to: Option<(usize, usize)>,
     pub solidity: Solidity,
+    pub phase_through_entities: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -135,6 +141,8 @@ where
 
     let solidity_of: HashMap<EntityId, Solidity> =
         entities.iter().map(|e| (e.id, e.solidity)).collect();
+    let phasing_of: HashMap<EntityId, bool> =
+        entities.iter().map(|e| (e.id, e.phase_through_entities)).collect();
 
     // Tiles claimed by *this frame's* granted moves. Prevents two intents
     // resolving onto the same empty tile.
@@ -198,8 +206,11 @@ where
         }
         if let Some(&other_id) = occ.get(&to) {
             if other_id != *id {
+                // Phasing movers (followers retracing the player's path) walk
+                // through other entities. Walls still blocked them above.
+                let mover_phases = phasing_of.get(id).copied().unwrap_or(false);
                 let other_solidity = solidity_of.get(&other_id).copied().unwrap_or(Solidity::Solid);
-                let passable = match other_solidity {
+                let passable = if mover_phases { true } else { match other_solidity {
                     Solidity::Solid => false,
                     Solidity::SoftAfter(threshold) => {
                         pressure_against.get(&other_id).copied().unwrap_or(0.0) >= threshold
@@ -224,7 +235,7 @@ where
                             false
                         }
                     }
-                };
+                }};
                 if !passable {
                     resolutions.push(MoveResolution::Blocked { entity: *id, reason: BlockReason::Entity(other_id) });
                     continue;
@@ -290,7 +301,11 @@ mod tests {
     use super::*;
 
     fn entity(id: EntityId, x: usize, y: usize) -> EntityState {
-        EntityState { id, tile_x: x, tile_y: y, moving_to: None, solidity: Solidity::Solid }
+        EntityState {
+            id, tile_x: x, tile_y: y,
+            moving_to: None, solidity: Solidity::Solid,
+            phase_through_entities: false,
+        }
     }
 
     fn no_walls(_x: usize, _y: usize) -> bool { false }
@@ -418,6 +433,7 @@ mod tests {
         EntityState {
             id, tile_x: x, tile_y: y, moving_to: None,
             solidity: Solidity::PushableAfter(threshold),
+            phase_through_entities: false,
         }
     }
 
@@ -592,6 +608,55 @@ mod tests {
         let r = resolve_moves(&states, &intents, dims(10, 10), no_walls, &p);
         assert_eq!(r[0], MoveResolution::Granted {
             entity: EntityId::Player, from: (5, 5), to: (6, 5),
+        });
+    }
+
+    #[test]
+    fn phasing_mover_walks_through_solid_entity() {
+        // A follower (e.g. the companion NPC) retraces the player's path; if
+        // a stationary Solid NPC drifted into the queued tile, the follower
+        // should phase through instead of getting wedged.
+        let mut follower = entity(EntityId::Companion, 5, 5);
+        follower.phase_through_entities = true;
+        let blocker = entity(EntityId::Npc(1), 6, 5); // Solid by default
+        let states = [follower, blocker];
+        let intents = [(EntityId::Companion, MoveIntent::Move(Direction::Right))];
+
+        let r = resolve_moves(&states, &intents, dims(10, 10), no_walls, &HashMap::new());
+        assert_eq!(r[0], MoveResolution::Granted {
+            entity: EntityId::Companion, from: (5, 5), to: (6, 5),
+        });
+    }
+
+    #[test]
+    fn phasing_mover_is_still_blocked_by_walls() {
+        // Phase-through only ignores other entities — walls are physics, not
+        // social, and still block.
+        let mut follower = entity(EntityId::Companion, 5, 5);
+        follower.phase_through_entities = true;
+        let states = [follower];
+        let intents = [(EntityId::Companion, MoveIntent::Move(Direction::Right))];
+
+        let wall_at_six_five = |x: usize, y: usize| x == 6 && y == 5;
+        let r = resolve_moves(&states, &intents, dims(10, 10), wall_at_six_five, &HashMap::new());
+        assert_eq!(r[0], MoveResolution::Blocked {
+            entity: EntityId::Companion, reason: BlockReason::Wall,
+        });
+    }
+
+    #[test]
+    fn non_phasing_mover_still_blocked_by_solid_entity() {
+        // Sanity: regular NPC movers don't get a free pass — phase-through is
+        // opt-in. Without the flag, the solid blocker stops them.
+        let states = [
+            entity(EntityId::Npc(1), 5, 5),
+            entity(EntityId::Npc(2), 6, 5),
+        ];
+        let intents = [(EntityId::Npc(1), MoveIntent::Move(Direction::Right))];
+
+        let r = resolve_moves(&states, &intents, dims(10, 10), no_walls, &HashMap::new());
+        assert_eq!(r[0], MoveResolution::Blocked {
+            entity: EntityId::Npc(1), reason: BlockReason::Entity(EntityId::Npc(2)),
         });
     }
 }
