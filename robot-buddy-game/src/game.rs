@@ -56,6 +56,12 @@ pub const GAME_H: f32 = 720.0;
 const MOVE_SPEED: f32 = 200.0;
 const INTAKE_QUESTION_COUNT: usize = 5;
 
+/// Where Sparky waits when an NPC has taken over the buddy slot — next to
+/// Professor Gizmo on the overworld so the kid always knows where to find him.
+pub const SPARKY_HOME_MAP: &str = "overworld";
+pub const SPARKY_HOME_TX: usize = 13;
+pub const SPARKY_HOME_TY: usize = 12;
+
 // ─── Top-level state machine ────────────────────────────
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -250,8 +256,15 @@ pub struct Game {
     pub npcs_offstage: HashMap<String, Vec<npc::Npc>>,
     /// The NPC currently following the player. Detached from any map roster
     /// while in this slot; travels across maps with the player. Player rotates
-    /// companions by gifting a dum dum to another NPC.
+    /// buddies by gifting a dum dum: a non-buddy gets recruited, the previous
+    /// buddy returns to their static place. Invariant: `companion.is_some()`
+    /// iff `sparky_parked` — at most one of Sparky/companion follows at a time.
     pub companion: Option<npc::Npc>,
+    /// True when an NPC has taken Sparky's place. Parked Sparky sits at
+    /// `(SPARKY_HOME_TX, SPARKY_HOME_TY)` on `SPARKY_HOME_MAP`; he's only
+    /// rendered, soft-blocked, and interactable when the player is on his
+    /// parked map. When the player gifts him a dum dum, he rejoins.
+    pub sparky_parked: bool,
     pub dreaming: bool,
 
     // Time
@@ -325,6 +338,7 @@ impl Game {
             npcs,
             npcs_offstage: HashMap::new(),
             companion: None,
+            sparky_parked: false,
             dreaming: false,
             game_time: 0.0,
             play_time: 0.0,
@@ -621,6 +635,7 @@ impl Game {
                         self.npcs = npc::npcs_for_map(self.map.id);
                         self.npcs_offstage.clear();
                         self.companion = None;
+                        self.sparky_parked = false;
                         self.player = Entity::new(7, 10);
                         self.player.dir = Dir::Up;
                         self.sparky = Follower::new(8, 10);
@@ -649,6 +664,7 @@ impl Game {
                         self.npcs = npc::npcs_for_map(self.map.id);
                         self.npcs_offstage.clear();
                         self.companion = None;
+                        self.sparky_parked = false;
                         self.camera = GameCamera { x: 0.0, y: 0.0 };
 
                         let save_data = self.gather_save_data();
@@ -826,7 +842,10 @@ impl Game {
         // ── Movement: collect intents, resolve, apply ───────────────────
         let player_intent = read_player_intent(input, &mut self.player);
         let player_at = (self.player.tile_x, self.player.tile_y);
-        let sparky_intent = if self.sparky.entity.moving {
+        let sparky_here = self.sparky_is_here();
+        // Active Sparky follows; parked Sparky just stands. Off-map parked
+        // Sparky doesn't even appear in the resolver — see below.
+        let sparky_intent = if self.sparky_parked || self.sparky.entity.moving {
             MoveIntent::Stay
         } else {
             self.sparky.next_intent(player_at)
@@ -848,7 +867,10 @@ impl Game {
                     None
                 } else {
                     let (nx, ny) = (nx as usize, ny as usize);
-                    if self.sparky.entity.tile_x == nx && self.sparky.entity.tile_y == ny {
+                    if sparky_here
+                        && self.sparky.entity.tile_x == nx
+                        && self.sparky.entity.tile_y == ny
+                    {
                         Some(EntityId::Sparky)
                     } else if self.companion.as_ref()
                         .map(|c| c.entity.tile_x == nx && c.entity.tile_y == ny)
@@ -877,7 +899,9 @@ impl Game {
         let mut intents: Vec<(EntityId, MoveIntent)> =
             Vec::with_capacity(3 + self.npcs.len());
         intents.push((EntityId::Player, player_intent));
-        intents.push((EntityId::Sparky, sparky_intent));
+        if sparky_here {
+            intents.push((EntityId::Sparky, sparky_intent));
+        }
         if self.companion.is_some() {
             intents.push((EntityId::Companion, companion_intent));
         }
@@ -993,7 +1017,7 @@ impl Game {
                     }).collect();
                     self.set_state(GameState::InteractionMenu);
                 }
-            } else if npc::is_facing_sparky(
+            } else if self.sparky_is_here() && npc::is_facing_sparky(
                 self.player.tile_x, self.player.tile_y, self.player.dir,
                 self.sparky.entity.tile_x, self.sparky.entity.tile_y,
             ) {
@@ -1028,15 +1052,18 @@ impl Game {
         }
     }
 
-    /// Build the per-frame snapshot the resolver consumes. Player and Sparky
-    /// always present; NPCs follow in `Vec` order so `EntityId::Npc(i)`
-    /// matches the index in `self.npcs`. The companion (if any) is included
-    /// as soft-block so the player can squeeze past their follower the same
-    /// way they can past Sparky.
+    /// Build the per-frame snapshot the resolver consumes. Player is always
+    /// present. Sparky shows up only when he's on the current map (active
+    /// buddy, or parked at his home tile and the player is visiting). The
+    /// companion (if any) is included as soft-block so the player can squeeze
+    /// past them. NPCs follow in `Vec` order so `EntityId::Npc(i)` matches
+    /// the index in `self.npcs`.
     fn snapshot_entities(&self) -> Vec<EntityState> {
         let mut v = Vec::with_capacity(3 + self.npcs.len());
         v.push(entity_state(EntityId::Player, &self.player, Solidity::Solid));
-        v.push(entity_state(EntityId::Sparky, &self.sparky.entity, Solidity::SoftAfter(0.12)));
+        if self.sparky_is_here() {
+            v.push(entity_state(EntityId::Sparky, &self.sparky.entity, Solidity::SoftAfter(0.12)));
+        }
         if let Some(c) = self.companion.as_ref() {
             v.push(entity_state(EntityId::Companion, &c.entity, Solidity::SoftAfter(0.12)));
         }
@@ -1444,7 +1471,7 @@ impl Game {
                             &result.milestone, &mut self.rng,
                         );
                         let lines = match swap {
-                            Some((joined, left)) => companion_join_dialogue(joined, left, reaction),
+                            Some((joined, left)) => buddy_swap_dialogue(&joined, left.as_deref(), reaction),
                             None => reaction,
                         };
                         self.start_dialogue(lines);
@@ -1484,6 +1511,60 @@ impl Game {
         }
     }
 
+    /// True when Sparky is currently visible on the player's map. Sparky is
+    /// either actively following (and thus always on the player's map) or
+    /// parked at his home tile on `SPARKY_HOME_MAP`. While parked elsewhere,
+    /// he should not render, soft-block, or be interactable.
+    pub fn sparky_is_here(&self) -> bool {
+        !self.sparky_parked || self.map.id == SPARKY_HOME_MAP
+    }
+
+    /// Stable id string for the entity currently following the player. Used
+    /// downstream by random-event / dialogue systems that want to vary based
+    /// on who's tagging along.
+    pub fn current_buddy_id(&self) -> &str {
+        match self.companion.as_ref() {
+            Some(c) => c.kind.as_str(),
+            None => "sparky",
+        }
+    }
+
+    /// Tile + direction for parked Sparky's resting spot. Sparky faces the
+    /// player's typical entry direction (Down — toward the path) so the kid
+    /// runs into him head-on when arriving at the overworld.
+    fn park_sparky(&mut self) {
+        self.sparky_parked = true;
+        self.sparky.entity.tile_x = SPARKY_HOME_TX;
+        self.sparky.entity.tile_y = SPARKY_HOME_TY;
+        self.sparky.entity.x = SPARKY_HOME_TX as f32 * TILE_SIZE;
+        self.sparky.entity.y = SPARKY_HOME_TY as f32 * TILE_SIZE;
+        self.sparky.entity.target_x = self.sparky.entity.x;
+        self.sparky.entity.target_y = self.sparky.entity.y;
+        self.sparky.entity.moving = false;
+        self.sparky.entity.dir = Dir::Down;
+        self.sparky.pathing.clear();
+    }
+
+    /// Sparky rejoins the player as buddy. Teleports him to a spot adjacent
+    /// to the player, lets the path queue rebuild naturally as the player
+    /// moves. Returns true if Sparky was previously parked (so the caller
+    /// knows a swap actually happened).
+    fn unpark_sparky(&mut self) -> bool {
+        if !self.sparky_parked { return false; }
+        self.sparky_parked = false;
+        let (px, py) = (self.player.tile_x, self.player.tile_y);
+        let pos = find_sparky_spot(px, py, &self.map, &self.npcs);
+        self.sparky.entity.tile_x = pos.0;
+        self.sparky.entity.tile_y = pos.1;
+        self.sparky.entity.x = pos.0 as f32 * TILE_SIZE;
+        self.sparky.entity.y = pos.1 as f32 * TILE_SIZE;
+        self.sparky.entity.target_x = self.sparky.entity.x;
+        self.sparky.entity.target_y = self.sparky.entity.y;
+        self.sparky.entity.moving = false;
+        self.sparky.pathing.clear();
+        true
+    }
+
     /// Build the NPC roster for `map_id`, preferring whatever's currently
     /// stashed offstage and falling back to the static template. Filters out
     /// the current companion's kind so the same NPC can't appear in two
@@ -1500,27 +1581,46 @@ impl Game {
     }
 
     /// Resolve the gift recipient (held in `self.menu_target_id`) into a
-    /// companion swap, if applicable. Returns `Some((joined, left))` when a
-    /// swap happened. Returns `None` when the recipient isn't an NPC in the
-    /// current roster — i.e. Sparky, or the current companion themselves
-    /// (already off the roster), or a chest. Emits a `CompanionChanged`
-    /// event on success.
-    fn maybe_swap_companion_from_gift(&mut self) -> Option<(NpcKind, Option<NpcKind>)> {
-        let target_id = self.menu_target_id.as_str();
+    /// buddy swap, if applicable. Returns `Some((joined, left))` when a
+    /// swap happened (kinds as stable id strings: NPC kinds use
+    /// `NpcKind::as_str()`; Sparky is the literal "sparky"). Returns `None`
+    /// when the gift doesn't change the buddy — gifting the active buddy
+    /// (no-op), or gifting a chest.
+    fn maybe_swap_companion_from_gift(&mut self) -> Option<(String, Option<String>)> {
+        let target_id = self.menu_target_id.clone();
+
+        // Gifting parked Sparky brings him back as buddy; gifting active Sparky
+        // is just a regular gift (no swap).
+        if target_id == "sparky" {
+            if !self.sparky_parked { return None; }
+            let left = self.swap_sparky_in();
+            self.events.push(GameEvent::CompanionChanged {
+                joined: Some("sparky".to_string()),
+                left: Some(left.as_str().to_string()),
+            });
+            return Some(("sparky".to_string(), Some(left.as_str().to_string())));
+        }
+
+        // Gifting an NPC who's in the current roster recruits them. The
+        // displaced buddy is whichever was already in the slot — an NPC
+        // companion goes home; Sparky parks (handled inside swap_companion_to).
         let idx = self.npcs.iter().position(|n| n.kind.as_str() == target_id)?;
         let (joined, left) = self.swap_companion_to(idx);
+        let left_id = left
+            .map(|k| k.as_str().to_string())
+            .unwrap_or_else(|| "sparky".to_string());
         self.events.push(GameEvent::CompanionChanged {
             joined: Some(joined.as_str().to_string()),
-            left: left.map(|k| k.as_str().to_string()),
+            left: Some(left_id.clone()),
         });
-        Some((joined, left))
+        Some((joined.as_str().to_string(), Some(left_id)))
     }
 
     /// Make the NPC at `recipient_idx` in `self.npcs` the player's new
-    /// companion. Any existing companion is sent back to their home tile —
-    /// on the current map if they live here (re-enters `self.npcs`), or on
-    /// their home map's offstage roster otherwise. Returns the kinds of the
-    /// NPCs who joined and left so the caller can emit an event.
+    /// companion. If Sparky was the buddy, he's parked at his home tile. If
+    /// another NPC was the buddy, they return to their own home (same logic
+    /// as a regular NPC-to-NPC swap). Returns the new buddy's kind and, when
+    /// the displaced buddy was an NPC, that NPC's kind.
     fn swap_companion_to(&mut self, recipient_idx: usize) -> (NpcKind, Option<NpcKind>) {
         let mut new_companion = self.npcs.remove(recipient_idx);
         let joined = new_companion.kind;
@@ -1533,7 +1633,25 @@ impl Game {
             kind
         });
 
+        // First-time recruitment: Sparky was the active buddy, now he parks.
+        if left.is_none() {
+            self.park_sparky();
+        }
+
         (joined, left)
+    }
+
+    /// Sparky rejoins as buddy. The current NPC companion (must be Some)
+    /// returns home. Returns the kind that left so the caller can build a
+    /// CompanionChanged event.
+    fn swap_sparky_in(&mut self) -> NpcKind {
+        let mut leaving = self.companion.take()
+            .expect("swap_sparky_in called with no companion to displace");
+        let kind = leaving.kind;
+        leaving.reset_to_home();
+        self.send_npc_home(leaving);
+        self.unpark_sparky();
+        kind
     }
 
     /// Place a swapped-out companion back into its home map. Uses
@@ -1758,15 +1876,20 @@ impl Game {
         // bounce them to the nearest free tile.
         self.displace_npcs_at(dest_x, dest_y);
 
-        let sparky_pos = find_sparky_spot(dest_x, dest_y, &self.map, &self.npcs);
-        self.sparky.entity.tile_x = sparky_pos.0;
-        self.sparky.entity.tile_y = sparky_pos.1;
-        self.sparky.entity.x = sparky_pos.0 as f32 * TILE_SIZE;
-        self.sparky.entity.y = sparky_pos.1 as f32 * TILE_SIZE;
-        self.sparky.entity.target_x = self.sparky.entity.x;
-        self.sparky.entity.target_y = self.sparky.entity.y;
-        self.sparky.entity.moving = false;
-        self.sparky.pathing.clear();
+        // Parked Sparky doesn't travel with the player — he waits on his
+        // home map. Only teleport him alongside the player when he's the
+        // active buddy.
+        if !self.sparky_parked {
+            let sparky_pos = find_sparky_spot(dest_x, dest_y, &self.map, &self.npcs);
+            self.sparky.entity.tile_x = sparky_pos.0;
+            self.sparky.entity.tile_y = sparky_pos.1;
+            self.sparky.entity.x = sparky_pos.0 as f32 * TILE_SIZE;
+            self.sparky.entity.y = sparky_pos.1 as f32 * TILE_SIZE;
+            self.sparky.entity.target_x = self.sparky.entity.x;
+            self.sparky.entity.target_y = self.sparky.entity.y;
+            self.sparky.entity.moving = false;
+            self.sparky.pathing.clear();
+        }
 
         self.events.push(GameEvent::MapTransitioned {
             from: from_map,
@@ -1823,7 +1946,9 @@ impl Game {
             let mut renderables: Vec<Renderable> = vec![];
 
             renderables.push(Renderable { y: self.player.y, kind: SpriteKind::Player });
-            renderables.push(Renderable { y: self.sparky.entity.y, kind: SpriteKind::Sparky });
+            if self.sparky_is_here() {
+                renderables.push(Renderable { y: self.sparky.entity.y, kind: SpriteKind::Sparky });
+            }
             if let Some(c) = self.companion.as_ref() {
                 renderables.push(Renderable { y: c.entity.y, kind: SpriteKind::Npc(c) });
             }
@@ -1917,6 +2042,7 @@ impl Game {
             player_dir: self.player.dir,
             sparky_x: self.sparky.entity.tile_x,
             sparky_y: self.sparky.entity.tile_y,
+            sparky_parked: self.sparky_parked,
             math_band: None,
             dum_dums: self.dum_dums,
             play_time: self.play_time,
@@ -1984,6 +2110,7 @@ impl Game {
         self.sparky.entity.target_y = self.sparky.entity.y;
         self.sparky.entity.moving = false;
         self.sparky.pathing.clear();
+        self.sparky_parked = save_data.sparky_parked;
     }
 }
 
@@ -2300,26 +2427,50 @@ fn give_reaction_dialogue(
     vec![DialogueLine { speaker: target_name.into(), text }]
 }
 
-/// Build the "X joined you!" / "Y waves goodbye" lines that follow the gift
-/// reaction whenever a dum dum recruits a new companion. The base `reaction`
-/// is shown first so the kid sees the giftee react before the role change.
-fn companion_join_dialogue(
-    joined: NpcKind,
-    left: Option<NpcKind>,
+/// Build the "X joined you!" / "Y heads home" lines that follow the gift
+/// reaction whenever a dum dum swaps the buddy. The base `reaction` plays
+/// first so the kid sees the giftee react before the role change. `joined`
+/// and `left` are stable id strings: NPC kinds use `NpcKind::as_str()`;
+/// Sparky uses the literal "sparky".
+fn buddy_swap_dialogue(
+    joined: &str,
+    left: Option<&str>,
     mut reaction: Vec<DialogueLine>,
 ) -> Vec<DialogueLine> {
-    let join_line = DialogueLine {
-        speaker: "Sparky".into(),
-        text: format!("WHOA! {} wants to come adventure with us! BEEP BOOP!", joined.display_name()),
+    let join_text = if joined == "sparky" {
+        "BEEP BOOP! I'm BACK, boss! Let's go adventuring!".into()
+    } else {
+        format!(
+            "WHOA! {} wants to come adventure with us! BEEP BOOP!",
+            display_name_for_buddy_id(joined),
+        )
     };
-    reaction.push(join_line);
+    reaction.push(DialogueLine { speaker: "Sparky".into(), text: join_text });
+
     if let Some(prev) = left {
-        reaction.push(DialogueLine {
-            speaker: "Sparky".into(),
-            text: format!("{} is heading home — see ya later, friend!", prev.display_name()),
-        });
+        let leave_text = if prev == "sparky" {
+            "Sparky's heading back to Professor Gizmo to charge up!".into()
+        } else {
+            format!(
+                "{} is heading home — see ya later, friend!",
+                display_name_for_buddy_id(prev),
+            )
+        };
+        reaction.push(DialogueLine { speaker: "Sparky".into(), text: leave_text });
     }
     reaction
+}
+
+fn display_name_for_buddy_id(id: &str) -> String {
+    if id == "sparky" { return "Sparky".into(); }
+    // Walk every map's roster looking for this id. Cheap — handful of NPCs
+    // per map. Returning the id verbatim is the graceful fallback.
+    for map_id in &["overworld", "home", "lab", "shop", "dream", "doghouse", "grove"] {
+        if let Some(npc) = npc::npcs_for_map(map_id).into_iter().find(|n| n.id_str() == id) {
+            return npc.kind.display_name().into();
+        }
+    }
+    id.into()
 }
 
 fn speak_challenge_feedback(cs: &ChallengeState) {

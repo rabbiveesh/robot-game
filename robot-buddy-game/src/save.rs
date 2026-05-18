@@ -17,6 +17,10 @@ pub struct SaveData {
     pub player_dir: Dir,
     pub sparky_x: usize,
     pub sparky_y: usize,
+    /// True iff an NPC has replaced Sparky as the buddy and Sparky is waiting
+    /// at his home tile. Defaults to false so old saves load Sparky as active.
+    #[serde(default)]
+    pub sparky_parked: bool,
     /// Legacy field — kept for deserializing old saves. Migrated into `profile` on load.
     #[serde(default)]
     #[serde(skip_serializing)]
