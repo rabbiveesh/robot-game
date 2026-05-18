@@ -26,11 +26,14 @@ impl Direction {
 
 /// Stable identifier for entities the resolver can move. The `Npc` variant
 /// carries an opaque token; the game crate decides what it means (typically a
-/// `NpcKind` cast to u32).
+/// `NpcKind` cast to u32). `Companion` is the player-chosen NPC follower that
+/// travels with the player across maps — distinct from `Npc(_)` because it
+/// isn't indexed into the current map's roster.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum EntityId {
     Player,
     Sparky,
+    Companion,
     Npc(u32),
 }
 

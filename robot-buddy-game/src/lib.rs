@@ -5,6 +5,7 @@
 pub mod tilemap;
 pub mod sprites;
 pub mod npc;
+pub mod follower;
 pub mod ui;
 pub mod save;
 pub mod audio;

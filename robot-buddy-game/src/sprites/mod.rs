@@ -2,7 +2,7 @@ pub mod player;
 pub mod robot;
 pub mod npcs;
 
-#[derive(Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Dir {
     Up,
     Down,

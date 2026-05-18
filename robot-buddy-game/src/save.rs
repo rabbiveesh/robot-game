@@ -28,6 +28,20 @@ pub struct SaveData {
     pub gifts_given: HashMap<String, u32>,
     #[serde(default = "LearnerProfile::new")]
     pub profile: LearnerProfile,
+    /// The NPC currently following the player, if any. Identified by the
+    /// stable id string (`NpcKind::as_str()`); position is restored from the
+    /// saved tile, all other fields are rebuilt from `npcs_for_map` of the
+    /// kind's home map. Older saves without this field deserialize as None.
+    #[serde(default)]
+    pub companion: Option<CompanionSave>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CompanionSave {
+    pub kind: String,
+    pub home_map: String,
+    pub tile_x: usize,
+    pub tile_y: usize,
 }
 
 impl SaveData {

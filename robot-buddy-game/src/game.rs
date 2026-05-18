@@ -38,14 +38,15 @@ use robot_buddy_domain::world::movement::{
 
 use crate::tilemap::{self, Map, TILE_SIZE};
 use crate::sprites::{self, Dir};
-use crate::npc;
+use crate::follower::Follower;
+use crate::npc::{self, NpcKind};
 use crate::ui;
 use crate::ui::dialogue::{DialogueBox, DialogueLine};
 use crate::ui::challenge::{ChoiceBound, ScaffoldBounds};
 use crate::ui::title_screen::{TitleAction, NewGameAction, NewGameForm};
 use crate::ui::hud::{DumDumHud, DebugOverlay};
 use crate::ui::interaction_menu::MenuOption;
-use crate::save::{self, SaveBackend, SaveData, SaveSlots, Gender};
+use crate::save::{self, CompanionSave, SaveBackend, SaveData, SaveSlots, Gender};
 use crate::audio;
 use crate::session;
 use crate::input::FrameInput;
@@ -185,83 +186,6 @@ impl Entity {
     }
 }
 
-pub struct Sparky {
-    pub entity: Entity,
-    follow_queue: Vec<(usize, usize)>,
-}
-
-impl Sparky {
-    fn new(tile_x: usize, tile_y: usize) -> Self {
-        Sparky {
-            entity: Entity::new(tile_x, tile_y),
-            follow_queue: Vec::new(),
-        }
-    }
-
-    fn record_player_pos(&mut self, tx: usize, ty: usize) {
-        if self.follow_queue.last() != Some(&(tx, ty)) {
-            self.follow_queue.push((tx, ty));
-        }
-    }
-
-    /// Pixel-level interpolation toward the current target. Pure animation,
-    /// no movement decisions. The decision lives in `next_intent`.
-    fn animate(&mut self, dt: f32) {
-        self.entity.move_toward_target(dt);
-    }
-
-    /// Decide what Sparky wants to do this frame. Called once per frame while
-    /// stationary; returns `Stay` if mid-step or queue-empty. Sets `dir` as a
-    /// side-effect so Sparky faces the player even when not moving (or when
-    /// the resolver later denies the move).
-    ///
-    /// Pops the queue ONLY when returning a Move intent — if the resolver
-    /// denies the move, the apply phase doesn't pop, so Sparky retries next
-    /// frame.
-    fn next_intent(&mut self, player_tx: usize, player_ty: usize) -> MoveIntent {
-        if self.entity.moving { return MoveIntent::Stay; }
-        if self.follow_queue.is_empty() { return MoveIntent::Stay; }
-
-        // Already adjacent: drop the queue, just face the player.
-        let dx_abs = (self.entity.tile_x as i32 - player_tx as i32).abs();
-        let dy_abs = (self.entity.tile_y as i32 - player_ty as i32).abs();
-        if dx_abs + dy_abs <= 1 {
-            self.follow_queue.clear();
-            let fdx = player_tx as i32 - self.entity.tile_x as i32;
-            let fdy = player_ty as i32 - self.entity.tile_y as i32;
-            if fdx < 0 { self.entity.dir = Dir::Left; }
-            else if fdx > 0 { self.entity.dir = Dir::Right; }
-            else if fdy < 0 { self.entity.dir = Dir::Up; }
-            else if fdy > 0 { self.entity.dir = Dir::Down; }
-            return MoveIntent::Stay;
-        }
-
-        // Peek the next queue entry. Don't pop -- the apply phase pops on grant.
-        let (nx, ny) = self.follow_queue[0];
-        if nx == player_tx && ny == player_ty {
-            // Next step would land on the player. Skip it and try again next frame.
-            self.follow_queue.remove(0);
-            return MoveIntent::Stay;
-        }
-        let dx = nx as i32 - self.entity.tile_x as i32;
-        let dy = ny as i32 - self.entity.tile_y as i32;
-        let dir = match (dx.signum(), dy.signum()) {
-            (-1, 0) => Direction::Left,
-            ( 1, 0) => Direction::Right,
-            (0, -1) => Direction::Up,
-            (0,  1) => Direction::Down,
-            _ => return MoveIntent::Stay,
-        };
-        self.entity.dir = match dir {
-            Direction::Up => Dir::Up,
-            Direction::Down => Dir::Down,
-            Direction::Left => Dir::Left,
-            Direction::Right => Dir::Right,
-        };
-        MoveIntent::Move(dir)
-    }
-}
-
 pub struct GameCamera {
     pub x: f32,
     pub y: f32,
@@ -291,6 +215,10 @@ pub enum GameEvent {
     ChallengeStarted { question: String },
     ChallengeResolved { correct: bool, response_ms: f64 },
     GiftGiven { recipient_id: String, total: u32 },
+    /// Emitted when the player's follower NPC changes. `joined` is the NPC who
+    /// just became the companion (`None` if the slot was cleared); `left` is
+    /// the previous companion who returned home (`None` on first companion).
+    CompanionChanged { joined: Option<String>, left: Option<String> },
     DumDumsAwarded { amount: u32 },
     MapTransitioned { from: String, to: String },
     IntakeCompleted { math_band: u8 },
@@ -310,7 +238,7 @@ pub struct Game {
     // World
     pub map: Map,
     pub player: Entity,
-    pub sparky: Sparky,
+    pub sparky: Follower,
     pub camera: GameCamera,
     pub npcs: Vec<npc::Npc>,
     /// NPCs that belong to maps the player isn't on right now. Wandering NPCs
@@ -320,6 +248,10 @@ pub struct Game {
     /// first visit). Reset on new game / load — saves only persist the current
     /// map's NPC layout, off-map wanderers snap back to defaults.
     pub npcs_offstage: HashMap<String, Vec<npc::Npc>>,
+    /// The NPC currently following the player. Detached from any map roster
+    /// while in this slot; travels across maps with the player. Player rotates
+    /// companions by gifting a dum dum to another NPC.
+    pub companion: Option<npc::Npc>,
     pub dreaming: bool,
 
     // Time
@@ -359,8 +291,9 @@ pub struct Game {
     settings_open: bool,
 
     // Soft-block pressure per entity (driver of `Solidity::SoftAfter`).
-    // Today only Sparky uses it; pressure accumulates while the player walks
-    // into him and clears once the player either changes direction or moves.
+    // Sparky and the companion are soft-blockers — pressure accumulates while
+    // the player walks into one and clears once the player either changes
+    // direction or moves. Wandering NPCs are PushableAfter, also tracked here.
     pressure: HashMap<EntityId, f32>,
 
     // Diagnostics + RNG
@@ -387,10 +320,11 @@ impl Game {
         Game {
             map,
             player: Entity::new(14, 12),
-            sparky: Sparky::new(14, 13),
+            sparky: Follower::new(14, 13),
             camera: GameCamera { x: 0.0, y: 0.0 },
             npcs,
             npcs_offstage: HashMap::new(),
+            companion: None,
             dreaming: false,
             game_time: 0.0,
             play_time: 0.0,
@@ -554,6 +488,7 @@ impl Game {
         } else {
             let a = self.player.move_toward_target(dt);
             self.sparky.animate(dt);
+            if let Some(c) = self.companion.as_mut() { c.animate(dt); }
             for (i, n) in self.npcs.iter_mut().enumerate() {
                 if n.animate(dt) { arrived_npcs.push(i); }
             }
@@ -685,9 +620,10 @@ impl Game {
                         self.map = Map::by_id("dev");
                         self.npcs = npc::npcs_for_map(self.map.id);
                         self.npcs_offstage.clear();
+                        self.companion = None;
                         self.player = Entity::new(7, 10);
                         self.player.dir = Dir::Up;
-                        self.sparky = Sparky::new(8, 10);
+                        self.sparky = Follower::new(8, 10);
                         self.camera = GameCamera { x: 0.0, y: 0.0 };
 
                         self.start_dialogue(vec![DialogueLine {
@@ -709,9 +645,10 @@ impl Game {
 
                         self.map = Map::overworld();
                         self.player = Entity::new(14, 12);
-                        self.sparky = Sparky::new(14, 13);
+                        self.sparky = Follower::new(14, 13);
                         self.npcs = npc::npcs_for_map(self.map.id);
                         self.npcs_offstage.clear();
+                        self.companion = None;
                         self.camera = GameCamera { x: 0.0, y: 0.0 };
 
                         let save_data = self.gather_save_data();
@@ -888,11 +825,15 @@ impl Game {
     fn step_playing(&mut self, input: &FrameInput, dt: f32) {
         // ── Movement: collect intents, resolve, apply ───────────────────
         let player_intent = read_player_intent(input, &mut self.player);
+        let player_at = (self.player.tile_x, self.player.tile_y);
         let sparky_intent = if self.sparky.entity.moving {
             MoveIntent::Stay
         } else {
-            self.sparky.next_intent(self.player.tile_x, self.player.tile_y)
+            self.sparky.next_intent(player_at)
         };
+        let companion_intent = self.companion.as_mut()
+            .map(|c| c.next_follower_intent(player_at.0, player_at.1))
+            .unwrap_or(MoveIntent::Stay);
 
         // Soft-block / push pressure: figure out which entity (if any) sits on
         // the tile the player is trying to walk into this frame, and accumulate
@@ -909,6 +850,11 @@ impl Game {
                     let (nx, ny) = (nx as usize, ny as usize);
                     if self.sparky.entity.tile_x == nx && self.sparky.entity.tile_y == ny {
                         Some(EntityId::Sparky)
+                    } else if self.companion.as_ref()
+                        .map(|c| c.entity.tile_x == nx && c.entity.tile_y == ny)
+                        .unwrap_or(false)
+                    {
+                        Some(EntityId::Companion)
                     } else {
                         self.npcs.iter().enumerate()
                             .find(|(_, n)| n.entity.tile_x == nx && n.entity.tile_y == ny)
@@ -928,9 +874,13 @@ impl Game {
         }
 
         let states = self.snapshot_entities();
-        let mut intents: Vec<(EntityId, MoveIntent)> = Vec::with_capacity(2 + self.npcs.len());
+        let mut intents: Vec<(EntityId, MoveIntent)> =
+            Vec::with_capacity(3 + self.npcs.len());
         intents.push((EntityId::Player, player_intent));
         intents.push((EntityId::Sparky, sparky_intent));
+        if self.companion.is_some() {
+            intents.push((EntityId::Companion, companion_intent));
+        }
         // Snapshot the camera rect once so the wander gate doesn't re-borrow
         // self mid-iteration. Off-screen wanderers freeze: no cooldown tick,
         // no random direction roll. The kid you can't see isn't burning RNG.
@@ -957,14 +907,23 @@ impl Game {
             match res {
                 MoveResolution::Granted { entity: EntityId::Player, to, .. } => {
                     self.sparky.record_player_pos(self.player.tile_x, self.player.tile_y);
+                    if let Some(c) = self.companion.as_mut() {
+                        if let Some(p) = c.pathing.as_mut() {
+                            p.record_player_pos(self.player.tile_x, self.player.tile_y);
+                        }
+                    }
                     self.player.start_move(to.0, to.1);
                     self.pressure.clear();
                 }
                 MoveResolution::Granted { entity: EntityId::Sparky, to, .. } => {
-                    if !self.sparky.follow_queue.is_empty() {
-                        self.sparky.follow_queue.remove(0);
-                    }
+                    self.sparky.on_move_granted();
                     self.sparky.entity.start_move(to.0, to.1);
+                }
+                MoveResolution::Granted { entity: EntityId::Companion, to, .. } => {
+                    if let Some(c) = self.companion.as_mut() {
+                        c.on_follower_move_granted();
+                        c.entity.start_move(to.0, to.1);
+                    }
                 }
                 MoveResolution::Granted { entity: EntityId::Npc(i), to, .. } => {
                     if let Some(n) = self.npcs.get_mut(*i as usize) {
@@ -990,8 +949,9 @@ impl Game {
                 }]);
                 self.pending_challenge = true;
                 self.set_state(GameState::Dialogue);
-            } else if let Some(target) = npc::get_interact_target(
-                self.player.tile_x, self.player.tile_y, self.player.dir, &self.npcs
+            } else if let Some(target) = npc::get_interact_target_with_companion(
+                self.player.tile_x, self.player.tile_y, self.player.dir,
+                &self.npcs, self.companion.as_ref(),
             ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n)) {
                 let (target_kind, can_receive_gifts, never_challenge, is_puzzler, target_ref) = target;
                 let target_id = target_kind.as_str().to_string();
@@ -1070,11 +1030,16 @@ impl Game {
 
     /// Build the per-frame snapshot the resolver consumes. Player and Sparky
     /// always present; NPCs follow in `Vec` order so `EntityId::Npc(i)`
-    /// matches the index in `self.npcs`.
+    /// matches the index in `self.npcs`. The companion (if any) is included
+    /// as soft-block so the player can squeeze past their follower the same
+    /// way they can past Sparky.
     fn snapshot_entities(&self) -> Vec<EntityState> {
-        let mut v = Vec::with_capacity(2 + self.npcs.len());
+        let mut v = Vec::with_capacity(3 + self.npcs.len());
         v.push(entity_state(EntityId::Player, &self.player, Solidity::Solid));
         v.push(entity_state(EntityId::Sparky, &self.sparky.entity, Solidity::SoftAfter(0.12)));
+        if let Some(c) = self.companion.as_ref() {
+            v.push(entity_state(EntityId::Companion, &c.entity, Solidity::SoftAfter(0.12)));
+        }
         for (i, n) in self.npcs.iter().enumerate() {
             // Wanderers are loose creatures who shuffle around — leaning into
             // them shoves them aside. Stationary "rooted" NPCs (Mommy, Sage,
@@ -1465,6 +1430,11 @@ impl Game {
                             total,
                         });
 
+                        // If the recipient is an NPC who isn't already the
+                        // companion, the dum dum recruits them — and any
+                        // previous companion returns home.
+                        let swap = self.maybe_swap_companion_from_gift();
+
                         let save_data = self.gather_save_data();
                         self.save_backend.save_to(self.active_slot, &save_data);
                         self.auto_save_timer = 0.0;
@@ -1473,7 +1443,11 @@ impl Game {
                             &self.menu_target_id, &self.menu_target_name,
                             &result.milestone, &mut self.rng,
                         );
-                        self.start_dialogue(reaction);
+                        let lines = match swap {
+                            Some((joined, left)) => companion_join_dialogue(joined, left, reaction),
+                            None => reaction,
+                        };
+                        self.start_dialogue(lines);
                         self.set_state(GameState::Dialogue);
                     } else {
                         self.set_state(GameState::Playing);
@@ -1507,6 +1481,98 @@ impl Game {
             && input.pressed(KeyCode::T)
         {
             self.settings_open = true;
+        }
+    }
+
+    /// Build the NPC roster for `map_id`, preferring whatever's currently
+    /// stashed offstage and falling back to the static template. Filters out
+    /// the current companion's kind so the same NPC can't appear in two
+    /// places (next to the player AND back home in the roster).
+    fn load_map_roster(&mut self, map_id: &'static str) -> Vec<npc::Npc> {
+        let mut roster = self.npcs_offstage
+            .remove(map_id)
+            .unwrap_or_else(|| npc::npcs_for_map(map_id));
+        if let Some(c) = self.companion.as_ref() {
+            let companion_kind = c.kind;
+            roster.retain(|n| n.kind != companion_kind);
+        }
+        roster
+    }
+
+    /// Resolve the gift recipient (held in `self.menu_target_id`) into a
+    /// companion swap, if applicable. Returns `Some((joined, left))` when a
+    /// swap happened. Returns `None` when the recipient isn't an NPC in the
+    /// current roster — i.e. Sparky, or the current companion themselves
+    /// (already off the roster), or a chest. Emits a `CompanionChanged`
+    /// event on success.
+    fn maybe_swap_companion_from_gift(&mut self) -> Option<(NpcKind, Option<NpcKind>)> {
+        let target_id = self.menu_target_id.as_str();
+        let idx = self.npcs.iter().position(|n| n.kind.as_str() == target_id)?;
+        let (joined, left) = self.swap_companion_to(idx);
+        self.events.push(GameEvent::CompanionChanged {
+            joined: Some(joined.as_str().to_string()),
+            left: left.map(|k| k.as_str().to_string()),
+        });
+        Some((joined, left))
+    }
+
+    /// Make the NPC at `recipient_idx` in `self.npcs` the player's new
+    /// companion. Any existing companion is sent back to their home tile —
+    /// on the current map if they live here (re-enters `self.npcs`), or on
+    /// their home map's offstage roster otherwise. Returns the kinds of the
+    /// NPCs who joined and left so the caller can emit an event.
+    fn swap_companion_to(&mut self, recipient_idx: usize) -> (NpcKind, Option<NpcKind>) {
+        let mut new_companion = self.npcs.remove(recipient_idx);
+        let joined = new_companion.kind;
+        new_companion.start_following();
+
+        let left = self.companion.replace(new_companion).map(|mut old| {
+            let kind = old.kind;
+            old.reset_to_home();
+            self.send_npc_home(old);
+            kind
+        });
+
+        (joined, left)
+    }
+
+    /// Place a swapped-out companion back into its home map. Uses
+    /// `find_npc_spawn_spot` so a wanderer that drifted onto the home tile
+    /// in the meantime doesn't get stomped on.
+    fn send_npc_home(&mut self, mut npc: npc::Npc) {
+        let home_map = npc.home_map;
+        let (hx, hy) = (npc.home_tx, npc.home_ty);
+
+        if home_map == self.map.id {
+            let map = &self.map;
+            let player = (self.player.tile_x, self.player.tile_y);
+            let sparky = (self.sparky.entity.tile_x, self.sparky.entity.tile_y);
+            let companion_pos = self.companion.as_ref()
+                .map(|c| (c.entity.tile_x, c.entity.tile_y));
+            let others: Vec<(usize, usize)> = self.npcs.iter()
+                .map(|n| (n.entity.tile_x, n.entity.tile_y))
+                .collect();
+            let (nx, ny) = npc::find_npc_spawn_spot(
+                hx, hy, map.width, map.height,
+                |cx, cy| map.is_solid(cx, cy),
+                |cx, cy| (cx, cy) == player || (cx, cy) == sparky
+                    || companion_pos == Some((cx, cy))
+                    || others.iter().any(|t| *t == (cx, cy)),
+            );
+            npc.entity.tile_x = nx;
+            npc.entity.tile_y = ny;
+            npc.entity.x = nx as f32 * TILE_SIZE;
+            npc.entity.y = ny as f32 * TILE_SIZE;
+            npc.entity.target_x = npc.entity.x;
+            npc.entity.target_y = npc.entity.y;
+            self.npcs.push(npc);
+        } else {
+            // Home is a different map: stash them in the offstage roster so
+            // they pop back when the player next visits that map.
+            self.npcs_offstage
+                .entry(home_map.to_string())
+                .or_insert_with(Vec::new)
+                .push(npc);
         }
     }
 
@@ -1671,13 +1737,12 @@ impl Game {
             self.map.render_mode = tilemap::RenderMode::Dream;
         }
         // Stash the map we're leaving so wanderers there don't reset on
-        // re-entry, then pop the destination's NPC roster (or fall back to the
-        // map's default roster on first visit).
+        // re-entry, then pop the destination's NPC roster (filtered so the
+        // current companion doesn't double-render on their home map).
         let leaving = std::mem::take(&mut self.npcs);
         self.npcs_offstage.insert(from_map.clone(), leaving);
-        self.npcs = self.npcs_offstage
-            .remove(self.map.id)
-            .unwrap_or_else(|| npc::npcs_for_map(self.map.id));
+        let dest_id = self.map.id;
+        self.npcs = self.load_map_roster(dest_id);
 
         self.player.tile_x = dest_x;
         self.player.tile_y = dest_y;
@@ -1701,7 +1766,7 @@ impl Game {
         self.sparky.entity.target_x = self.sparky.entity.x;
         self.sparky.entity.target_y = self.sparky.entity.y;
         self.sparky.entity.moving = false;
-        self.sparky.follow_queue.clear();
+        self.sparky.pathing.clear();
 
         self.events.push(GameEvent::MapTransitioned {
             from: from_map,
@@ -1759,6 +1824,9 @@ impl Game {
 
             renderables.push(Renderable { y: self.player.y, kind: SpriteKind::Player });
             renderables.push(Renderable { y: self.sparky.entity.y, kind: SpriteKind::Sparky });
+            if let Some(c) = self.companion.as_ref() {
+                renderables.push(Renderable { y: c.entity.y, kind: SpriteKind::Npc(c) });
+            }
             for n in &self.npcs {
                 renderables.push(Renderable { y: n.entity.y, kind: SpriteKind::Npc(n) });
             }
@@ -1855,6 +1923,12 @@ impl Game {
             timestamp: 0,
             gifts_given: self.gifts_given.clone(),
             profile: self.profile.clone(),
+            companion: self.companion.as_ref().map(|c| CompanionSave {
+                kind: c.kind.as_str().to_string(),
+                home_map: c.home_map.to_string(),
+                tile_x: c.entity.tile_x,
+                tile_y: c.entity.tile_y,
+            }),
         }
     }
 
@@ -1867,8 +1941,31 @@ impl Game {
         self.gifts_given = save_data.gifts_given.clone();
 
         self.map = Map::by_id(&save_data.map_id);
-        self.npcs = npc::npcs_for_map(self.map.id);
         self.npcs_offstage.clear();
+        // Rehydrate companion first so the roster filter sees it. The kind is
+        // looked up via its home map's template — that's where home_tx/home_ty
+        // and sprite all live. If the saved kind no longer matches anything in
+        // its home roster (shouldn't happen, but might after refactors) we
+        // silently drop the companion rather than panic on load.
+        self.companion = save_data.companion.as_ref().and_then(|cs| {
+            let home_map = Map::by_id(&cs.home_map);
+            let mut template = npc::npcs_for_map(home_map.id)
+                .into_iter()
+                .find(|n| n.id_str() == cs.kind)?;
+            template.entity.tile_x = cs.tile_x;
+            template.entity.tile_y = cs.tile_y;
+            template.entity.x = cs.tile_x as f32 * TILE_SIZE;
+            template.entity.y = cs.tile_y as f32 * TILE_SIZE;
+            template.entity.target_x = template.entity.x;
+            template.entity.target_y = template.entity.y;
+            template.entity.moving = false;
+            template.start_following();
+            Some(template)
+        });
+        // load_map_roster filters out the companion's kind so they don't
+        // appear in two places when the player visits their home map.
+        let map_id = self.map.id;
+        self.npcs = self.load_map_roster(map_id);
 
         self.player.tile_x = save_data.player_x;
         self.player.tile_y = save_data.player_y;
@@ -1886,7 +1983,7 @@ impl Game {
         self.sparky.entity.target_x = self.sparky.entity.x;
         self.sparky.entity.target_y = self.sparky.entity.y;
         self.sparky.entity.moving = false;
-        self.sparky.follow_queue.clear();
+        self.sparky.pathing.clear();
     }
 }
 
@@ -2201,6 +2298,28 @@ fn give_reaction_dialogue(
         }
     };
     vec![DialogueLine { speaker: target_name.into(), text }]
+}
+
+/// Build the "X joined you!" / "Y waves goodbye" lines that follow the gift
+/// reaction whenever a dum dum recruits a new companion. The base `reaction`
+/// is shown first so the kid sees the giftee react before the role change.
+fn companion_join_dialogue(
+    joined: NpcKind,
+    left: Option<NpcKind>,
+    mut reaction: Vec<DialogueLine>,
+) -> Vec<DialogueLine> {
+    let join_line = DialogueLine {
+        speaker: "Sparky".into(),
+        text: format!("WHOA! {} wants to come adventure with us! BEEP BOOP!", joined.display_name()),
+    };
+    reaction.push(join_line);
+    if let Some(prev) = left {
+        reaction.push(DialogueLine {
+            speaker: "Sparky".into(),
+            text: format!("{} is heading home — see ya later, friend!", prev.display_name()),
+        });
+    }
+    reaction
 }
 
 fn speak_challenge_feedback(cs: &ChallengeState) {
