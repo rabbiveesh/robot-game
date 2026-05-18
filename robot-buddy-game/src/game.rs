@@ -1324,10 +1324,9 @@ impl Game {
             if ak.session.phase == KenKenPhase::Complete {
                 ak.complete_timer += dt;
                 if ak.complete_timer >= 2.5 { dismiss = true; }
-                // Accept any input to dismiss — Space/Enter for keyboard, plus
-                // mouse click anywhere on the panel. macroquad on native
-                // occasionally drops single key-press events the same way it
-                // drops mouse-press events, so we forgive both.
+                // Accept any input to dismiss — Space/Enter or a click
+                // anywhere on the panel. Keeps the celebration screen feeling
+                // tap-friendly for kids.
                 if input.pressed(KeyCode::Space)
                     || input.pressed(KeyCode::Enter)
                     || input.mouse_clicked

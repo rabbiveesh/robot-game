@@ -5,3 +5,14 @@ resolver = "2"
 [profile.release]
 opt-level = "s"
 lto = true
+
+# Pin miniquad to the merge commit of PR #545
+# (https://github.com/not-fl3/miniquad/pull/545) which fixes the macOS focus
+# bug where the app launches un-focused if the mouse is moving at startup —
+# clicks then register inconsistently for the whole session until the user
+# alt-tabs away and back. The fix is on miniquad master but not in a tagged
+# release (latest is v0.4.8, pre-fix), so we patch directly to the merge
+# commit. Drop this once miniquad ships a release that includes it and
+# macroquad bumps to that version.
+[patch.crates-io]
+miniquad = { git = "https://github.com/not-fl3/miniquad", rev = "350cb91b6f13a1f369619c5024b563acef109d5f" }
