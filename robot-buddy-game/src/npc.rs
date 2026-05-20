@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 use ::rand::{Rng, rngs::SmallRng};
 use robot_buddy_domain::world::movement::{Direction, MoveIntent};
+use crate::follower::Pathing;
 use crate::game::Entity;
 use crate::sprites::{self, Dir};
 
@@ -87,9 +88,53 @@ pub enum SpriteType {
 /// Manhattan radius an NPC may wander away from its home tile. Keeps wanderers
 /// from drifting across the whole map; small enough that the player can find
 /// them reliably.
-const WANDER_RADIUS: i32 = 3;
-const WANDER_COOLDOWN_MIN: f32 = 1.5;
-const WANDER_COOLDOWN_MAX: f32 = 3.0;
+pub const WANDER_RADIUS: i32 = 3;
+pub const WANDER_COOLDOWN_MIN: f32 = 1.5;
+pub const WANDER_COOLDOWN_MAX: f32 = 3.0;
+
+/// Roll a tethered wander intent. Returns `Stay` if `moving` is true, the
+/// cooldown is still warm, the random direction would go off-grid, or it
+/// would exceed `radius` from `home`. When it returns `Move`, also returns
+/// the matching facing direction so the caller can update the entity's
+/// sprite (we always set facing even on blocked rolls — feels alive).
+///
+/// Shared by stationary-roster NPCs (via `Npc::next_intent`) and by parked
+/// Sparky idling near Professor Gizmo. The two only differ in where their
+/// cooldown and entity live; the dice-roll itself is identical.
+pub fn next_wander_intent(
+    at: (usize, usize),
+    moving: bool,
+    home: (usize, usize),
+    radius: i32,
+    cooldown: &mut f32,
+    dt: f32,
+    rng: &mut SmallRng,
+) -> (MoveIntent, Option<Dir>) {
+    if moving { return (MoveIntent::Stay, None); }
+    *cooldown -= dt;
+    if *cooldown > 0.0 { return (MoveIntent::Stay, None); }
+    *cooldown = WANDER_COOLDOWN_MIN
+        + rng.gen::<f32>() * (WANDER_COOLDOWN_MAX - WANDER_COOLDOWN_MIN);
+
+    let dirs = [Direction::Up, Direction::Down, Direction::Left, Direction::Right];
+    let dir = dirs[rng.gen_range(0..4)];
+    let (dx, dy) = dir.delta();
+    let nx = at.0 as i32 + dx;
+    let ny = at.1 as i32 + dy;
+    if nx < 0 || ny < 0 { return (MoveIntent::Stay, None); }
+
+    if (nx - home.0 as i32).abs() > radius || (ny - home.1 as i32).abs() > radius {
+        return (MoveIntent::Stay, None);
+    }
+
+    let face = match dir {
+        Direction::Up => Dir::Up,
+        Direction::Down => Dir::Down,
+        Direction::Left => Dir::Left,
+        Direction::Right => Dir::Right,
+    };
+    (MoveIntent::Move(dir), Some(face))
+}
 
 #[derive(Clone)]
 pub struct Npc {
@@ -103,10 +148,17 @@ pub struct Npc {
     /// resolver decides whether each move actually happens; blocked moves
     /// turn into a Stay for that frame.
     pub wanders: bool,
+    /// Map this NPC belongs to. When the player gives them a dum dum they
+    /// detach from their map roster and follow; when swapped out, they go
+    /// home — back to (`home_tx`, `home_ty`) on `home_map`.
+    pub home_map: &'static str,
     pub home_tx: usize,
     pub home_ty: usize,
     /// Time until the next wander attempt. Counts down only while stationary.
     pub wander_cooldown: f32,
+    /// `Some` while this NPC is the player's companion follower. Wander and
+    /// stationary behaviors yield to the path queue when this is set.
+    pub pathing: Option<Pathing>,
 }
 
 impl Npc {
@@ -122,6 +174,60 @@ impl Npc {
         self.entity.move_toward_target(dt)
     }
 
+    /// True if the player has chosen this NPC as their travel companion. A
+    /// companion ignores wander/stationary behavior and follows the player's
+    /// path queue instead — see `next_follower_intent`.
+    pub fn is_following(&self) -> bool { self.pathing.is_some() }
+
+    /// Mark this NPC as the player's companion. The path queue starts empty —
+    /// it fills as the player moves. Idempotent.
+    pub fn start_following(&mut self) {
+        if self.pathing.is_none() {
+            self.pathing = Some(Pathing::new());
+        }
+    }
+
+    /// Drop the follower role. After this the NPC resumes its normal wander or
+    /// stationary behavior, anchored to whatever tile it's standing on.
+    pub fn stop_following(&mut self) { self.pathing = None; }
+
+    /// Snap this NPC back to its home tile and clear any follower state.
+    /// Used when a companion is swapped out — the caller still has to decide
+    /// which bucket (current map roster vs `npcs_offstage`) to place them in.
+    /// Pure transformation on the NPC's own state.
+    pub fn reset_to_home(&mut self) {
+        self.stop_following();
+        self.entity.tile_x = self.home_tx;
+        self.entity.tile_y = self.home_ty;
+        self.entity.x = self.home_tx as f32 * crate::tilemap::TILE_SIZE;
+        self.entity.y = self.home_ty as f32 * crate::tilemap::TILE_SIZE;
+        self.entity.target_x = self.entity.x;
+        self.entity.target_y = self.entity.y;
+        self.entity.moving = false;
+        self.wander_cooldown = 0.0;
+    }
+
+    /// Ask the path queue what the follower wants to do this frame. Caller
+    /// must clear `pathing` first if the NPC isn't following.
+    pub fn next_follower_intent(&mut self, player_tx: usize, player_ty: usize) -> MoveIntent {
+        let p = self.pathing.as_mut().expect("next_follower_intent on non-follower NPC");
+        let d = p.next_intent(
+            (self.entity.tile_x, self.entity.tile_y),
+            self.entity.moving,
+            (player_tx, player_ty),
+        );
+        if let Some(face) = d.face { self.entity.dir = face; }
+        d.intent
+    }
+
+    /// Called when the resolver grants this follower's move so the path
+    /// queue advances. No-op when not following.
+    pub fn on_follower_move_granted(&mut self) {
+        if let Some(p) = self.pathing.as_mut() {
+            p.on_move_granted();
+        }
+    }
+
     /// Decide what this NPC wants to do this frame.
     ///
     /// Stationary, non-wandering NPCs always Stay. Wanderers tick down a
@@ -133,34 +239,16 @@ impl Npc {
     /// "looks where it's going" even if the move ends up blocked.
     pub fn next_intent(&mut self, dt: f32, rng: &mut SmallRng) -> MoveIntent {
         if !self.wanders { return MoveIntent::Stay; }
-        if self.entity.moving { return MoveIntent::Stay; }
-        self.wander_cooldown -= dt;
-        if self.wander_cooldown > 0.0 { return MoveIntent::Stay; }
-        self.wander_cooldown = WANDER_COOLDOWN_MIN
-            + rng.gen::<f32>() * (WANDER_COOLDOWN_MAX - WANDER_COOLDOWN_MIN);
-
-        let dirs = [Direction::Up, Direction::Down, Direction::Left, Direction::Right];
-        let dir = dirs[rng.gen_range(0..4)];
-        let (dx, dy) = dir.delta();
-        let nx = self.entity.tile_x as i32 + dx;
-        let ny = self.entity.tile_y as i32 + dy;
-        if nx < 0 || ny < 0 { return MoveIntent::Stay; }
-
-        // Tether to home so wanderers don't drift across the whole map. The
-        // resolver handles wall/entity collisions on top.
-        if (nx - self.home_tx as i32).abs() > WANDER_RADIUS
-            || (ny - self.home_ty as i32).abs() > WANDER_RADIUS
-        {
-            return MoveIntent::Stay;
-        }
-
-        self.entity.dir = match dir {
-            Direction::Up => Dir::Up,
-            Direction::Down => Dir::Down,
-            Direction::Left => Dir::Left,
-            Direction::Right => Dir::Right,
-        };
-        MoveIntent::Move(dir)
+        let (intent, face) = next_wander_intent(
+            (self.entity.tile_x, self.entity.tile_y),
+            self.entity.moving,
+            (self.home_tx, self.home_ty),
+            WANDER_RADIUS,
+            &mut self.wander_cooldown,
+            dt, rng,
+        );
+        if let Some(f) = face { self.entity.dir = f; }
+        intent
     }
 
     /// Builder: mark this NPC as a wanderer. Sets the initial cooldown so
@@ -193,8 +281,10 @@ impl Npc {
 }
 
 /// Constructor helper -- keeps the per-map NPC tables tidy. Stationary by
-/// default; chain `.wandering()` to opt in.
-fn npc(kind: NpcKind, tx: usize, ty: usize, sprite: SpriteType,
+/// default; chain `.wandering()` to opt in. `home_map` is the map id this
+/// roster belongs to; passed by `npcs_for_map` so swapped-out companions
+/// can find their way home.
+fn npc(home_map: &'static str, kind: NpcKind, tx: usize, ty: usize, sprite: SpriteType,
        can_receive_gifts: bool, never_challenge: bool, is_puzzler: bool) -> Npc {
     Npc {
         kind,
@@ -204,59 +294,63 @@ fn npc(kind: NpcKind, tx: usize, ty: usize, sprite: SpriteType,
         never_challenge,
         is_puzzler,
         wanders: false,
+        home_map,
         home_tx: tx,
         home_ty: ty,
         wander_cooldown: 0.0,
+        pathing: None,
     }
 }
 
-pub fn npcs_for_map(map_id: &str) -> Vec<Npc> {
+pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
     use NpcKind::*;
     use SpriteType as S;
+    let n = |kind, tx, ty, sprite, can_gift, no_challenge, puzzler|
+        npc(map_id, kind, tx, ty, sprite, can_gift, no_challenge, puzzler);
     match map_id {
         "overworld" => vec![
-            npc(Sage, 12, 12, S::Sage, true, false, true),
+            n(Sage, 12, 12, S::Sage, true, false, true),
         ],
         "home" => vec![
-            npc(Mommy, 3, 3, S::Mommy, true, false, false),
-            npc(Kid1,  6, 5, S::Kid1,  true, true,  false).wandering(),
-            npc(Kid2,  8, 5, S::Kid2,  true, true,  false).wandering(),
+            n(Mommy, 3, 3, S::Mommy, true, false, false),
+            n(Kid1,  6, 5, S::Kid1,  true, true,  false).wandering(),
+            n(Kid2,  8, 5, S::Kid2,  true, true,  false).wandering(),
         ],
         "lab" => vec![
-            npc(SageLab, 5, 3, S::Sage, true, false, true),
+            n(SageLab, 5, 3, S::Sage, true, false, true),
         ],
         "shop" => vec![
-            npc(Shopkeeper, 5, 2, S::Shopkeeper, true, false, false),
+            n(Shopkeeper, 5, 2, S::Shopkeeper, true, false, false),
         ],
         "dream" => vec![
-            npc(DreamSage, 15, 8, S::Sage, false, false, false),
+            n(DreamSage, 15, 8, S::Sage, false, false, false),
         ],
         "doghouse" => vec![
-            npc(GlitchDog, 7, 5, S::Dog, true, false, false),
+            n(GlitchDog, 7, 5, S::Dog, true, false, false),
         ],
         "grove" => vec![
-            npc(GroveSpirit, 6, 4, S::OldOak, true, false, false),
+            n(GroveSpirit, 6, 4, S::OldOak, true, false, false),
         ],
         "control" => vec![
             // Dev knob bay -- each NPC is one control. game.rs intercepts dev-control
             // kinds before the normal interaction flow and applies the effect.
-            npc(CtrlBand,             2,  2, S::Sage,       false, true, false),
-            npc(CtrlKenkenLevel,      5,  2, S::Shopkeeper, false, true, false),
-            npc(CtrlCraReset,         8,  2, S::OldOak,     false, true, false),
-            npc(CtrlIntroReset,      10,  2, S::Dog,        false, true, false),
-            npc(CtrlTriggerKenken,    3,  5, S::Kid1,       false, true, false),
-            npc(CtrlTriggerChallenge, 8,  5, S::Kid2,       false, true, false),
+            n(CtrlBand,             2,  2, S::Sage,       false, true, false),
+            n(CtrlKenkenLevel,      5,  2, S::Shopkeeper, false, true, false),
+            n(CtrlCraReset,         8,  2, S::OldOak,     false, true, false),
+            n(CtrlIntroReset,      10,  2, S::Dog,        false, true, false),
+            n(CtrlTriggerKenken,    3,  5, S::Kid1,       false, true, false),
+            n(CtrlTriggerChallenge, 8,  5, S::Kid2,       false, true, false),
         ],
         "dev" => vec![
             // Sprite gallery -- one of each NPC, lined up. Natural talk = TTS test.
             // Sage flagged as puzzler so dev/test flows can deterministically open a KenKen.
-            npc(Mommy,       2, 3, S::Mommy,      false, true, false),
-            npc(Sage,        4, 3, S::Sage,       false, true, true),
-            npc(Shopkeeper,  6, 3, S::Shopkeeper, false, true, false),
-            npc(Kid1,        8, 3, S::Kid1,       false, true, false),
-            npc(Kid2,       10, 3, S::Kid2,       false, true, false),
-            npc(GlitchDog,  12, 3, S::Dog,        false, true, false),
-            npc(GroveSpirit,13, 3, S::OldOak,     false, true, false),
+            n(Mommy,       2, 3, S::Mommy,      false, true, false),
+            n(Sage,        4, 3, S::Sage,       false, true, true),
+            n(Shopkeeper,  6, 3, S::Shopkeeper, false, true, false),
+            n(Kid1,        8, 3, S::Kid1,       false, true, false),
+            n(Kid2,       10, 3, S::Kid2,       false, true, false),
+            n(GlitchDog,  12, 3, S::Dog,        false, true, false),
+            n(GroveSpirit,13, 3, S::OldOak,     false, true, false),
         ],
         _ => vec![],
     }
@@ -306,14 +400,35 @@ where
 pub fn get_interact_target(
     player_tx: usize, player_ty: usize, dir: sprites::Dir, npcs: &[Npc],
 ) -> Option<&Npc> {
+    let (tx, ty) = facing_tile(player_tx, player_ty, dir)?;
+    npcs.iter().find(|n| n.entity.tile_x == tx && n.entity.tile_y == ty)
+}
+
+/// Same as `get_interact_target`, but also considers the player's companion
+/// (which doesn't live in the map roster). The companion takes priority — when
+/// it's standing on the facing tile, it answers; otherwise we fall back to the
+/// roster lookup.
+pub fn get_interact_target_with_companion<'a>(
+    player_tx: usize, player_ty: usize, dir: sprites::Dir,
+    npcs: &'a [Npc], companion: Option<&'a Npc>,
+) -> Option<&'a Npc> {
+    let (tx, ty) = facing_tile(player_tx, player_ty, dir)?;
+    if let Some(c) = companion {
+        if c.entity.tile_x == tx && c.entity.tile_y == ty {
+            return Some(c);
+        }
+    }
+    npcs.iter().find(|n| n.entity.tile_x == tx && n.entity.tile_y == ty)
+}
+
+fn facing_tile(player_tx: usize, player_ty: usize, dir: sprites::Dir) -> Option<(usize, usize)> {
     let (tx, ty) = match dir {
-        sprites::Dir::Up => (player_tx as i32, player_ty as i32 - 1),
-        sprites::Dir::Down => (player_tx as i32, player_ty as i32 + 1),
-        sprites::Dir::Left => (player_tx as i32 - 1, player_ty as i32),
+        sprites::Dir::Up    => (player_tx as i32, player_ty as i32 - 1),
+        sprites::Dir::Down  => (player_tx as i32, player_ty as i32 + 1),
+        sprites::Dir::Left  => (player_tx as i32 - 1, player_ty as i32),
         sprites::Dir::Right => (player_tx as i32 + 1, player_ty as i32),
     };
-    if tx < 0 || ty < 0 { return None; }
-    npcs.iter().find(|n| n.entity.tile_x == tx as usize && n.entity.tile_y == ty as usize)
+    if tx < 0 || ty < 0 { None } else { Some((tx as usize, ty as usize)) }
 }
 
 /// Check if facing Sparky (the robot)
@@ -328,4 +443,62 @@ pub fn is_facing_sparky(
         sprites::Dir::Right => (player_tx as i32 + 1, player_ty as i32),
     };
     tx >= 0 && ty >= 0 && tx as usize == sparky_tx && ty as usize == sparky_ty
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_npc(home_map: &'static str, kind: NpcKind, tx: usize, ty: usize) -> Npc {
+        npc(home_map, kind, tx, ty, SpriteType::Mommy, true, false, false)
+    }
+
+    #[test]
+    fn start_following_installs_pathing() {
+        let mut n = test_npc("home", NpcKind::Mommy, 3, 3);
+        assert!(!n.is_following());
+        n.start_following();
+        assert!(n.is_following());
+    }
+
+    #[test]
+    fn start_following_is_idempotent() {
+        let mut n = test_npc("home", NpcKind::Mommy, 3, 3);
+        n.start_following();
+        // Seed a tile so we can tell if the queue got reset.
+        n.pathing.as_mut().unwrap().record_player_pos(5, 5);
+        n.start_following();
+        assert!(!n.pathing.as_ref().unwrap().is_empty(),
+            "second start_following should preserve the queue, not reset it");
+    }
+
+    #[test]
+    fn reset_to_home_snaps_position_and_clears_following() {
+        let mut n = test_npc("home", NpcKind::Mommy, 3, 3);
+        n.entity.tile_x = 10;
+        n.entity.tile_y = 10;
+        n.entity.x = 480.0;
+        n.entity.y = 480.0;
+        n.start_following();
+
+        n.reset_to_home();
+
+        assert_eq!((n.entity.tile_x, n.entity.tile_y), (3, 3));
+        assert_eq!(n.entity.x, 3.0 * crate::tilemap::TILE_SIZE);
+        assert_eq!(n.entity.y, 3.0 * crate::tilemap::TILE_SIZE);
+        assert!(!n.is_following());
+        assert!(!n.entity.moving);
+    }
+
+    #[test]
+    fn home_map_survives_a_round_trip_through_following() {
+        let mut n = test_npc("home", NpcKind::Mommy, 3, 3);
+        assert_eq!(n.home_map, "home");
+        n.entity.tile_x = 5;
+        n.entity.tile_y = 5;
+        n.start_following();
+        n.reset_to_home();
+        assert_eq!(n.home_map, "home",
+            "swap-out must not lose the NPC's home map — it's how they find their way back");
+    }
 }

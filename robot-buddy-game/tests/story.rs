@@ -747,3 +747,215 @@ fn walk_to_npc_then_interact_starts_dialogue() {
         events,
     );
 }
+
+#[test]
+fn giving_a_dum_dum_recruits_the_npc_as_companion_and_returns_the_previous_one() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    // Setup: home map, where Mommy/Kid1/Kid2 are all gift-receivers. Player
+    // starts with 20 dum_dums from dev mode. We warp directly to home rather
+    // than walking — the swap mechanic doesn't depend on how we got there.
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.game.map = Map::home();
+    h.game.npcs = npc_mod::npcs_for_map("home");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+
+    // Park Sparky in a corner so his follow path doesn't crowd the test area.
+    h.game.sparky.entity.tile_x = 1;
+    h.game.sparky.entity.tile_y = 1;
+    h.game.sparky.entity.x = 1.0 * 48.0;
+    h.game.sparky.entity.y = 1.0 * 48.0;
+    h.game.sparky.entity.target_x = h.game.sparky.entity.x;
+    h.game.sparky.entity.target_y = h.game.sparky.entity.y;
+    h.game.sparky.entity.moving = false;
+    // Freeze the kid wanderers' cooldowns so their roaming doesn't interfere
+    // with walking the player up to a specific NPC.
+    for n in h.game.npcs.iter_mut() {
+        n.wander_cooldown = 9999.0;
+    }
+    h.game.player.tile_x = 5;
+    h.game.player.tile_y = 3;
+    h.game.player.x = 5.0 * 48.0;
+    h.game.player.y = 3.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    // Step 1: give Kid1 a dum dum. Expect Kid1 to leave the roster and
+    // appear as the player's companion.
+    h.walk_to_npc(NpcKind::Kid1);
+    let mark = h.mark();
+    h.interact();
+    h.select_option("give");
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    let events = h.events_since(mark);
+    let first_swap = events.iter().find_map(|e| match e {
+        GameEvent::CompanionChanged { joined, left } => Some((joined.clone(), left.clone())),
+        _ => None,
+    }).expect(&format!("expected CompanionChanged after first gift; got: {:?}", events));
+    assert_eq!(first_swap.0.as_deref(), Some("kid_1"));
+    assert_eq!(first_swap.1.as_deref(), Some("sparky"),
+        "first NPC swap displaces Sparky; got left = {:?}", first_swap.1);
+
+    assert!(
+        h.game.companion.as_ref().map(|c| c.kind) == Some(NpcKind::Kid1),
+        "companion slot should hold Kid1; got {:?}",
+        h.game.companion.as_ref().map(|c| c.kind),
+    );
+    assert!(
+        h.game.companion.as_ref().unwrap().is_following(),
+        "companion should be in follower mode after the swap",
+    );
+    assert!(
+        !h.game.npcs.iter().any(|n| n.kind == NpcKind::Kid1),
+        "Kid1 should no longer appear in the home roster after recruitment",
+    );
+    assert!(h.game.sparky_parked,
+        "Sparky should be parked after an NPC took over as buddy");
+
+    // Step 2: give Mommy a dum dum. Expect Mommy to become the companion
+    // and Kid1 to return home — back into self.npcs at her home tile.
+    h.walk_to_npc(NpcKind::Mommy);
+    let mark = h.mark();
+    h.interact();
+    h.select_option("give");
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    let events = h.events_since(mark);
+    let second_swap = events.iter().find_map(|e| match e {
+        GameEvent::CompanionChanged { joined, left } => Some((joined.clone(), left.clone())),
+        _ => None,
+    }).expect(&format!("expected CompanionChanged after second gift; got: {:?}", events));
+    assert_eq!(second_swap.0.as_deref(), Some("mommy"),
+        "second swap should install Mommy as the new companion");
+    assert_eq!(second_swap.1.as_deref(), Some("kid_1"),
+        "second swap should release Kid1 (the previous companion)");
+
+    assert!(
+        h.game.companion.as_ref().map(|c| c.kind) == Some(NpcKind::Mommy),
+        "companion slot should hold Mommy now; got {:?}",
+        h.game.companion.as_ref().map(|c| c.kind),
+    );
+    let returned_kid = h.game.npcs.iter().find(|n| n.kind == NpcKind::Kid1)
+        .expect("Kid1 should be back in the home roster after being swapped out");
+    assert_eq!((returned_kid.entity.tile_x, returned_kid.entity.tile_y), (6, 5),
+        "swapped-out Kid1 should snap back to her static home tile (6, 5)");
+    assert!(!returned_kid.is_following(),
+        "released companion should drop follower mode and resume normal NPC behavior");
+}
+
+#[test]
+fn gifting_parked_sparky_brings_him_back_and_sends_the_npc_home() {
+    use robot_buddy_game::game::{SPARKY_HOME_MAP, SPARKY_HOME_TX, SPARKY_HOME_TY};
+
+    // Dev start gives 20 dum_dums. The dev map happens to have a Mommy NPC
+    // who can't normally receive gifts (the dev gallery sets gifts off), so
+    // we warp to the real home map first where Mommy is gift-eligible.
+    let mut h = Harness::new(11);
+    h.start_dev_game();
+
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    h.game.map = Map::home();
+    h.game.npcs = npc_mod::npcs_for_map("home");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    h.game.sparky_parked = false;
+    for n in h.game.npcs.iter_mut() { n.wander_cooldown = 9999.0; }
+    h.game.player.tile_x = 4;
+    h.game.player.tile_y = 3;
+    h.game.player.x = 4.0 * 48.0;
+    h.game.player.y = 3.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    // Recruit Mommy. Sparky should park at his home tile on the overworld.
+    h.walk_to_npc(NpcKind::Mommy);
+    h.interact();
+    h.select_option("give");
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    assert_eq!(h.game.current_buddy_id(), "mommy",
+        "Mommy should be the active buddy after gifting her");
+    assert!(h.game.sparky_parked,
+        "Sparky should be parked once an NPC has taken over");
+    assert_eq!(
+        (h.game.sparky.entity.tile_x, h.game.sparky.entity.tile_y),
+        (SPARKY_HOME_TX, SPARKY_HOME_TY),
+        "parked Sparky should sit at his home tile near Professor Gizmo",
+    );
+    assert!(!h.game.sparky_is_here(),
+        "while the player is on 'home', parked Sparky (on '{}') shouldn't be here",
+        SPARKY_HOME_MAP,
+    );
+
+    // Now walk to the overworld so we can face Sparky and gift him.
+    h.game.map = Map::overworld();
+    h.game.npcs.clear();
+    let mut overworld = npc_mod::npcs_for_map("overworld");
+    overworld.retain(|n| n.kind != h.game.companion.as_ref().unwrap().kind);
+    h.game.npcs = overworld;
+    assert!(h.game.sparky_is_here(),
+        "with the player back on overworld, parked Sparky should be visible");
+
+    // Park player one tile right of Sparky's home so we can turn-and-interact.
+    h.game.player.tile_x = SPARKY_HOME_TX + 1;
+    h.game.player.tile_y = SPARKY_HOME_TY;
+    h.game.player.x = (SPARKY_HOME_TX + 1) as f32 * 48.0;
+    h.game.player.y = SPARKY_HOME_TY as f32 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+    // Companion is hovering somewhere from following us. Park them off to
+    // the side so they don't collide with the interaction.
+    {
+        let c = h.game.companion.as_mut().unwrap();
+        c.entity.tile_x = SPARKY_HOME_TX + 2;
+        c.entity.tile_y = SPARKY_HOME_TY;
+        c.entity.x = (SPARKY_HOME_TX + 2) as f32 * 48.0;
+        c.entity.y = SPARKY_HOME_TY as f32 * 48.0;
+        c.entity.target_x = c.entity.x;
+        c.entity.target_y = c.entity.y;
+        c.entity.moving = false;
+        if let Some(p) = c.pathing.as_mut() { p.clear(); }
+    }
+
+    // Face Sparky (he's to the left) by holding Left for one frame — that
+    // sets player.dir without moving since Sparky soft-blocks.
+    h.hold(macroquad::prelude::KeyCode::Left);
+
+    let mark = h.mark();
+    h.interact();
+    h.select_option("give");
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    let events = h.events_since(mark);
+    let swap = events.iter().find_map(|e| match e {
+        GameEvent::CompanionChanged { joined, left } => Some((joined.clone(), left.clone())),
+        _ => None,
+    }).expect(&format!("expected CompanionChanged when gifting parked Sparky; got: {:?}", events));
+    assert_eq!(swap.0.as_deref(), Some("sparky"),
+        "Sparky should rejoin as the active buddy");
+    assert_eq!(swap.1.as_deref(), Some("mommy"),
+        "Mommy should be released back home when Sparky takes over again");
+
+    assert_eq!(h.game.current_buddy_id(), "sparky",
+        "after swap-back the buddy id should be 'sparky'");
+    assert!(!h.game.sparky_parked,
+        "Sparky should no longer be parked after swapping back in");
+    assert!(h.game.companion.is_none(),
+        "companion slot should be empty after Sparky returns as buddy");
+}

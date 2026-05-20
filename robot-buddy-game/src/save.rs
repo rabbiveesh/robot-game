@@ -17,6 +17,10 @@ pub struct SaveData {
     pub player_dir: Dir,
     pub sparky_x: usize,
     pub sparky_y: usize,
+    /// True iff an NPC has replaced Sparky as the buddy and Sparky is waiting
+    /// at his home tile. Defaults to false so old saves load Sparky as active.
+    #[serde(default)]
+    pub sparky_parked: bool,
     /// Legacy field — kept for deserializing old saves. Migrated into `profile` on load.
     #[serde(default)]
     #[serde(skip_serializing)]
@@ -28,6 +32,20 @@ pub struct SaveData {
     pub gifts_given: HashMap<String, u32>,
     #[serde(default = "LearnerProfile::new")]
     pub profile: LearnerProfile,
+    /// The NPC currently following the player, if any. Identified by the
+    /// stable id string (`NpcKind::as_str()`); position is restored from the
+    /// saved tile, all other fields are rebuilt from `npcs_for_map` of the
+    /// kind's home map. Older saves without this field deserialize as None.
+    #[serde(default)]
+    pub companion: Option<CompanionSave>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CompanionSave {
+    pub kind: String,
+    pub home_map: String,
+    pub tile_x: usize,
+    pub tile_y: usize,
 }
 
 impl SaveData {
