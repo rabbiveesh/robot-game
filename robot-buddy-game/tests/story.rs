@@ -959,3 +959,141 @@ fn gifting_parked_sparky_brings_him_back_and_sends_the_npc_home() {
     assert!(h.game.companion.is_none(),
         "companion slot should be empty after Sparky returns as buddy");
 }
+
+#[test]
+fn companion_snaps_to_the_player_after_a_portal_warp() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    // A swapped-in NPC companion used to keep its old-map coordinates and stale
+    // path trail across a warp — landing it in some random spot on the new map,
+    // adrift until the player walked up and tripped the adjacency reset. After
+    // the fix the companion gets the same post-warp treatment Sparky gets:
+    // teleported to the player's side with a cleared queue.
+    let mut h = Harness::new(3);
+    h.start_dev_game();
+    h.game.map = Map::home();
+    h.game.npcs = npc_mod::npcs_for_map("home");
+    h.game.npcs_offstage.clear();
+
+    // Recruit Mommy as the companion by hand (the swap mechanics are covered by
+    // other tests; here we only care about her position after the warp).
+    let mut mommy = h.game.npcs.iter().find(|n| n.kind == NpcKind::Mommy).cloned().unwrap();
+    h.game.npcs.retain(|n| n.kind != NpcKind::Mommy);
+    mommy.start_following();
+    // Strand her far from the door with an empty queue — the exact state that
+    // used to survive a warp untouched.
+    mommy.entity.tile_x = 1; mommy.entity.tile_y = 1;
+    mommy.entity.x = 48.0; mommy.entity.y = 48.0;
+    mommy.entity.target_x = mommy.entity.x; mommy.entity.target_y = mommy.entity.y;
+    h.game.companion = Some(mommy);
+    h.game.sparky_parked = true;
+
+    // Stand the player on the tile just above the home→overworld door (4,6).
+    h.game.player.tile_x = 4; h.game.player.tile_y = 5;
+    h.game.player.x = 4.0 * 48.0; h.game.player.y = 5.0 * 48.0;
+    h.game.player.target_x = h.game.player.x; h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    h.step_through_portal(KeyCode::Down, "overworld");
+
+    let c = h.game.companion.as_ref().expect("companion should survive the warp");
+    let dist = (c.entity.tile_x as i32 - h.game.player.tile_x as i32).abs()
+        + (c.entity.tile_y as i32 - h.game.player.tile_y as i32).abs();
+    assert!(dist <= 1,
+        "companion should land adjacent to the player after the warp; player at ({},{}), companion at ({},{})",
+        h.game.player.tile_x, h.game.player.tile_y, c.entity.tile_x, c.entity.tile_y);
+    assert!(!c.entity.moving, "companion should be at rest immediately after the warp");
+    assert!(c.is_following(), "companion keeps follower mode across a warp");
+    assert!(c.pathing.as_ref().unwrap().is_empty(),
+        "companion's stale path trail should be cleared by the warp");
+}
+
+#[test]
+fn swapping_npc_companions_voices_each_line_by_the_right_character() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    // Bug: when an NPC handed off to another NPC (e.g. Mommy → Bolt), Sparky
+    // narrated both the "joined" and "left" lines — even though he's parked off
+    // on his home map and isn't even in the scene. Each line should come from
+    // the character it's about: the newcomer greets, the departer says goodbye.
+    let mut h = Harness::new(5);
+    h.start_dev_game();
+    h.game.map = Map::shop();
+    h.game.npcs = npc_mod::npcs_for_map("shop");
+    h.game.npcs_offstage.clear();
+
+    // Mommy is the current companion; Sparky is parked away off-map.
+    let mut mommy = npc_mod::npcs_for_map("home").into_iter()
+        .find(|n| n.kind == NpcKind::Mommy).unwrap();
+    mommy.start_following();
+    h.game.companion = Some(mommy);
+    h.game.sparky_parked = true;
+
+    // Stand the player at (4,2), just left of Bolt the Shopkeeper at (5,2), and
+    // face him.
+    h.game.player.tile_x = 4; h.game.player.tile_y = 2;
+    h.game.player.x = 4.0 * 48.0; h.game.player.y = 2.0 * 48.0;
+    h.game.player.target_x = h.game.player.x; h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+    h.hold(KeyCode::Right); // face the shopkeeper
+
+    h.interact();
+    h.select_option("give");
+    h.wait_until(|g| g.state == GameState::Dialogue);
+
+    let lines = h.game.dialogue_lines();
+    let speakers: Vec<&str> = lines.iter().map(|(s, _)| s.as_str()).collect();
+    assert!(speakers.contains(&"Bolt the Shopkeeper"),
+        "the newcomer should greet in their own voice; lines were {:?}", lines);
+    assert!(speakers.contains(&"Mommy"),
+        "the departing companion should say goodbye in her own voice; lines were {:?}", lines);
+    assert!(!speakers.contains(&"Sparky"),
+        "Sparky isn't in this scene and shouldn't speak; lines were {:?}", lines);
+}
+
+#[test]
+fn wandering_npc_on_the_dream_portal_crosses_into_the_dream() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    // The secret dream portal is just an ordinary door to a wanderer: a kid
+    // that lands on it crosses into the dream world like any other portal,
+    // landing in the offstage dream roster to reappear when the player visits.
+    let mut h = Harness::new(2);
+    h.start_dev_game();
+    h.game.map = Map::overworld();
+    h.game.npcs = npc_mod::npcs_for_map("overworld");
+    h.game.npcs_offstage.clear();
+    h.game.dreaming = false;
+    // Keep the player (and the player-side portal handler) well away from the
+    // dream tile so only the NPC handler fires.
+    h.game.player.tile_x = 5; h.game.player.tile_y = 8;
+    h.game.player.x = 5.0 * 48.0; h.game.player.y = 8.0 * 48.0;
+    h.game.player.target_x = h.game.player.x; h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    // Drive the overworld Sage onto the secret dream portal tile (16,14) from
+    // the adjacent bridge tile (15,14).
+    let kind = h.game.npcs[0].kind;
+    {
+        let n = &mut h.game.npcs[0];
+        n.entity.tile_x = 15; n.entity.tile_y = 14;
+        n.entity.x = 15.0 * 48.0; n.entity.y = 14.0 * 48.0;
+        n.entity.target_x = n.entity.x; n.entity.target_y = n.entity.y;
+        n.entity.moving = false;
+        n.entity.start_move(16, 14);
+    }
+    h.advance(30);
+
+    assert!(!h.game.npcs.iter().any(|n| n.kind == kind),
+        "NPC should have left the overworld roster after crossing the dream portal");
+    let dream_stash = h.game.npcs_offstage.get("dream")
+        .expect("NPC should be stashed in the dream map after crossing the secret portal");
+    assert!(dream_stash.iter().any(|n| n.kind == kind),
+        "the wanderer should now live in the dream roster; got {:?}",
+        dream_stash.iter().map(|n| n.kind).collect::<Vec<_>>());
+}

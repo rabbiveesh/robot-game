@@ -395,6 +395,15 @@ impl Game {
         self.dialogue.active
     }
 
+    /// Test-facing snapshot of the current dialogue's lines as
+    /// `(speaker, text)` pairs, in order. Lets story tests assert on who says
+    /// what during a scene.
+    pub fn dialogue_lines(&self) -> Vec<(String, String)> {
+        self.dialogue.lines().iter()
+            .map(|l| (l.speaker.clone(), l.text.clone()))
+            .collect()
+    }
+
     /// True iff the player has finished any in-progress tile-to-tile slide.
     /// Movement on this game is grid-locked: each input direction starts a slide
     /// from one tile to the next, and inputs are ignored mid-slide.
@@ -1793,6 +1802,10 @@ impl Game {
                 Some(p) => p,
                 None => continue,
             };
+            // Secret portals (dream, doghouse, grove) carry NPCs too — they're
+            // ordinary doors as far as a wanderer is concerned. The dream world
+            // is just a copy of the overworld and every secret world has a
+            // non-secret exit, so a kid that drifts in can drift back out.
             self.transfer_npc_through_portal(i, portal);
         }
     }
@@ -1865,6 +1878,42 @@ impl Game {
         }
     }
 
+    /// Snap the active follower (Sparky or the NPC companion) to a free tile
+    /// next to the player and clear its path queue. Called after any warp so a
+    /// buddy never ends up stranded on the previous map's coordinates with a
+    /// stale trail — which would leave them adrift in some random spot, locked
+    /// until the player walked over and triggered the adjacency reset. Single
+    /// entry point for both follower kinds so that "post-warp reposition" can't
+    /// be applied to one and forgotten for the other.
+    fn snap_follower_to_player(&mut self) {
+        // Per the companion/Sparky invariant, exactly one of these follows at a
+        // time: a companion implies parked Sparky, and an unparked Sparky
+        // implies no companion. If nothing is following, there's nothing to do.
+        let (px, py) = (self.player.tile_x, self.player.tile_y);
+        let spot = find_sparky_spot(px, py, &self.map, &self.npcs);
+        if let Some(c) = self.companion.as_mut() {
+            let e = &mut c.entity;
+            e.tile_x = spot.0;
+            e.tile_y = spot.1;
+            e.x = spot.0 as f32 * TILE_SIZE;
+            e.y = spot.1 as f32 * TILE_SIZE;
+            e.target_x = e.x;
+            e.target_y = e.y;
+            e.moving = false;
+            if let Some(p) = c.pathing.as_mut() { p.clear(); }
+        } else if !self.sparky_parked {
+            let e = &mut self.sparky.entity;
+            e.tile_x = spot.0;
+            e.tile_y = spot.1;
+            e.x = spot.0 as f32 * TILE_SIZE;
+            e.y = spot.1 as f32 * TILE_SIZE;
+            e.target_x = e.x;
+            e.target_y = e.y;
+            e.moving = false;
+            self.sparky.pathing.clear();
+        }
+    }
+
     fn handle_portal(&mut self) {
         let portal = match tilemap::check_portal(self.map.id, self.player.tile_x, self.player.tile_y) {
             Some(p) => p,
@@ -1910,20 +1959,11 @@ impl Game {
         // bounce them to the nearest free tile.
         self.displace_npcs_at(dest_x, dest_y);
 
-        // Parked Sparky doesn't travel with the player — he waits on his
-        // home map. Only teleport him alongside the player when he's the
-        // active buddy.
-        if !self.sparky_parked {
-            let sparky_pos = find_sparky_spot(dest_x, dest_y, &self.map, &self.npcs);
-            self.sparky.entity.tile_x = sparky_pos.0;
-            self.sparky.entity.tile_y = sparky_pos.1;
-            self.sparky.entity.x = sparky_pos.0 as f32 * TILE_SIZE;
-            self.sparky.entity.y = sparky_pos.1 as f32 * TILE_SIZE;
-            self.sparky.entity.target_x = self.sparky.entity.x;
-            self.sparky.entity.target_y = self.sparky.entity.y;
-            self.sparky.entity.moving = false;
-            self.sparky.pathing.clear();
-        }
+        // Whoever's tagging along — Sparky or an NPC companion — snaps to the
+        // player's side on the destination map with a cleared path queue. One
+        // code path for both so a follower can never be left stranded on the
+        // old map's coordinates with a stale trail.
+        self.snap_follower_to_player();
 
         self.events.push(GameEvent::MapTransitioned {
             from: from_map,
@@ -1986,8 +2026,15 @@ impl Game {
             if let Some(c) = self.companion.as_ref() {
                 renderables.push(Renderable { y: c.entity.y, kind: SpriteKind::Npc(c) });
             }
+            // Cull roster NPCs outside the viewport. The map only draws the
+            // tiles under the camera (everything else is the void-blue clear
+            // color), so an unculled wanderer off to the side would float in
+            // that void instead of staying hidden until the camera reaches it.
+            let cam = (self.camera.x, self.camera.y);
             for n in &self.npcs {
-                renderables.push(Renderable { y: n.entity.y, kind: SpriteKind::Npc(n) });
+                if npc_in_camera(cam, n) {
+                    renderables.push(Renderable { y: n.entity.y, kind: SpriteKind::Npc(n) });
+                }
             }
             renderables.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap());
 
@@ -2486,26 +2533,27 @@ fn buddy_swap_dialogue(
     left: Option<&str>,
     mut reaction: Vec<DialogueLine>,
 ) -> Vec<DialogueLine> {
-    let join_text = if joined == "sparky" {
-        "BEEP BOOP! I'm BACK, boss! Let's go adventuring!".into()
+    // Each line is spoken by the character it's about — the newcomer says they
+    // want to come along, the departing buddy says their goodbye. Sparky only
+    // talks when Sparky is the one joining or leaving; he isn't even on the map
+    // when an NPC-to-NPC swap happens (e.g. Mommy hands off to Bolt), so making
+    // him narrate those would be nonsense.
+    let (join_speaker, join_text) = if joined == "sparky" {
+        ("Sparky".to_string(), "BEEP BOOP! I'm BACK, boss! Let's go adventuring!".to_string())
     } else {
-        format!(
-            "WHOA! {} wants to come adventure with us! BEEP BOOP!",
-            display_name_for_buddy_id(joined),
-        )
+        let name = display_name_for_buddy_id(joined);
+        (name, "Ooh, an adventure? I'd love to come along with you!".to_string())
     };
-    reaction.push(DialogueLine { speaker: "Sparky".into(), text: join_text });
+    reaction.push(DialogueLine { speaker: join_speaker, text: join_text });
 
     if let Some(prev) = left {
-        let leave_text = if prev == "sparky" {
-            "Sparky's heading back to Professor Gizmo to charge up!".into()
+        let (leave_speaker, leave_text) = if prev == "sparky" {
+            ("Sparky".to_string(), "Heading back to Professor Gizmo to charge up! Catch ya later, boss!".to_string())
         } else {
-            format!(
-                "{} is heading home — see ya later, friend!",
-                display_name_for_buddy_id(prev),
-            )
+            let name = display_name_for_buddy_id(prev);
+            (name, "I'll head on home now — have so much fun out there!".to_string())
         };
-        reaction.push(DialogueLine { speaker: "Sparky".into(), text: leave_text });
+        reaction.push(DialogueLine { speaker: leave_speaker, text: leave_text });
     }
     reaction
 }
