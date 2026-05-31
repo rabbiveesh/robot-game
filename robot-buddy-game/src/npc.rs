@@ -16,6 +16,7 @@ pub enum NpcKind {
     Shopkeeper,
     GlitchDog,
     GroveSpirit,
+    Pip,
     CtrlBand,
     CtrlKenkenLevel,
     CtrlCraReset,
@@ -38,6 +39,7 @@ impl NpcKind {
             NpcKind::Shopkeeper => "shopkeeper",
             NpcKind::GlitchDog => "glitch_dog",
             NpcKind::GroveSpirit => "grove_spirit",
+            NpcKind::Pip => "pip",
             NpcKind::CtrlBand => "ctrl_band",
             NpcKind::CtrlKenkenLevel => "ctrl_kenken_level",
             NpcKind::CtrlCraReset => "ctrl_cra_reset",
@@ -57,6 +59,7 @@ impl NpcKind {
             NpcKind::Shopkeeper => "Bolt the Shopkeeper",
             NpcKind::GlitchDog => "B0RK.exe",
             NpcKind::GroveSpirit => "Old Oak",
+            NpcKind::Pip => "Pip",
             NpcKind::CtrlBand => "Band Knob",
             NpcKind::CtrlKenkenLevel => "KenKen Knob",
             NpcKind::CtrlCraReset => "CRA Reset",
@@ -64,6 +67,24 @@ impl NpcKind {
             NpcKind::CtrlTriggerKenken => "Trigger KenKen",
             NpcKind::CtrlTriggerChallenge => "Trigger Challenge",
         }
+    }
+
+    /// Every kind, in declaration order. The single roster the string⇄kind
+    /// inverse walks — add a variant and the `as_str`/`display_name` matches
+    /// stop compiling until it's handled, which is the nudge to list it here.
+    pub const ALL: &'static [NpcKind] = &[
+        NpcKind::Sage, NpcKind::SageLab, NpcKind::DreamSage, NpcKind::Mommy,
+        NpcKind::Kid1, NpcKind::Kid2, NpcKind::Shopkeeper, NpcKind::GlitchDog,
+        NpcKind::GroveSpirit, NpcKind::Pip, NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
+        NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
+        NpcKind::CtrlTriggerChallenge,
+    ];
+
+    /// Inverse of `as_str`. Resolves a stable id token back to its kind without
+    /// caring which map the NPC lives on — so a buddy from any map (including a
+    /// brand-new one) gets a real display name, not a raw id fallback.
+    pub fn from_id(id: &str) -> Option<NpcKind> {
+        NpcKind::ALL.iter().copied().find(|k| k.as_str() == id)
     }
 
     pub fn is_dev_control(self) -> bool {
@@ -330,6 +351,13 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
         ],
         "grove" => vec![
             n(GroveSpirit, 6, 4, S::OldOak, true, false, false),
+        ],
+        // Dev-tier validation area, reachable from the dev map. Pip is a
+        // wandering, gift-eligible critter whose only home is here — used to
+        // prove the portal / wander / companion-swap systems work against a
+        // freshly added map with no special-casing.
+        "annex" => vec![
+            n(Pip, 4, 3, S::Kid2, true, true, false).wandering(),
         ],
         "control" => vec![
             // Dev knob bay -- each NPC is one control. game.rs intercepts dev-control

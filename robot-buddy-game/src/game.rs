@@ -2448,6 +2448,11 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
             "It's dangerous to go alone... take this!",
             "The leaves whisper your name... they say you are very clever.",
         ],
+        Pip => &[
+            "Squeak! You found my little clearing!",
+            "I like to wander in circles. It's very fun!",
+            "Got any snacks? I'm always a bit hungry, hehe!",
+        ],
         // Dev-control NPCs go through apply_dev_control, never this path.
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
         | CtrlTriggerKenken | CtrlTriggerChallenge => &["Hello there!"],
@@ -2560,14 +2565,12 @@ fn buddy_swap_dialogue(
 
 fn display_name_for_buddy_id(id: &str) -> String {
     if id == "sparky" { return "Sparky".into(); }
-    // Walk every map's roster looking for this id. Cheap — handful of NPCs
-    // per map. Returning the id verbatim is the graceful fallback.
-    for map_id in &["overworld", "home", "lab", "shop", "dream", "doghouse", "grove"] {
-        if let Some(npc) = npc::npcs_for_map(map_id).into_iter().find(|n| n.id_str() == id) {
-            return npc.kind.display_name().into();
-        }
-    }
-    id.into()
+    // Resolve the id straight to its kind — no map-roster walking, so a buddy
+    // from any map (even one added later) gets its real name. Raw id is the
+    // graceful fallback if the token is unknown.
+    npc::NpcKind::from_id(id)
+        .map(|k| k.display_name().to_string())
+        .unwrap_or_else(|| id.to_string())
 }
 
 fn speak_challenge_feedback(cs: &ChallengeState) {

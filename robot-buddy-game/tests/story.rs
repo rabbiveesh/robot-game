@@ -1152,3 +1152,119 @@ fn pushing_an_npc_onto_the_dream_portal_sends_them_into_the_dream() {
         "kid should now live in the dream roster; got {:?}",
         dream.iter().map(|n| n.kind).collect::<Vec<_>>());
 }
+
+// ─── New-map genericity: a freshly added map ("annex") plus a fresh NPC
+// ("Pip") exercise the portal / wander / companion-swap / warp-snap systems
+// with zero per-map special-casing. If any of these break, the architecture
+// has grown a hidden coupling to the existing map list. ───────────────────
+
+#[test]
+fn a_brand_new_map_supports_portals_companions_and_warp_snap() {
+    use macroquad::prelude::KeyCode;
+
+    let mut h = Harness::new(8);
+    h.start_dev_game();
+
+    // Stand on the dev tile just above the Annex door (13,10) and walk through.
+    h.game.player.tile_x = 13; h.game.player.tile_y = 9;
+    h.game.player.x = 13.0 * 48.0; h.game.player.y = 9.0 * 48.0;
+    h.game.player.target_x = h.game.player.x; h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    h.step_through_portal(KeyCode::Down, "annex");
+    assert_eq!(h.game.map.id, "annex", "player portal into a new map should work");
+
+    // The new map's wandering NPC loaded from the roster. Freeze her so we can
+    // walk up deliberately.
+    let pip = h.game.npcs.iter_mut().find(|n| n.kind == NpcKind::Pip)
+        .expect("annex roster should spawn Pip");
+    assert!(pip.wanders, "Pip should be a wanderer on the new map");
+    pip.wander_cooldown = 9999.0;
+
+    // Recruit Pip with a dum dum. The swap dialogue must name her properly —
+    // this is the generic display-name path that used to depend on a hardcoded
+    // list of map ids (which would have shown the raw "pip" token instead).
+    h.walk_to_npc(NpcKind::Pip);
+    h.interact();
+    h.select_option("give");
+    h.wait_until(|g| g.state == GameState::Dialogue);
+
+    let lines = h.game.dialogue_lines();
+    assert!(lines.iter().any(|(speaker, _)| speaker == "Pip"),
+        "the new-map NPC should greet under her real display name; lines were {:?}", lines);
+    // The join line is voiced via display_name_for_buddy_id(joined). The old
+    // map-list lookup didn't know about "annex", so it leaked the raw "pip"
+    // token as the speaker. Map-agnostic resolution must never do that.
+    assert!(!lines.iter().any(|(speaker, _)| speaker == "pip"),
+        "raw id token leaked as a speaker — display-name resolution is still map-coupled; lines were {:?}", lines);
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    assert_eq!(h.game.companion.as_ref().map(|c| c.kind), Some(NpcKind::Pip),
+        "Pip should now be the companion");
+    assert!(h.game.sparky_parked, "Sparky parks when an NPC takes over");
+
+    // Walk back to the Annex door and warp out — the companion from a brand-new
+    // map gets the same post-warp snap as any other buddy.
+    h.walk_to(4, 5);
+    h.step_through_portal(KeyCode::Down, "dev");
+    assert_eq!(h.game.map.id, "dev");
+
+    let c = h.game.companion.as_ref().expect("Pip should survive the warp");
+    let dist = (c.entity.tile_x as i32 - h.game.player.tile_x as i32).abs()
+        + (c.entity.tile_y as i32 - h.game.player.tile_y as i32).abs();
+    assert!(dist <= 1,
+        "Pip should snap adjacent after warping off the new map; player ({},{}), Pip ({},{})",
+        h.game.player.tile_x, h.game.player.tile_y, c.entity.tile_x, c.entity.tile_y);
+    assert!(c.pathing.as_ref().unwrap().is_empty(),
+        "Pip's path trail should be cleared by the warp");
+}
+
+#[test]
+fn pushing_an_npc_through_a_new_maps_portal_transfers_them() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    // The NPC-portal handler is map-agnostic: shoving Pip onto the Annex's exit
+    // door carries her to the dev map's offstage roster, no annex-specific code.
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = Map::annex();
+    h.game.npcs = npc_mod::npcs_for_map("annex");
+    h.game.npcs_offstage.clear();
+
+    let pip_idx = h.game.npcs.iter().position(|n| n.kind == NpcKind::Pip).unwrap();
+    {
+        let n = &mut h.game.npcs[pip_idx];
+        n.entity.tile_x = 4; n.entity.tile_y = 5;
+        n.entity.x = 4.0 * 48.0; n.entity.y = 5.0 * 48.0;
+        n.entity.target_x = n.entity.x; n.entity.target_y = n.entity.y;
+        n.entity.moving = false;
+        n.wander_cooldown = 9999.0;
+    }
+
+    // Keep Sparky out of the way.
+    h.game.sparky.entity.tile_x = 1; h.game.sparky.entity.tile_y = 1;
+    h.game.sparky.entity.x = 48.0; h.game.sparky.entity.y = 48.0;
+    h.game.sparky.entity.target_x = h.game.sparky.entity.x; h.game.sparky.entity.target_y = h.game.sparky.entity.y;
+    h.game.sparky.entity.moving = false;
+
+    // Player above Pip at (4,4), pushing Down toward the door at (4,6).
+    h.game.player.tile_x = 4; h.game.player.tile_y = 4;
+    h.game.player.x = 4.0 * 48.0; h.game.player.y = 4.0 * 48.0;
+    h.game.player.target_x = h.game.player.x; h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    for _ in 0..12 { h.hold(KeyCode::Down); }
+    h.advance(20);
+
+    assert_eq!(h.game.map.id, "annex", "player should stay on the annex; only Pip crosses");
+    assert!(!h.game.npcs.iter().any(|n| n.kind == NpcKind::Pip),
+        "Pip should have left the annex roster after being pushed through");
+    let dev = h.game.npcs_offstage.get("dev")
+        .expect("dev stash should exist after pushing Pip through the annex door");
+    assert!(dev.iter().any(|n| n.kind == NpcKind::Pip),
+        "Pip should now live in the dev roster; got {:?}",
+        dev.iter().map(|n| n.kind).collect::<Vec<_>>());
+}
