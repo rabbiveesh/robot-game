@@ -46,6 +46,12 @@ impl DialogueBox {
         self.active && !self.waiting_for_input
     }
 
+    /// Read-only view of the queued lines. Used by integration tests to assert
+    /// on who says what during a scene without driving the typewriter.
+    pub fn lines(&self) -> &[DialogueLine] {
+        &self.lines
+    }
+
     pub fn advance(&mut self) {
         if !self.active { return; }
         if !self.waiting_for_input {

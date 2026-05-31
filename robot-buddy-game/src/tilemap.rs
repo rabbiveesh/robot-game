@@ -77,6 +77,9 @@ pub fn all_portals() -> &'static [Portal] {
         // Dev → Control Room (knob bay for testing puzzle parameters in isolation)
         Portal { from_map: "dev", from_x: 1, from_y: 9, to_map: "control", to_x: 6, to_y: 1, dir: Dir::Down, secret: false },
         Portal { from_map: "control", from_x: 6, from_y: 7, to_map: "dev", to_x: 1, to_y: 9, dir: Dir::Up, secret: false },
+        // Dev → Annex (validation field for new-map genericity)
+        Portal { from_map: "dev", from_x: 13, from_y: 10, to_map: "annex", to_x: 4, to_y: 5, dir: Dir::Down, secret: false },
+        Portal { from_map: "annex", from_x: 4, from_y: 6, to_map: "dev", to_x: 13, to_y: 9, dir: Dir::Up, secret: false },
     ]
 }
 
@@ -293,8 +296,30 @@ impl Map {
                 vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
                 vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
                 vec![Wl,Dr,WF,WF,WF,WF,Rg,Rg,Rg,WF,WF,WF,WF,WF,WF,Wl],
-                vec![Wl,WF,WF,WF,WF,WF,Rg,WF,Rg,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,Rg,WF,Rg,WF,WF,WF,WF,Dr,WF,Wl],
                 vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
+            ],
+        }
+    }
+
+    /// Dev-tier validation field, reached through the Door at (13,10) of the
+    /// dev map. Plain grass clearing — exists to prove a brand-new map plugs
+    /// into the portal / wander / companion machinery with no special-casing.
+    #[allow(non_snake_case)]
+    pub fn annex() -> Self {
+        use Tile::*;
+        let (Tr, Gr, Dr) = (Tree, Grass, Door);
+        Map {
+            id: "annex", width: 10, height: 8, render_mode: RenderMode::Normal,
+            tiles: vec![
+                vec![Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Gr,Gr,Gr,Dr,Gr,Gr,Gr,Gr,Tr],
+                vec![Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr,Tr],
             ],
         }
     }
@@ -333,6 +358,7 @@ impl Map {
             "grove" => Self::grove(),
             "dev" => Self::dev(),
             "control" => Self::control(),
+            "annex" => Self::annex(),
             _ => Self::overworld(),
         }
     }

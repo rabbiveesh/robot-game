@@ -35,6 +35,9 @@
                     var val = UTF8ToString(val_ptr, val_len);
                     localStorage.setItem(key, val);
                 };
+                importObject.env.page_is_hidden = function() {
+                    return (document.hidden || document.visibilityState === "hidden") ? 1 : 0;
+                };
             },
             name: "localStorage",
             version: 1,

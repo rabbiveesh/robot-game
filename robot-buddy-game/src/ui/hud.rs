@@ -39,6 +39,7 @@ pub fn get_area_name(map_id: &str, tx: usize, ty: usize) -> &'static str {
         "grove" => "Hidden Grove",
         "dev" => "Dev Zone",
         "control" => "Control Room",
+        "annex" => "The Annex",
         _ => "???",
     }
 }
