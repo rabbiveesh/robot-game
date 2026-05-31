@@ -1097,3 +1097,58 @@ fn wandering_npc_on_the_dream_portal_crosses_into_the_dream() {
         "the wanderer should now live in the dream roster; got {:?}",
         dream_stash.iter().map(|n| n.kind).collect::<Vec<_>>());
 }
+
+#[test]
+fn pushing_an_npc_onto_the_dream_portal_sends_them_into_the_dream() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    // The player can also deliberately shove a wandering kid through the secret
+    // dream portal: push composes with the NPC-portal handler the same way it
+    // does for ordinary doors.
+    let mut h = Harness::new(4);
+    h.start_dev_game();
+    h.game.map = Map::overworld();
+    h.game.npcs_offstage.clear();
+    h.game.dreaming = false;
+
+    // Lone wandering kid on the bridge tile (15,14), right next to the dream
+    // portal water tile (16,14). Cooldown frozen so she holds still to be shoved.
+    let mut kid = npc_mod::npcs_for_map("home").into_iter()
+        .find(|n| n.kind == NpcKind::Kid1).unwrap();
+    kid.entity.tile_x = 15; kid.entity.tile_y = 14;
+    kid.entity.x = 15.0 * 48.0; kid.entity.y = 14.0 * 48.0;
+    kid.entity.target_x = kid.entity.x; kid.entity.target_y = kid.entity.y;
+    kid.entity.moving = false;
+    kid.wander_cooldown = 9999.0;
+    h.game.npcs = vec![kid];
+
+    // Keep Sparky out of the way on the far side of the map.
+    h.game.sparky.entity.tile_x = 5; h.game.sparky.entity.tile_y = 8;
+    h.game.sparky.entity.x = 5.0 * 48.0; h.game.sparky.entity.y = 8.0 * 48.0;
+    h.game.sparky.entity.target_x = h.game.sparky.entity.x; h.game.sparky.entity.target_y = h.game.sparky.entity.y;
+    h.game.sparky.entity.moving = false;
+
+    // Player on the bridge at (14,14), pushing Right into the kid.
+    h.game.player.tile_x = 14; h.game.player.tile_y = 14;
+    h.game.player.x = 14.0 * 48.0; h.game.player.y = 14.0 * 48.0;
+    h.game.player.target_x = h.game.player.x; h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    // Build pressure until the push fires (~11 frames), then release so the
+    // player doesn't chain onto the portal after the kid clears it.
+    for _ in 0..12 { h.hold(KeyCode::Right); }
+    h.advance(20);
+
+    assert_eq!(h.game.map.id, "overworld",
+        "player should stay on the overworld; only the kid crosses");
+    assert!(!h.game.npcs.iter().any(|n| n.kind == NpcKind::Kid1),
+        "kid should have left the overworld roster after being pushed through; got {:?}",
+        h.game.npcs.iter().map(|n| n.kind).collect::<Vec<_>>());
+    let dream = h.game.npcs_offstage.get("dream")
+        .expect("dream stash should exist after pushing the kid through");
+    assert!(dream.iter().any(|n| n.kind == NpcKind::Kid1),
+        "kid should now live in the dream roster; got {:?}",
+        dream.iter().map(|n| n.kind).collect::<Vec<_>>());
+}
