@@ -23,6 +23,7 @@ pub enum NpcKind {
     CtrlIntroReset,
     CtrlTriggerKenken,
     CtrlTriggerPattern,
+    CtrlTriggerBalance,
     CtrlTriggerChallenge,
 }
 
@@ -47,6 +48,7 @@ impl NpcKind {
             NpcKind::CtrlIntroReset => "ctrl_intro_reset",
             NpcKind::CtrlTriggerKenken => "ctrl_trigger_kenken",
             NpcKind::CtrlTriggerPattern => "ctrl_trigger_pattern",
+            NpcKind::CtrlTriggerBalance => "ctrl_trigger_balance",
             NpcKind::CtrlTriggerChallenge => "ctrl_trigger_challenge",
         }
     }
@@ -68,6 +70,7 @@ impl NpcKind {
             NpcKind::CtrlIntroReset => "Intro Reset",
             NpcKind::CtrlTriggerKenken => "Trigger KenKen",
             NpcKind::CtrlTriggerPattern => "Trigger Pattern",
+            NpcKind::CtrlTriggerBalance => "Trigger Balance",
             NpcKind::CtrlTriggerChallenge => "Trigger Challenge",
         }
     }
@@ -80,7 +83,7 @@ impl NpcKind {
         NpcKind::Kid1, NpcKind::Kid2, NpcKind::Shopkeeper, NpcKind::GlitchDog,
         NpcKind::GroveSpirit, NpcKind::Pip, NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
-        NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerChallenge,
+        NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerBalance, NpcKind::CtrlTriggerChallenge,
     ];
 
     /// Inverse of `as_str`. Resolves a stable id token back to its kind without
@@ -94,7 +97,8 @@ impl NpcKind {
         matches!(self,
             NpcKind::CtrlBand | NpcKind::CtrlKenkenLevel | NpcKind::CtrlCraReset
             | NpcKind::CtrlIntroReset | NpcKind::CtrlTriggerKenken
-            | NpcKind::CtrlTriggerPattern | NpcKind::CtrlTriggerChallenge)
+            | NpcKind::CtrlTriggerPattern | NpcKind::CtrlTriggerBalance
+            | NpcKind::CtrlTriggerChallenge)
     }
 }
 
@@ -371,6 +375,7 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(CtrlIntroReset,      10,  2, S::Dog,        false, true, false),
             n(CtrlTriggerKenken,    3,  5, S::Kid1,       false, true, false),
             n(CtrlTriggerPattern,   5,  5, S::Sage,       false, true, false),
+            n(CtrlTriggerBalance,   6,  5, S::OldOak,     false, true, false),
             n(CtrlTriggerChallenge, 8,  5, S::Kid2,       false, true, false),
         ],
         "dev" => vec![

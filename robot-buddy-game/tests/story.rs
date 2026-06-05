@@ -224,6 +224,62 @@ fn pattern_wrong_pick_bounces_back_then_solves() {
 }
 
 #[test]
+fn sage_offers_balance_and_solving_it_rewards() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Sage);
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu);
+
+    let mark = h.mark();
+    let start_dums = h.game.dum_dums;
+    h.select_option("balance");
+    h.wait_until(|g| g.state == GameState::Balance);
+
+    h.solve_balance_correctly();
+
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::BalanceStarted { .. })),
+        "expected BalanceStarted; got: {:?}", events,
+    );
+    let resolved = events.iter().find_map(|e| match e {
+        GameEvent::BalanceResolved { correct, attempts, .. } => Some((*correct, *attempts)),
+        _ => None,
+    }).expect(&format!("expected BalanceResolved; got: {:?}", events));
+    assert_eq!(resolved, (true, 1), "one clean guess solves it");
+    assert_eq!(h.game.dum_dums, start_dums + 1, "solving a balance awards a dum dum");
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
+fn balance_wrong_guess_tips_then_solves() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Sage);
+    h.interact();
+
+    let mark = h.mark();
+    h.select_option("balance");
+    h.wait_until(|g| g.state == GameState::Balance);
+
+    h.select_wrong_balance_value();
+    assert_eq!(h.game.state, GameState::Balance, "a wrong guess keeps the scale open");
+    {
+        let ab = h.game.active_balance().expect("balance still active after a wrong guess");
+        assert!(ab.session.last_wrong.is_some(), "wrong guess recorded for the tip animation");
+    }
+
+    h.solve_balance_correctly();
+    let events = h.events_since(mark);
+    let attempts = events.iter().find_map(|e| match e {
+        GameEvent::BalanceResolved { attempts, .. } => Some(*attempts),
+        _ => None,
+    }).expect("expected BalanceResolved");
+    assert!(attempts >= 2, "wrong then right is at least two attempts, got {attempts}");
+}
+
+#[test]
 fn kenken_intro_shows_on_first_puzzle_only() {
     let mut h = Harness::new(7);
     h.start_dev_game();

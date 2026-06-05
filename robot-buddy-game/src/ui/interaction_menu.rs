@@ -61,6 +61,8 @@ pub fn handle_input(layout: &Layout, input: &FrameInput) -> Option<MenuAction> {
             1 => Some(KeyCode::Key1),
             2 => Some(KeyCode::Key2),
             3 => Some(KeyCode::Key3),
+            4 => Some(KeyCode::Key4),
+            5 => Some(KeyCode::Key5),
             _ => None,
         };
         if let Some(kc) = kc {

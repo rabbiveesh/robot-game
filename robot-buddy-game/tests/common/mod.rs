@@ -269,6 +269,8 @@ impl Harness {
             1 => KeyCode::Key1,
             2 => KeyCode::Key2,
             3 => KeyCode::Key3,
+            4 => KeyCode::Key4,
+            5 => KeyCode::Key5,
             n => panic!("unsupported option key {}", n),
         };
         self.press(key);
@@ -408,6 +410,43 @@ impl Harness {
             ap.session.puzzle.correct_choice()
         };
         self.select_pattern_choice(correct);
+        self.press(KeyCode::Space);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
+    // ─── Balance helpers ─────────────────────────────────
+
+    /// Click the choice whose value equals `value` in the active balance puzzle.
+    pub fn select_balance_value(&mut self, value: i32) {
+        let (x, y) = {
+            let ab = self.game.active_balance().expect("select_balance_value: no active balance");
+            let layout = ui::balance::layout(&ab.session, SCREEN);
+            let rect = layout.choices.iter().find(|c| c.value == value)
+                .unwrap_or_else(|| panic!("select_balance_value: no choice {value}")).rect;
+            (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Pick a deliberately wrong value to exercise the tip-and-retry path.
+    pub fn select_wrong_balance_value(&mut self) {
+        let wrong = {
+            let ab = self.game.active_balance().expect("select_wrong_balance_value: no active balance");
+            let answer = ab.session.puzzle.correct_answer;
+            ab.session.puzzle.choices.iter().copied().find(|&v| v != answer)
+                .expect("balance must have a wrong choice")
+        };
+        self.select_balance_value(wrong);
+    }
+
+    /// Solve the active balance by guessing the correct answer, then dismiss the
+    /// celebration and land back in Playing.
+    pub fn solve_balance_correctly(&mut self) {
+        let answer = {
+            let ab = self.game.active_balance().expect("solve_balance_correctly: no active balance");
+            ab.session.puzzle.correct_answer
+        };
+        self.select_balance_value(answer);
         self.press(KeyCode::Space);
         self.wait_until(|g| g.state == GameState::Playing);
     }

@@ -68,6 +68,12 @@ pub fn get_interaction_options(npc: &NpcInfo, player_state: &PlayerState) -> Vec
             label: "Spot the Pattern".into(),
             key,
         });
+        let key = (options.len() + 1).to_string();
+        options.push(InteractionOption {
+            option_type: "balance".into(),
+            label: "Balance the Scale".into(),
+            key,
+        });
     }
 
     options
@@ -143,5 +149,22 @@ mod tests {
             &PlayerState { dum_dums: 0 },
         );
         assert!(!opts.iter().any(|o| o.option_type == "pattern"));
+    }
+
+    #[test]
+    fn includes_balance_when_npc_is_puzzler() {
+        let opts = get_interaction_options(
+            &NpcInfo { id: "sage".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: Some(true) },
+            &PlayerState { dum_dums: 0 },
+        );
+        assert!(opts.iter().any(|o| o.option_type == "balance"),
+            "puzzler NPCs should expose a 'balance' option, got: {:?}",
+            opts.iter().map(|o| &o.option_type).collect::<Vec<_>>());
+        // Keys stay unique and sequential even with the extra puzzle options.
+        let keys: Vec<&str> = opts.iter().map(|o| o.key.as_str()).collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), keys.len(), "menu keys must be unique: {keys:?}");
     }
 }
