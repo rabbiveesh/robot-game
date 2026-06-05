@@ -88,10 +88,19 @@ impl KenKenSession {
                 grid[r as usize][c as usize] = Some(cage.target as u8);
             }
         }
+        // A well-formed puzzle always leaves cells to solve, but guard against a
+        // degenerate fully-given grid: if the givens alone already solve it, the
+        // kid would otherwise be stuck (no cell accepts input, no action ever
+        // fires to flip the phase). Report Complete instead of freezing.
+        let phase = if is_solved(&puzzle, &grid) {
+            KenKenPhase::Complete
+        } else {
+            KenKenPhase::InProgress
+        };
         KenKenSession {
             puzzle,
             grid,
-            phase: KenKenPhase::InProgress,
+            phase,
             hints_used: 0,
             constraint_violations: 0,
             last_violation: None,
@@ -368,7 +377,16 @@ pub fn generate_kenken(
         allowed_ops.to_vec()
     };
 
-    for _ in 0..80 {
+    let cap = max_givens(grid_size);
+
+    // Among the attempts that yield a uniquely-solvable puzzle with cells left
+    // to deduce, keep the one with the fewest single-cell givens. We accept the
+    // first that already meets the given-cap (the common case once cage sizes
+    // are biased away from singletons); otherwise the best-so-far still beats a
+    // hand-crafted fallback and never freezes.
+    let mut best: Option<KenKenPuzzle> = None;
+    let mut best_givens = usize::MAX;
+    for _ in 0..120 {
         let solution = random_latin_square(grid_size, rng);
         let cages = generate_cages(&solution, &allowed, rng);
         let puzzle = KenKenPuzzle {
@@ -376,11 +394,54 @@ pub fn generate_kenken(
             solution: solution.clone(),
             cages,
         };
-        if count_solutions(&puzzle, 2) == 1 {
+        let givens = puzzle.cages.iter().filter(|c| c.cells.len() == 1).count();
+        // Reject fully-given puzzles outright — they have no cell to solve and
+        // would freeze the kid even though they're technically "unique".
+        let total = (grid_size as usize) * (grid_size as usize);
+        if givens >= total {
+            continue;
+        }
+        if count_solutions(&puzzle, 2) != 1 {
+            continue;
+        }
+        if givens <= cap {
             return puzzle;
         }
+        if givens < best_givens {
+            best_givens = givens;
+            best = Some(puzzle);
+        }
     }
-    fallback_puzzle(grid_size)
+    best.unwrap_or_else(|| fallback_puzzle(grid_size))
+}
+
+/// Maximum number of single-cell "given" cages a generated puzzle may contain.
+/// More givens = less to deduce; too many makes the puzzle trivial ("stupid").
+/// A unique 2×2 needs at least one given, so the floor is 1.
+fn max_givens(grid_size: u8) -> usize {
+    (grid_size as usize / 2).max(1)
+}
+
+/// Largest cage (in cells) the generator will grow. Bigger cages mean more
+/// arithmetic per cage and fewer givens, but get harder to keep uniquely
+/// solvable, so they're bounded by grid size.
+fn max_cage_size(n: usize) -> usize {
+    if n <= 4 { 3 } else { 4 }
+}
+
+/// Pick a cage size, biased away from singletons. Single-cell cages become
+/// "givens" (pre-filled hints); a grid full of them has nothing to solve, so we
+/// only roll size 1 occasionally and otherwise spread across 2..=max_size.
+fn pick_cage_size(max_size: usize, rng: &mut impl Rng) -> usize {
+    if max_size <= 1 {
+        return 1;
+    }
+    // ~15% singletons, the rest uniform over 2..=max_size.
+    if rng.gen_range(0..100) < 15 {
+        1
+    } else {
+        rng.gen_range(2..=max_size)
+    }
 }
 
 fn random_latin_square(n: u8, rng: &mut impl Rng) -> Vec<Vec<u8>> {
@@ -414,7 +475,7 @@ fn generate_cages(
     let mut assigned: Vec<Vec<bool>> = vec![vec![false; n]; n];
     let mut cage_cells: Vec<Vec<(u8, u8)>> = Vec::new();
 
-    let max_size: usize = if n <= 2 { 2 } else if n <= 4 { 3 } else { 4 };
+    let max_size: usize = max_cage_size(n);
 
     let mut order: Vec<(usize, usize)> = (0..n).flat_map(|r| (0..n).map(move |c| (r, c))).collect();
     order.shuffle(rng);
@@ -423,7 +484,7 @@ fn generate_cages(
         if assigned[r][c] {
             continue;
         }
-        let target_size = rng.gen_range(1..=max_size);
+        let target_size = pick_cage_size(max_size, rng);
         let cells = grow_cage((r, c), target_size, &assigned, n, rng);
         for &(cr, cc) in &cells {
             assigned[cr][cc] = true;
@@ -906,5 +967,76 @@ mod tests {
             .flat_map(|row| row.iter())
             .filter(|c| c.is_some())
             .count()
+    }
+
+    // ─── Quality / freeze-prevention tests ──────────────
+
+    fn given_count(p: &KenKenPuzzle) -> usize {
+        p.cages.iter().filter(|c| c.cells.len() == 1).count()
+    }
+
+    fn empty_cell_count(p: &KenKenPuzzle) -> usize {
+        let s = KenKenSession::new(p.clone());
+        s.grid.iter().flatten().filter(|c| c.is_none()).count()
+    }
+
+    #[test]
+    fn generated_puzzles_are_never_fully_given() {
+        // A fully-given puzzle starts already-solved but the reducer never
+        // transitions it to Complete (no action is ever dispatched), so the kid
+        // is stuck staring at a finished grid with no legal input — a hard
+        // freeze. Generation must always leave at least one cell to solve.
+        for band in [1u8, 3, 5, 9] {
+            let ops = cage_ops_for_band(band);
+            for seed in 0..200u64 {
+                let mut r = SmallRng::seed_from_u64(seed);
+                for n in [2u8, 3, 4] {
+                    let p = generate_kenken(n, &ops, &mut r);
+                    assert!(
+                        empty_cell_count(&p) >= 1,
+                        "n={n} band={band} seed={seed}: fully-given puzzle would freeze",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn low_level_puzzles_have_real_deduction() {
+        // "Stupid" low levels were mostly pre-filled givens — almost nothing to
+        // deduce. Cap the number of single-cell givens so the kid actually
+        // works out most of the grid.
+        for seed in 0..300u64 {
+            let mut r = SmallRng::seed_from_u64(seed);
+            let ops = cage_ops_for_band(1);
+            for n in [2u8, 3, 4] {
+                let p = generate_kenken(n, &ops, &mut r);
+                let givens = given_count(&p);
+                let cap = max_givens(n);
+                assert!(
+                    givens <= cap,
+                    "n={n} seed={seed}: {givens} givens exceeds cap {cap}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn session_marks_complete_when_grid_starts_solved() {
+        // Belt-and-suspenders: even if a degenerate fully-given puzzle reaches
+        // a session, it must not freeze — it should report Complete immediately.
+        let single = |r: u8, c: u8, v: u8| Cage {
+            cells: vec![(r, c)],
+            target: v as i32,
+            operation: CageOp::Add,
+            display_label: format!("{v}"),
+        };
+        let p = KenKenPuzzle {
+            grid_size: 2,
+            solution: vec![vec![1, 2], vec![2, 1]],
+            cages: vec![single(0, 0, 1), single(0, 1, 2), single(1, 0, 2), single(1, 1, 1)],
+        };
+        let s = KenKenSession::new(p);
+        assert_eq!(s.phase, KenKenPhase::Complete);
     }
 }
