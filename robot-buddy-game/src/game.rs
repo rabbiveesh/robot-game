@@ -30,6 +30,9 @@ use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerStat
 use robot_buddy_domain::logic::kenken::{
     self, KenKenAction, KenKenPhase, KenKenSession, cage_ops_for_band, generate_kenken,
 };
+use robot_buddy_domain::logic::patterns::{
+    self, PatternPhase, PatternSession, generate_for_level,
+};
 use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel};
 use robot_buddy_domain::world::movement::{
     Direction, EntityId, EntityState, GridDims, MoveIntent, MoveResolution,
@@ -74,6 +77,7 @@ pub enum GameState {
     Dialogue,
     Challenge,
     KenKen,
+    Pattern,
 }
 
 #[derive(PartialEq, Debug)]
@@ -127,6 +131,13 @@ pub struct ActiveKenKen {
     /// `None` once the kid has tapped past the last step (or already saw the
     /// intro previously). Domain reducer never sees this — it's UI-only state.
     pub intro_step: Option<u8>,
+}
+
+pub struct ActivePattern {
+    pub session: PatternSession,
+    pub complete_timer: f32,
+    pub start_time: f32,
+    pub source_npc: String,
 }
 
 // ─── Sprites/movement ───────────────────────────────────
@@ -236,6 +247,13 @@ pub enum GameEvent {
         constraint_violations: u8,
         response_ms: f64,
     },
+    PatternStarted { level: u8, source: String },
+    PatternResolved {
+        correct: bool,
+        level: u8,
+        attempts: u8,
+        response_ms: f64,
+    },
 }
 
 // ─── The Game ───────────────────────────────────────────
@@ -280,6 +298,7 @@ pub struct Game {
     intake: Option<IntakeState>,
     active_challenge: Option<ActiveChallenge>,
     active_kenken: Option<ActiveKenKen>,
+    active_pattern: Option<ActivePattern>,
     pending_challenge: bool,
     new_game_form: Option<NewGameForm>,
 
@@ -351,6 +370,7 @@ impl Game {
             intake: None,
             active_challenge: None,
             active_kenken: None,
+            active_pattern: None,
             pending_challenge: false,
             new_game_form: None,
             player_name: String::new(),
@@ -433,6 +453,12 @@ impl Game {
         self.active_kenken.as_ref()
     }
 
+    /// Read-only view of the active pattern session (None if none is on screen).
+    /// Tests use this with `ui::patterns::layout` to compute click targets.
+    pub fn active_pattern(&self) -> Option<&ActivePattern> {
+        self.active_pattern.as_ref()
+    }
+
     /// Snapshot of the event log length. Pair with `events_since(mark)` to
     /// read events emitted by a specific action — the basic assertion pattern
     /// for tests that care about *what just happened*, not just end-state.
@@ -490,6 +516,7 @@ impl Game {
             self.dialogue.active = false;
             self.active_challenge = None;
             self.active_kenken = None;
+            self.active_pattern = None;
             self.pending_challenge = false;
         }
         self.dum_dum_hud.update(dt);
@@ -575,6 +602,7 @@ impl Game {
             GameState::Dialogue => { self.step_dialogue(input); false }
             GameState::Challenge => { self.step_challenge(input, dt, screen); false }
             GameState::KenKen => { self.step_kenken(input, dt, screen); false }
+            GameState::Pattern => { self.step_pattern(input, dt, screen); false }
         }
     }
 
@@ -1315,6 +1343,16 @@ impl Game {
                 self.active_kenken = Some(ak);
                 self.set_state(GameState::KenKen);
             }
+            CtrlTriggerPattern => {
+                let source = kind.as_str().to_string();
+                let ap = start_pattern(&mut self.rng, &self.profile, self.game_time, source.clone());
+                self.events.push(GameEvent::PatternStarted {
+                    level: self.profile.pattern_level,
+                    source,
+                });
+                self.active_pattern = Some(ap);
+                self.set_state(GameState::Pattern);
+            }
             CtrlTriggerChallenge => {
                 let ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
                 self.events.push(GameEvent::ChallengeStarted {
@@ -1437,6 +1475,74 @@ impl Game {
         }
     }
 
+    fn step_pattern(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        let mut dismiss = false;
+        if let Some(ref mut ap) = self.active_pattern {
+            if ap.session.phase == PatternPhase::Complete {
+                // Celebrate, then auto-dismiss — or let any input move on.
+                ap.complete_timer += dt;
+                if ap.complete_timer >= 2.0 {
+                    dismiss = true;
+                }
+                if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) || input.mouse_clicked {
+                    dismiss = true;
+                }
+            } else {
+                let layout = ui::patterns::layout(&ap.session, screen);
+                if let Some(ui::patterns::PatternInput::Action(action)) =
+                    ui::patterns::handle_key(&ap.session, input)
+                {
+                    ap.session = patterns::pattern_reducer(ap.session.clone(), action);
+                } else if input.mouse_clicked {
+                    let (mx, my) = input.mouse_pos;
+                    if let Some(ui::patterns::PatternInput::Action(action)) =
+                        ui::patterns::handle_click(mx, my, &ap.session, &layout)
+                    {
+                        ap.session = patterns::pattern_reducer(ap.session.clone(), action);
+                    }
+                }
+            }
+        }
+
+        if dismiss {
+            if let Some(ap) = self.active_pattern.take() {
+                let was_correct = ap.session.phase == PatternPhase::Complete;
+                let response_ms = ((self.game_time - ap.start_time) as f64 * 1000.0).min(120000.0);
+                let level = self.profile.pattern_level;
+                let attempts = ap.session.attempts;
+
+                self.profile = learner_reducer(self.profile.clone(), LearnerEvent::PatternAttempted {
+                    correct: was_correct,
+                    level,
+                    attempts,
+                    response_time_ms: Some(response_ms),
+                });
+
+                if was_correct {
+                    // Same reward shape as a correct challenge or kenken: 1 Dum Dum.
+                    let award = 1u32;
+                    self.dum_dums += award;
+                    self.dum_dum_hud.flash();
+                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                }
+
+                self.events.push(GameEvent::PatternResolved {
+                    correct: was_correct,
+                    level,
+                    attempts,
+                    response_ms,
+                });
+            }
+            self.set_state(GameState::Playing);
+
+            if self.map.id != "dev" {
+                let save_data = self.gather_save_data();
+                self.save_backend.save_to(self.active_slot, &save_data);
+                self.auto_save_timer = 0.0;
+            }
+        }
+    }
+
     fn handle_interaction_menu(&mut self, input: &FrameInput, screen: (f32, f32)) {
         let layout = ui::interaction_menu::layout(&self.menu_options, screen);
         let action = ui::interaction_menu::handle_input(&layout, input);
@@ -1475,6 +1581,16 @@ impl Game {
                     });
                     self.active_kenken = Some(ak);
                     self.set_state(GameState::KenKen);
+                }
+                "pattern" => {
+                    let source = self.menu_target_id.clone();
+                    let ap = start_pattern(&mut self.rng, &self.profile, self.game_time, source);
+                    self.events.push(GameEvent::PatternStarted {
+                        level: self.profile.pattern_level,
+                        source: ap.source_npc.clone(),
+                    });
+                    self.active_pattern = Some(ap);
+                    self.set_state(GameState::Pattern);
                 }
                 "give" => {
                     if !give::can_give(self.dum_dums) {
@@ -1540,6 +1656,7 @@ impl Game {
                         self.dialogue.active = false;
                         self.active_challenge = None;
                         self.active_kenken = None;
+                        self.active_pattern = None;
                         self.pending_challenge = false;
                         self.set_state(GameState::Title);
                     }
@@ -2105,6 +2222,12 @@ impl Game {
             ui::kenken::draw_kenken(&ak.session, &layout, self.game_time, ak.selected, ak.intro_step);
         }
 
+        // Pattern overlay
+        if let Some(ref ap) = self.active_pattern {
+            let layout = ui::patterns::layout(&ap.session, screen);
+            ui::patterns::draw_pattern(&ap.session, &layout, self.game_time);
+        }
+
         if self.settings_open {
             ui::settings_overlay::draw(screen);
         }
@@ -2272,6 +2395,17 @@ fn start_kenken(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, so
         start_time: game_time,
         source_npc: source,
         intro_step,
+    }
+}
+
+fn start_pattern(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, source: String) -> ActivePattern {
+    let level = profile.pattern_level.max(1);
+    let puzzle = generate_for_level(level, rng);
+    ActivePattern {
+        session: PatternSession::new(puzzle),
+        complete_timer: 0.0,
+        start_time: game_time,
+        source_npc: source,
     }
 }
 
@@ -2455,7 +2589,7 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
         ],
         // Dev-control NPCs go through apply_dev_control, never this path.
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
-        | CtrlTriggerKenken | CtrlTriggerChallenge => &["Hello there!"],
+        | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerChallenge => &["Hello there!"],
     };
     let idx = rng.gen_range(0..lines.len());
     vec![DialogueLine { speaker: npc.name().into(), text: lines[idx].into() }]

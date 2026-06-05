@@ -158,6 +158,72 @@ fn sage_offers_kenken_and_solving_it_completes_the_session() {
 }
 
 #[test]
+fn sage_offers_pattern_and_solving_it_rewards() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Sage);
+
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu,
+        "puzzler NPC should open the menu with a pattern option");
+
+    let mark = h.mark();
+    let start_dums = h.game.dum_dums;
+    h.select_option("pattern");
+    h.wait_until(|g| g.state == GameState::Pattern);
+
+    h.solve_pattern_correctly();
+
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::PatternStarted { .. })),
+        "expected PatternStarted; got: {:?}", events,
+    );
+    let resolved = events.iter().find_map(|e| match e {
+        GameEvent::PatternResolved { correct, attempts, .. } => Some((*correct, *attempts)),
+        _ => None,
+    }).expect(&format!("expected PatternResolved; got: {:?}", events));
+    assert_eq!(resolved.0, true, "solving with the correct first pick is correct");
+    assert_eq!(resolved.1, 1, "one clean pick = one attempt");
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::DumDumsAwarded { .. })),
+        "solving a pattern should award dum_dums; got: {:?}", events,
+    );
+    assert_eq!(h.game.dum_dums, start_dums + 1);
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
+fn pattern_wrong_pick_bounces_back_then_solves() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Sage);
+    h.interact();
+
+    let mark = h.mark();
+    h.select_option("pattern");
+    h.wait_until(|g| g.state == GameState::Pattern);
+
+    // A wrong pick must NOT end the puzzle — it bounces back for another try
+    // (fail gracefully, never punish).
+    h.select_wrong_pattern_choice();
+    assert_eq!(h.game.state, GameState::Pattern, "wrong pick should keep the puzzle open");
+    {
+        let ap = h.game.active_pattern().expect("pattern still active after a wrong pick");
+        assert!(ap.session.last_wrong.is_some(), "wrong pick recorded for bounce-back");
+    }
+
+    h.solve_pattern_correctly();
+    let events = h.events_since(mark);
+    let attempts = events.iter().find_map(|e| match e {
+        GameEvent::PatternResolved { attempts, .. } => Some(*attempts),
+        _ => None,
+    }).expect("expected PatternResolved");
+    assert!(attempts >= 2, "a wrong pick then a right one is at least two attempts, got {attempts}");
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
 fn kenken_intro_shows_on_first_puzzle_only() {
     let mut h = Harness::new(7);
     h.start_dev_game();

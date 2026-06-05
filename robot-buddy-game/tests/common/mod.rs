@@ -374,6 +374,44 @@ impl Harness {
         self.wait_until(|g| g.state == GameState::Playing);
     }
 
+    // ─── Pattern helpers ─────────────────────────────────
+
+    /// Click the choice at `index` in the active pattern puzzle.
+    pub fn select_pattern_choice(&mut self, index: usize) {
+        let (x, y) = {
+            let ap = self.game.active_pattern().expect("select_pattern_choice: no active pattern");
+            let layout = ui::patterns::layout(&ap.session, SCREEN);
+            let rect = layout.choices.iter().find(|c| c.index == index)
+                .expect("select_pattern_choice: choice index out of range").rect;
+            (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Pick a deliberately wrong choice (no-op if the puzzle has only the
+    /// answer, which never happens). Lets tests exercise the bounce-back path.
+    pub fn select_wrong_pattern_choice(&mut self) {
+        let wrong = {
+            let ap = self.game.active_pattern().expect("select_wrong_pattern_choice: no active pattern");
+            let correct = ap.session.puzzle.correct_choice();
+            (0..ap.session.puzzle.choices.len()).find(|&i| i != correct)
+                .expect("pattern must have at least one wrong choice")
+        };
+        self.select_pattern_choice(wrong);
+    }
+
+    /// Solve the active pattern by clicking the correct choice, then dismiss the
+    /// celebration and land back in Playing.
+    pub fn solve_pattern_correctly(&mut self) {
+        let correct = {
+            let ap = self.game.active_pattern().expect("solve_pattern_correctly: no active pattern");
+            ap.session.puzzle.correct_choice()
+        };
+        self.select_pattern_choice(correct);
+        self.press(KeyCode::Space);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
     // ─── Event-log access ────────────────────────────────
 
     /// Snapshot the event log length. Capture before an action, then read

@@ -1,6 +1,7 @@
 pub mod dialogue;
 pub mod challenge;
 pub mod kenken;
+pub mod patterns;
 pub mod visuals;
 pub mod title_screen;
 pub mod hud;

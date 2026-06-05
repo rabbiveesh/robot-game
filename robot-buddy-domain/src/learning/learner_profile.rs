@@ -28,15 +28,20 @@ pub struct LearnerProfile {
     pub operation_stats: OperationStats,
     #[serde(default = "default_kenken_level")]
     pub kenken_level: u8,
-    #[serde(default)]
+    #[serde(default = "default_pattern_level")]
     pub pattern_level: u8,
     #[serde(default = "default_logic_confidence")]
     pub logic_confidence: f64,
+    /// Running confidence for pattern puzzles, kept separate from kenken's
+    /// `logic_confidence` so the two difficulty axes promote independently.
+    #[serde(default = "default_logic_confidence")]
+    pub pattern_confidence: f64,
     #[serde(default)]
     pub kenken_intro_seen: bool,
 }
 
 fn default_kenken_level() -> u8 { 2 }
+fn default_pattern_level() -> u8 { 1 }
 fn default_logic_confidence() -> f64 { 0.5 }
 
 impl LearnerProfile {
@@ -65,8 +70,9 @@ impl LearnerProfile {
             rolling_window: RollingWindow::new(20),
             operation_stats: OperationStats::new(),
             kenken_level: default_kenken_level(),
-            pattern_level: 0,
+            pattern_level: default_pattern_level(),
             logic_confidence: default_logic_confidence(),
+            pattern_confidence: default_logic_confidence(),
             kenken_intro_seen: false,
         }
     }
@@ -121,6 +127,15 @@ pub enum LearnerEvent {
     },
     #[serde(rename = "KENKEN_INTRO_SEEN")]
     KenKenIntroSeen,
+    #[serde(rename = "PATTERN_ATTEMPTED")]
+    PatternAttempted {
+        correct: bool,
+        level: u8,
+        /// Number of picks the kid made before getting it right (1 = first try).
+        attempts: u8,
+        #[serde(default)]
+        response_time_ms: Option<f64>,
+    },
 }
 
 // ─── Helpers ────────────────────────────────────────────
@@ -373,6 +388,35 @@ pub fn learner_reducer(state: LearnerProfile, event: LearnerEvent) -> LearnerPro
             kenken_intro_seen: true,
             ..state
         },
+
+        LearnerEvent::PatternAttempted { correct, level, attempts, response_time_ms: _ } => {
+            // Same shape as KenKen progression: confidence drifts up on clean
+            // first-try wins, down on retries or misses. Promote the pattern
+            // level (which unlocks new sequence kinds) when confidence saturates
+            // at the kid's current level. Pattern levels run 1..=7.
+            const MAX_PATTERN_LEVEL: u8 = 7;
+            let mut conf = state.pattern_confidence;
+            if correct && attempts <= 1 {
+                conf = (conf + 0.1).min(1.0);
+            } else if correct {
+                conf = (conf + 0.03).min(1.0);
+            } else {
+                conf = (conf - 0.05).max(0.0);
+            }
+
+            let mut new_level = state.pattern_level;
+            let at_current = level == state.pattern_level;
+            if at_current && correct && attempts <= 1 && conf >= 0.9 && new_level < MAX_PATTERN_LEVEL {
+                new_level += 1;
+                conf = 0.5; // reset on promotion to keep difficulty fair
+            }
+
+            LearnerProfile {
+                pattern_level: new_level,
+                pattern_confidence: conf,
+                ..state
+            }
+        }
     }
 }
 
@@ -414,6 +458,53 @@ mod tests {
             s = learner_reducer(s, attempt(true));
         }
         assert_eq!(*s.cra_stages.get(&Operation::Add).unwrap(), CraStage::Representational);
+    }
+
+    fn pattern_attempt(correct: bool, level: u8, attempts: u8) -> LearnerEvent {
+        LearnerEvent::PatternAttempted {
+            correct,
+            level,
+            attempts,
+            response_time_ms: Some(2000.0),
+        }
+    }
+
+    #[test]
+    fn fresh_profile_starts_at_pattern_level_one() {
+        assert_eq!(LearnerProfile::new().pattern_level, 1);
+    }
+
+    #[test]
+    fn clean_pattern_wins_promote_the_level() {
+        let mut s = LearnerProfile::new();
+        assert_eq!(s.pattern_level, 1);
+        // Repeated first-try wins at the current level saturate confidence and
+        // bump the level exactly once per saturation.
+        for _ in 0..10 {
+            let lvl = s.pattern_level;
+            s = learner_reducer(s, pattern_attempt(true, lvl, 1));
+        }
+        assert!(s.pattern_level > 1, "clean wins should promote, got {}", s.pattern_level);
+    }
+
+    #[test]
+    fn pattern_level_caps_at_seven() {
+        let mut s = LearnerProfile::new();
+        for _ in 0..200 {
+            let lvl = s.pattern_level;
+            s = learner_reducer(s, pattern_attempt(true, lvl, 1));
+        }
+        assert_eq!(s.pattern_level, 7, "pattern level must not exceed 7");
+    }
+
+    #[test]
+    fn wrong_pattern_attempts_do_not_promote() {
+        let mut s = LearnerProfile::new();
+        for _ in 0..10 {
+            s = learner_reducer(s, pattern_attempt(false, 1, 3));
+        }
+        assert_eq!(s.pattern_level, 1, "misses never promote");
+        assert!(s.pattern_confidence < 0.5, "confidence should fall on misses");
     }
 
     #[test]
