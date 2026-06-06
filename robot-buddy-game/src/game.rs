@@ -7,6 +7,7 @@
 use macroquad::prelude::*;
 use ::rand::{Rng, SeedableRng};
 use ::rand::rngs::SmallRng;
+use ::rand::seq::SliceRandom;
 use std::collections::HashMap;
 
 use robot_buddy_domain::challenge::challenge_state::{
@@ -39,6 +40,7 @@ use robot_buddy_domain::logic::balance::{
 use robot_buddy_domain::logic::sudoku::{
     self, SudokuPhase, SudokuSession, generate_for_level as generate_sudoku_for_level,
 };
+use robot_buddy_domain::economy::shop::{self, ShopItem};
 use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel};
 use robot_buddy_domain::world::movement::{
     Direction, EntityId, EntityState, GridDims, MoveIntent, MoveResolution,
@@ -86,6 +88,7 @@ pub enum GameState {
     Pattern,
     Balance,
     Sudoku,
+    Shop,
 }
 
 #[derive(PartialEq, Debug)]
@@ -160,6 +163,20 @@ pub struct ActiveSudoku {
     pub selected: Option<(u8, u8)>,
     pub complete_timer: f32,
     pub start_time: f32,
+    pub source_npc: String,
+}
+
+pub struct ActiveShop {
+    pub catalog: Vec<ShopItem>,
+    pub owned: std::collections::HashSet<String>,
+    /// `Some(index)` while solving the purchase subtraction for that catalog
+    /// item; `None` while browsing.
+    pub selected: Option<usize>,
+    pub choices: Vec<u32>,
+    pub answer: u32,
+    pub cost: u32,
+    pub balance_before: u32,
+    pub message: Option<String>,
     pub source_npc: String,
 }
 
@@ -284,6 +301,8 @@ pub enum GameEvent {
         attempts: u8,
         response_ms: f64,
     },
+    /// A shop purchase succeeded: the kid solved the cost subtraction.
+    DumDumsSpent { amount: u32, item: String },
     SudokuStarted { grid_size: u8, source: String },
     SudokuResolved {
         correct: bool,
@@ -338,6 +357,9 @@ pub struct Game {
     active_pattern: Option<ActivePattern>,
     active_balance: Option<ActiveBalance>,
     active_sudoku: Option<ActiveSudoku>,
+    active_shop: Option<ActiveShop>,
+    /// Cosmetics bought from Bolt this session (in-memory; not yet persisted).
+    shop_owned: std::collections::HashSet<String>,
     pending_challenge: bool,
     new_game_form: Option<NewGameForm>,
 
@@ -412,6 +434,8 @@ impl Game {
             active_pattern: None,
             active_balance: None,
             active_sudoku: None,
+            active_shop: None,
+            shop_owned: std::collections::HashSet::new(),
             pending_challenge: false,
             new_game_form: None,
             player_name: String::new(),
@@ -512,6 +536,11 @@ impl Game {
         self.active_sudoku.as_ref()
     }
 
+    /// Read-only view of the active shop session (None if the shop is closed).
+    pub fn active_shop(&self) -> Option<&ActiveShop> {
+        self.active_shop.as_ref()
+    }
+
     /// Snapshot of the event log length. Pair with `events_since(mark)` to
     /// read events emitted by a specific action — the basic assertion pattern
     /// for tests that care about *what just happened*, not just end-state.
@@ -572,6 +601,7 @@ impl Game {
             self.active_pattern = None;
             self.active_balance = None;
             self.active_sudoku = None;
+            self.active_shop = None;
             self.pending_challenge = false;
         }
         self.dum_dum_hud.update(dt);
@@ -660,6 +690,7 @@ impl Game {
             GameState::Pattern => { self.step_pattern(input, dt, screen); false }
             GameState::Balance => { self.step_balance(input, dt, screen); false }
             GameState::Sudoku => { self.step_sudoku(input, dt, screen); false }
+            GameState::Shop => { self.step_shop(input, screen); false }
         }
     }
 
@@ -1109,7 +1140,7 @@ impl Game {
                 let npc_info = NpcInfo {
                     id: target_id.clone(),
                     can_receive_gifts: Some(can_receive_gifts),
-                    has_shop: None,
+                    has_shop: Some(target_kind == npc::NpcKind::Shopkeeper),
                     is_puzzler: Some(is_puzzler),
                 };
                 let player_st = PlayerState { dum_dums: self.dum_dums };
@@ -1735,6 +1766,71 @@ impl Game {
         }
     }
 
+    fn step_shop(&mut self, input: &FrameInput, screen: (f32, f32)) {
+        let Some(ash) = self.active_shop.as_ref() else { return };
+        let view = shop_view(ash);
+        let layout = ui::shop::layout(&ash.catalog, &view, screen);
+
+        let intent = if input.mouse_clicked {
+            let (mx, my) = input.mouse_pos;
+            ui::shop::handle_click(mx, my, &layout)
+        } else {
+            ui::shop::handle_key(input, &layout)
+        };
+        let Some(intent) = intent else { return };
+
+        match intent {
+            ui::shop::ShopInput::Close => {
+                if let Some(ash) = self.active_shop.take() {
+                    self.shop_owned = ash.owned;
+                }
+                self.set_state(GameState::Playing);
+            }
+            ui::shop::ShopInput::SelectItem(i) => {
+                let ash = self.active_shop.as_mut().unwrap();
+                if ash.selected.is_some() {
+                    return; // already solving a purchase
+                }
+                let item = ash.catalog[i].clone();
+                match shop::process_purchase(self.dum_dums, &item.id, &ash.owned) {
+                    shop::PurchaseOutcome::Bought { result } => {
+                        ash.selected = Some(i);
+                        ash.cost = result.spent;
+                        ash.answer = result.new_balance;
+                        ash.balance_before = self.dum_dums;
+                        ash.message = None;
+                        let choices = subtraction_choices(self.dum_dums, result.spent, &mut self.rng);
+                        ash.choices = choices;
+                    }
+                    shop::PurchaseOutcome::CantAfford { shortfall } => {
+                        ash.message = Some(format!("You need {shortfall} more Dum Dums!"));
+                    }
+                    shop::PurchaseOutcome::AlreadyOwned => {
+                        ash.message = Some("Sparky already has that one!".into());
+                    }
+                    shop::PurchaseOutcome::UnknownItem => {}
+                }
+            }
+            ui::shop::ShopInput::Answer(v) => {
+                let ash = self.active_shop.as_mut().unwrap();
+                let Some(i) = ash.selected else { return };
+                if v == ash.answer {
+                    let item = ash.catalog[i].clone();
+                    self.dum_dums = ash.answer;
+                    ash.owned.insert(item.id.clone());
+                    ash.selected = None;
+                    ash.choices.clear();
+                    ash.message = Some(format!("Sparky LOVES the {}!", item.name));
+                    self.dum_dum_hud.flash();
+                    self.events.push(GameEvent::DumDumsSpent { amount: ash.cost, item: item.id });
+                } else {
+                    // Natural consequence, not punishment — recount and retry.
+                    ash.message = Some("Hmm, let me count again...".into());
+                }
+            }
+        }
+    }
+
     fn handle_interaction_menu(&mut self, input: &FrameInput, screen: (f32, f32)) {
         let layout = ui::interaction_menu::layout(&self.menu_options, screen);
         let action = ui::interaction_menu::handle_input(&layout, input);
@@ -1804,6 +1900,21 @@ impl Game {
                     self.active_sudoku = Some(asd);
                     self.set_state(GameState::Sudoku);
                 }
+                "shop" => {
+                    let source = self.menu_target_id.clone();
+                    self.active_shop = Some(ActiveShop {
+                        catalog: shop::shop_catalog(),
+                        owned: self.shop_owned.clone(),
+                        selected: None,
+                        choices: Vec::new(),
+                        answer: 0,
+                        cost: 0,
+                        balance_before: 0,
+                        message: None,
+                        source_npc: source,
+                    });
+                    self.set_state(GameState::Shop);
+                }
                 "give" => {
                     if !give::can_give(self.dum_dums) {
                         self.set_state(GameState::Playing);
@@ -1871,6 +1982,7 @@ impl Game {
                         self.active_pattern = None;
                         self.active_balance = None;
                         self.active_sudoku = None;
+                        self.active_shop = None;
                         self.pending_challenge = false;
                         self.set_state(GameState::Title);
                     }
@@ -2454,6 +2566,13 @@ impl Game {
             ui::sudoku::draw_sudoku(&asd.session, &layout, asd.selected);
         }
 
+        // Shop overlay
+        if let Some(ref ash) = self.active_shop {
+            let view = shop_view(ash);
+            let layout = ui::shop::layout(&ash.catalog, &view, screen);
+            ui::shop::draw_shop(&ash.catalog, &ash.owned, self.dum_dums, &view, &layout, ash.message.as_deref());
+        }
+
         if self.settings_open {
             ui::settings_overlay::draw(screen);
         }
@@ -2552,6 +2671,39 @@ impl Game {
 }
 
 // ─── Free helpers ──────────────────────────────────────
+
+/// Build the shop's current view (Browsing vs. solving a purchase subtraction)
+/// from the active session. Borrows the session so the layout/draw can read it.
+fn shop_view(ash: &ActiveShop) -> ui::shop::ShopView<'_> {
+    match ash.selected {
+        Some(i) => ui::shop::ShopView::Buying {
+            item: &ash.catalog[i],
+            balance: ash.balance_before,
+            cost: ash.cost,
+            choices: &ash.choices,
+        },
+        None => ui::shop::ShopView::Browsing,
+    }
+}
+
+/// Answer tiles for "balance − cost = ?": the correct remainder plus plausible
+/// near-miss distractors (forgot to subtract, off-by-one), shuffled, all > 0
+/// where possible. Always includes the right answer.
+fn subtraction_choices(balance: u32, cost: u32, rng: &mut SmallRng) -> Vec<u32> {
+    let answer = balance.saturating_sub(cost);
+    let mut out = vec![answer];
+    // Common slip-ups make the best distractors.
+    for cand in [balance, answer + 1, answer.saturating_sub(1), answer + 2] {
+        if out.len() >= 3 {
+            break;
+        }
+        if !out.contains(&cand) {
+            out.push(cand);
+        }
+    }
+    out.shuffle(rng);
+    out
+}
 
 fn is_dev_zone_code(name: &str) -> bool {
     let normalized: String = name.chars().filter(|c| !c.is_whitespace()).collect();

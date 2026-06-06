@@ -491,6 +491,70 @@ impl Harness {
         self.wait_until(|g| g.state == GameState::Playing);
     }
 
+    // ─── Shop helpers ────────────────────────────────────
+
+    /// Click the catalog row for the item with `item_id` in the open shop.
+    pub fn select_shop_item(&mut self, item_id: &str) {
+        let (x, y) = {
+            let ash = self.game.active_shop().expect("select_shop_item: shop not open");
+            // Browsing view (no item selected yet).
+            let view = ui::shop::ShopView::Browsing;
+            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
+            let idx = ash.catalog.iter().position(|i| i.id == item_id)
+                .unwrap_or_else(|| panic!("no shop item {item_id}"));
+            let row = layout.items.iter().find(|r| r.index == idx)
+                .expect("item row not visible (already buying?)").rect;
+            (row.x + row.w / 2.0, row.y + row.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Tap the answer tile with value `value` during a purchase subtraction.
+    pub fn answer_shop_math(&mut self, value: u32) {
+        let (x, y) = {
+            let ash = self.game.active_shop().expect("answer_shop_math: shop not open");
+            let i = ash.selected.expect("answer_shop_math: not currently buying");
+            let view = ui::shop::ShopView::Buying {
+                item: &ash.catalog[i],
+                balance: ash.balance_before,
+                cost: ash.cost,
+                choices: &ash.choices,
+            };
+            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
+            let tile = layout.answers.iter().find(|t| t.value == value)
+                .unwrap_or_else(|| panic!("no answer tile {value}")).rect;
+            (tile.x + tile.w / 2.0, tile.y + tile.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Buy `item_id` end-to-end: select it, then tap the correct remainder.
+    pub fn buy_shop_item(&mut self, item_id: &str) {
+        self.select_shop_item(item_id);
+        let answer = {
+            let ash = self.game.active_shop().expect("buy_shop_item: shop not open");
+            ash.answer
+        };
+        self.answer_shop_math(answer);
+    }
+
+    /// Click the shop's "Done" button to leave and return to Playing.
+    pub fn close_shop(&mut self) {
+        let (x, y) = {
+            let ash = self.game.active_shop().expect("close_shop: shop not open");
+            let view = match ash.selected {
+                Some(i) => ui::shop::ShopView::Buying {
+                    item: &ash.catalog[i], balance: ash.balance_before, cost: ash.cost, choices: &ash.choices,
+                },
+                None => ui::shop::ShopView::Browsing,
+            };
+            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
+            (layout.close_btn.x + layout.close_btn.w / 2.0, layout.close_btn.y + layout.close_btn.h / 2.0)
+        };
+        self.click(x, y);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
     // ─── Event-log access ────────────────────────────────
 
     /// Snapshot the event log length. Capture before an action, then read

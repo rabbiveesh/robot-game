@@ -315,6 +315,33 @@ fn sage_offers_sudoku_and_solving_it_rewards() {
 }
 
 #[test]
+fn shopkeeper_sells_a_cosmetic_via_embedded_subtraction() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Shopkeeper);
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu, "shopkeeper should offer a menu");
+
+    let start = h.game.dum_dums; // dev game starts at 20
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+
+    let mark = h.mark();
+    h.buy_shop_item("hat"); // costs 3 → solve 20 - 3 = 17
+
+    assert_eq!(h.game.dum_dums, start - 3, "buying the hat spends its cost");
+    let events = h.events_since(mark);
+    let spent = events.iter().find_map(|e| match e {
+        GameEvent::DumDumsSpent { amount, item } => Some((*amount, item.clone())),
+        _ => None,
+    }).expect(&format!("expected DumDumsSpent; got: {:?}", events));
+    assert_eq!(spent, (3, "hat".to_string()));
+
+    h.close_shop();
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
 fn kenken_intro_shows_on_first_puzzle_only() {
     let mut h = Harness::new(7);
     h.start_dev_game();
