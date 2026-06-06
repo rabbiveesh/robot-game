@@ -5,3 +5,4 @@ pub mod economy;
 pub mod logic;
 pub mod world;
 pub mod text;
+pub mod quest;
