@@ -47,11 +47,17 @@ Cargo.toml                       # workspace root
 
 robot-buddy-domain/              # Pure Rust domain (no browser deps)
   src/
-    lib.rs                       # pub mod types/learning/challenge/economy
+    lib.rs                       # pub mod types/learning/challenge/economy/logic/world/text/quest
     types.rs                     # Shared enums (Operation, SubSkill, CraStage, Phase)
     learning/                    # Profile reducer, challenge gen, frustration, intake
     challenge/                   # Lifecycle state machine
-    economy/                     # Rewards, gifts, interaction options
+    economy/                     # Rewards, gifts, interaction options, shop
+    logic/                       # Puzzle + manipulative reducers (see ADR-003):
+                                 #   kenken, patterns, balance, sudoku,
+                                 #   manipulate_concrete, number_line, base_ten
+    quest/                       # Quest data model + step reducer + micro-quest gen
+    world/                       # movement resolver, random encounters
+    text/                        # voice_parser (spoken-number → integer)
     bin/
       simulate.rs                # CLI learning simulator
 
@@ -82,6 +88,7 @@ ADRs document key design decisions, their context, and consequences. Read these 
 
 - **[ADR-001: Band Blending](docs/adr/001-band-blending.md)** — Bands are distribution centers, not hard levels. Accuracy-based promotion replaces streaks. Spread width tightens on frustration, widens on confidence. Streak is display-only.
 - **[ADR-002: Headless Test Harness](docs/adr/002-headless-test-harness.md)** — `Game::step` (pure) / `Game::render` (macroquad) split, `FrameInput` boundary, `SaveBackend` trait with `InMemoryBackend` for tests, `GameEvent` log as the assertion surface. Story-style integration tests run as plain `cargo test` with no window.
+- **[ADR-003: Logic-Puzzle, Manipulative & Quest Domain Layer](docs/adr/003-logic-puzzle-and-manipulative-domain-layer.md)** — Every new feature (extra logic puzzles, CRA manipulatives, quests, shop, encounters, voice parser) is built as a pure, headlessly-tested domain module first; the conflict-prone `game.rs` wiring is the only serial step. The ADR lists what's wired end-to-end vs. domain-only and gives the turnkey wiring recipe.
 
 ## Key Domain Concepts
 
