@@ -4,3 +4,4 @@ pub mod challenge;
 pub mod economy;
 pub mod logic;
 pub mod world;
+pub mod text;
