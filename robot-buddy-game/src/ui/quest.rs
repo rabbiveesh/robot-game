@@ -89,6 +89,16 @@ pub fn layout(view: &QuestView, screen: (f32, f32)) -> QuestLayout {
                 });
             }
         }
+        // A Choice with no options is a degenerate beat — show a Continue
+        // button so it can still be advanced (never soft-lock).
+        QuestView::Choice { options: opts, .. } if opts.is_empty() => {
+            continue_btn = Some(UiRect {
+                x: panel_x + panel_w / 2.0 - 90.0,
+                y: panel_y + panel_h - 64.0,
+                w: 180.0,
+                h: 44.0,
+            });
+        }
         QuestView::Choice { options: opts, .. } => {
             // Stacked full-width buttons, bottom-aligned.
             let bh = 46.0;

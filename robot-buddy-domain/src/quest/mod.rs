@@ -140,7 +140,10 @@ pub fn quest_reducer(state: QuestSession, action: QuestAction) -> QuestSession {
         _ if state.status != QuestStatus::Active => state,
         QuestAction::AdvanceStep => match state.current_step() {
             Some(QuestStep::Dialogue { .. }) | Some(QuestStep::Reward { .. }) => advance(state),
-            _ => state, // Travel/Puzzle/Choice need their specific action
+            // A degenerate Choice with no options is just a beat — let it
+            // advance rather than soft-lock (never trap the kid; invariant #7).
+            Some(QuestStep::Choice { options, .. }) if options.is_empty() => advance(state),
+            _ => state, // Travel/Puzzle/non-empty Choice need their specific action
         },
         QuestAction::ArriveAt { map, x, y } => match state.current_step() {
             Some(QuestStep::Travel { map: m, x: tx, y: ty }) if *m == map && *tx == x && *ty == y => {
@@ -405,6 +408,28 @@ mod tests {
         s = quest_reducer(s, QuestAction::ChooseOption { index: 1 });
         assert_eq!(s.last_choice, Some(1));
         assert_eq!(s.current_step, before + 1);
+    }
+
+    #[test]
+    fn degenerate_empty_choice_advances_instead_of_locking() {
+        // A Choice with no options must not trap the kid — AdvanceStep passes it.
+        let quest = Quest {
+            id: "t".into(),
+            title: "t".into(),
+            description: "t".into(),
+            steps: vec![
+                QuestStep::Choice { prompt: "?".into(), options: vec![] },
+                QuestStep::Reward { dum_dums: 1 },
+            ],
+            math_domain: vec![],
+            min_band: 1,
+            max_band: 1,
+        };
+        let mut s = quest_reducer(QuestSession::new(quest), QuestAction::Start);
+        assert!(matches!(s.current_step(), Some(QuestStep::Choice { .. })));
+        s = quest_reducer(s, QuestAction::AdvanceStep);
+        assert!(matches!(s.current_step(), Some(QuestStep::Reward { .. })),
+            "empty choice should advance to the next step, not lock");
     }
 
     #[test]

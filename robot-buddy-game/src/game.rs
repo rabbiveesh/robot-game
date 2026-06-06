@@ -1975,6 +1975,11 @@ impl Game {
                     self.events.push(GameEvent::DumDumsAwarded { amount: *dum_dums });
                     act = Some(QuestAction::AdvanceStep);
                 }
+                // A normal Choice is made via Choose; an empty (degenerate)
+                // Choice falls back to Continue so it can't soft-lock.
+                QuestStep::Choice { options, .. } if options.is_empty() => {
+                    act = Some(QuestAction::AdvanceStep)
+                }
                 QuestStep::Choice { .. } => {} // chosen via Choose, not Continue
                 QuestStep::MathPuzzle { .. } => {}
             },
