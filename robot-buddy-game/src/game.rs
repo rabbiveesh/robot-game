@@ -368,8 +368,7 @@ pub struct Game {
     pub map: Map,
     pub player: Entity,
     pub sparky: Follower,
-    pub camera: GameCamera,
-    pub npcs: Vec<npc::Npc>,
+    pub camera: GameCamera,    pub npcs: Vec<npc::Npc>,
     /// NPCs that belong to maps the player isn't on right now. Wandering NPCs
     /// who stepped through a portal accumulate here under the destination map
     /// id; on map change we swap the current `npcs` vec with whatever's stashed
@@ -393,6 +392,10 @@ pub struct Game {
     /// park so he doesn't twitch on the same frame he's swapped out.
     sparky_wander_cooldown: f32,
     pub dreaming: bool,
+    /// Remaining tiles of a click-to-walk path the player auto-follows. Empty
+    /// when walking by keyboard. Cleared by keyboard input, interaction, and
+    /// map changes.
+    player_path: Vec<(usize, usize)>,
 
     // Time
     pub game_time: f32,
@@ -476,6 +479,7 @@ impl Game {
             player: Entity::new(14, 12),
             sparky: Follower::new(14, 13),
             camera: GameCamera { x: 0.0, y: 0.0 },
+            player_path: Vec::new(),
             npcs,
             npcs_offstage: HashMap::new(),
             companion: None,
@@ -721,6 +725,8 @@ impl Game {
             // portal trigger.
             if self.map.id != prev_map {
                 arrived_npcs.clear();
+                // A queued walk path is tile-indexed for the old map — drop it.
+                self.player_path.clear();
             }
         }
 
@@ -1063,9 +1069,87 @@ impl Game {
         self.intake = Some(iq);
     }
 
+    /// Translate a screen-space tap into a walk path. The camera maps world to
+    /// screen 1:1 with an offset (`screen = world - camera`), so the inverse is
+    /// `world = screen + camera`. Walks onto the tapped tile, or up to a tile
+    /// adjacent to it when the target is solid (a wall, an NPC, the chest).
+    fn set_path_from_click(&mut self, mx: f32, my: f32) {
+        let wx = mx + self.camera.x;
+        let wy = my + self.camera.y;
+        if wx < 0.0 || wy < 0.0 {
+            return;
+        }
+        let goal = ((wx / TILE_SIZE) as usize, (wy / TILE_SIZE) as usize);
+        let (w, h) = (self.map.width, self.map.height);
+        if goal.0 >= w || goal.1 >= h {
+            return;
+        }
+        let start = (self.player.tile_x, self.player.tile_y);
+        let path_opt = {
+            let map = &self.map;
+            let walkable = |c: usize, r: usize| !map.is_solid(c, r);
+            if walkable(goal.0, goal.1) {
+                crate::pathfinding::find_path(start, goal, w, h, walkable)
+            } else {
+                crate::pathfinding::find_path_adjacent(start, goal, w, h, walkable)
+            }
+        };
+        if let Some(path) = path_opt {
+            self.player_path = path;
+        }
+    }
+
+    /// Derive a one-tile move toward the next tile on the queued walk path.
+    /// Consumed tiles are dropped as the player arrives; a stale (non-adjacent)
+    /// path is abandoned. Returns `Stay` when there's nothing to follow.
+    fn next_path_intent(&mut self) -> MoveIntent {
+        if self.player.moving || self.player_path.is_empty() {
+            return MoveIntent::Stay;
+        }
+        // Drop any leading tiles the player already stands on (e.g. just arrived).
+        while self.player_path.first() == Some(&(self.player.tile_x, self.player.tile_y)) {
+            self.player_path.remove(0);
+        }
+        let Some(&(nx, ny)) = self.player_path.first() else {
+            return MoveIntent::Stay;
+        };
+        let dx = nx as i32 - self.player.tile_x as i32;
+        let dy = ny as i32 - self.player.tile_y as i32;
+        let dir = match (dx, dy) {
+            (1, 0) => Direction::Right,
+            (-1, 0) => Direction::Left,
+            (0, 1) => Direction::Down,
+            (0, -1) => Direction::Up,
+            // Path desynced from the player's tile — abandon it.
+            _ => {
+                self.player_path.clear();
+                return MoveIntent::Stay;
+            }
+        };
+        self.player.dir = match dir {
+            Direction::Up => Dir::Up,
+            Direction::Down => Dir::Down,
+            Direction::Left => Dir::Left,
+            Direction::Right => Dir::Right,
+        };
+        MoveIntent::Move(dir)
+    }
+
     fn step_playing(&mut self, input: &FrameInput, dt: f32) {
         // ── Movement: collect intents, resolve, apply ───────────────────
-        let player_intent = read_player_intent(input, &mut self.player);
+        // A tap on the map sets a walk path (click-to-walk); keyboard input
+        // overrides it. The debug overlay owns clicks when it's up.
+        if input.mouse_clicked && !self.debug_overlay.visible {
+            let (mx, my) = input.mouse_pos;
+            self.set_path_from_click(mx, my);
+        }
+        let player_intent = match read_player_intent(input, &mut self.player) {
+            MoveIntent::Move(d) => {
+                self.player_path.clear(); // keyboard takes over from auto-walk
+                MoveIntent::Move(d)
+            }
+            MoveIntent::Stay => self.next_path_intent(),
+        };
         let player_at = (self.player.tile_x, self.player.tile_y);
         let sparky_here = self.sparky_is_here();
         // Active Sparky follows the player's path; parked Sparky idles near
@@ -1201,6 +1285,7 @@ impl Game {
 
         // Space: interact
         if input.pressed(KeyCode::Space) && !self.player.moving {
+            self.player_path.clear(); // stop auto-walking when the kid interacts
             let facing = facing_tile(self.player.tile_x, self.player.tile_y, self.player.dir);
             let facing_chest = facing.0 < self.map.width && facing.1 < self.map.height
                 && self.map.tiles[facing.1][facing.0] == tilemap::Tile::Chest;

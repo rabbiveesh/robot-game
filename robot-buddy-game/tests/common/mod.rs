@@ -610,6 +610,15 @@ impl Harness {
         self.press(KeyCode::T);
     }
 
+    /// Click the center of map tile `(col, row)` — inverts the camera transform
+    /// (`screen = world - camera`) so it lands on that tile for click-to-walk.
+    pub fn click_tile(&mut self, col: usize, row: usize) {
+        const TILE: f32 = 48.0;
+        let sx = (col as f32 + 0.5) * TILE - self.game.camera.x;
+        let sy = (row as f32 + 0.5) * TILE - self.game.camera.y;
+        self.click(sx, sy);
+    }
+
     /// Click the "Parent options" reveal row in the open settings overlay.
     pub fn click_parent_options(&mut self) {
         let (x, y) = robot_buddy_game::ui::settings_overlay::parent_toggle_center(SCREEN);

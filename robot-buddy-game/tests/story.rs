@@ -342,6 +342,51 @@ fn shopkeeper_sells_a_cosmetic_via_embedded_subtraction() {
 }
 
 #[test]
+fn click_to_walk_routes_the_player_toward_the_tapped_tile() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    let start = (h.game.player.tile_x, h.game.player.tile_y);
+    let (w, ht) = (h.game.map.width, h.game.map.height);
+
+    // Pick the farthest reachable tile within a small radius — a real multi-tile
+    // path that the BFS router can actually solve over the dev map.
+    let mut target = start;
+    let mut best = 0usize;
+    for r in start.1.saturating_sub(4)..=(start.1 + 4).min(ht - 1) {
+        for c in start.0.saturating_sub(4)..=(start.0 + 4).min(w - 1) {
+            let goal = (c, r);
+            if goal == start {
+                continue;
+            }
+            let walkable = |cc: usize, rr: usize| !h.game.map.is_solid(cc, rr);
+            if let Some(p) = robot_buddy_game::pathfinding::find_path(start, goal, w, ht, walkable) {
+                if p.len() > best {
+                    best = p.len();
+                    target = goal;
+                }
+            }
+        }
+    }
+    assert!(best > 0, "expected a reachable tile near the player");
+
+    let manhattan = |a: (usize, usize), b: (usize, usize)| {
+        (a.0 as i32 - b.0 as i32).unsigned_abs() + (a.1 as i32 - b.1 as i32).unsigned_abs()
+    };
+    let before = manhattan(start, target);
+
+    h.click_tile(target.0, target.1);
+    h.advance(300); // ~16 frames/tile; plenty to traverse a few tiles
+
+    let now = (h.game.player.tile_x, h.game.player.tile_y);
+    assert_ne!(now, start, "a tap should set the player walking");
+    assert!(
+        manhattan(now, target) < before,
+        "the player should end up closer to the tapped tile (start {:?}, now {:?}, target {:?})",
+        start, now, target,
+    );
+}
+
+#[test]
 fn parent_overlay_toggles_feature_flags_in_game() {
     use robot_buddy_game::ui::settings_overlay::Feature;
     let mut h = Harness::new(7);
