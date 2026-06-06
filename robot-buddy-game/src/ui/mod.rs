@@ -2,6 +2,7 @@ pub mod dialogue;
 pub mod challenge;
 pub mod balance;
 pub mod kenken;
+pub mod manipulative;
 pub mod patterns;
 pub mod shop;
 pub mod sudoku;

@@ -42,7 +42,9 @@ use robot_buddy_domain::logic::sudoku::{
 };
 use robot_buddy_domain::economy::shop::{self, ShopItem};
 use robot_buddy_domain::world::encounters::{self, EncounterConfig, EncounterKind};
-use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel};
+use robot_buddy_domain::logic::manipulate_concrete::{self, ConcreteKind, generate_concrete};
+use robot_buddy_domain::logic::number_line::{self, generate_number_line};
+use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel, Operation};
 use robot_buddy_domain::world::movement::{
     Direction, EntityId, EntityState, GridDims, MoveIntent, MoveResolution,
     Solidity, resolve_moves,
@@ -90,6 +92,7 @@ pub enum GameState {
     Balance,
     Sudoku,
     Shop,
+    Manipulative,
 }
 
 /// Opt-in toggles for in-development paths that aren't ready for default play.
@@ -180,6 +183,15 @@ pub struct ActiveSudoku {
     pub complete_timer: f32,
     pub start_time: f32,
     pub source_npc: String,
+}
+
+pub struct ActiveManipulative {
+    pub manip: ui::manipulative::Manip,
+    /// The challenge this manipulative stands in for — drives the learner event
+    /// + prompt so the adaptive system gets the same signal as the quiz path.
+    pub challenge: Challenge,
+    pub complete_timer: f32,
+    pub start_time: f32,
 }
 
 pub struct ActiveShop {
@@ -376,6 +388,7 @@ pub struct Game {
     active_balance: Option<ActiveBalance>,
     active_sudoku: Option<ActiveSudoku>,
     active_shop: Option<ActiveShop>,
+    active_manipulative: Option<ActiveManipulative>,
     /// Cosmetics bought from Bolt this session (in-memory; not yet persisted).
     shop_owned: std::collections::HashSet<String>,
     /// Opt-in in-development feature toggles (default all off).
@@ -457,6 +470,7 @@ impl Game {
             active_balance: None,
             active_sudoku: None,
             active_shop: None,
+            active_manipulative: None,
             shop_owned: std::collections::HashSet::new(),
             features: FeatureFlags::default(),
             steps_since_encounter: 0,
@@ -565,6 +579,11 @@ impl Game {
         self.active_shop.as_ref()
     }
 
+    /// Read-only view of the active CRA manipulative (None if not in one).
+    pub fn active_manipulative(&self) -> Option<&ActiveManipulative> {
+        self.active_manipulative.as_ref()
+    }
+
     /// Snapshot of the event log length. Pair with `events_since(mark)` to
     /// read events emitted by a specific action — the basic assertion pattern
     /// for tests that care about *what just happened*, not just end-state.
@@ -626,6 +645,7 @@ impl Game {
             self.active_balance = None;
             self.active_sudoku = None;
             self.active_shop = None;
+            self.active_manipulative = None;
             self.pending_challenge = false;
         }
         self.dum_dum_hud.update(dt);
@@ -732,6 +752,7 @@ impl Game {
             GameState::Balance => { self.step_balance(input, dt, screen); false }
             GameState::Sudoku => { self.step_sudoku(input, dt, screen); false }
             GameState::Shop => { self.step_shop(input, screen); false }
+            GameState::Manipulative => { self.step_manipulative(input, dt, screen); false }
         }
     }
 
@@ -1298,12 +1319,7 @@ impl Game {
                 if self.pending_challenge {
                     self.pending_challenge = false;
                     let ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
-                    self.events.push(GameEvent::ChallengeStarted {
-                        question: ac.challenge.display_text.clone(),
-                    });
-                    audio::tts::speak("Sparky", &ac.challenge.speech_text);
-                    self.active_challenge = Some(ac);
-                    self.set_state(GameState::Challenge);
+                    self.begin_challenge(ac);
                 } else {
                     self.set_state(GameState::Playing);
                 }
@@ -1529,6 +1545,42 @@ impl Game {
                 let kind = encounters::pick_encounter(&cfg, &mut self.rng);
                 self.fire_encounter(kind);
             }
+            CtrlToggleManipulatives => {
+                self.features.cra_manipulatives = !self.features.cra_manipulatives;
+                let on = if self.features.cra_manipulatives { "ON" } else { "OFF" };
+                self.start_dialogue(vec![line(&format!("BEEP. CRA manipulatives are now {on}."))]);
+                self.set_state(GameState::Dialogue);
+            }
+            CtrlTriggerManipulative => {
+                // Roll challenges until one maps to a manipulative (add/sub at a
+                // concrete/representational CRA stage), then enter it directly.
+                // Use a low band so a small, manipulative-friendly add/sub turns
+                // up reliably (the dev profile's band 5 is mostly multiplication).
+                let mut low = self.profile.clone();
+                low.math_band = 1;
+                let mut entered = false;
+                for _ in 0..64 {
+                    let ac = start_challenge(&mut self.rng, &low, self.game_time);
+                    if let Some(manip) = try_make_manipulative(&self.profile, &ac.challenge) {
+                        self.events.push(GameEvent::ChallengeStarted {
+                            question: ac.challenge.display_text.clone(),
+                        });
+                        self.active_manipulative = Some(ActiveManipulative {
+                            manip,
+                            challenge: ac.challenge,
+                            complete_timer: 0.0,
+                            start_time: self.game_time,
+                        });
+                        self.set_state(GameState::Manipulative);
+                        entered = true;
+                        break;
+                    }
+                }
+                if !entered {
+                    self.start_dialogue(vec![line("No manipulative-friendly challenge rolled. Try again.")]);
+                    self.set_state(GameState::Dialogue);
+                }
+            }
             // Non-dev kinds shouldn't reach here -- caller gates on is_dev_control.
             other => {
                 self.start_dialogue(vec![line(&format!("Unknown control: {}", other.as_str()))]);
@@ -1573,6 +1625,87 @@ impl Game {
                 self.active_challenge = Some(ac);
                 self.set_state(GameState::Challenge);
             }
+        }
+    }
+
+    /// Enter a challenge — as a hands-on CRA manipulative when the feature flag
+    /// is on and the learner's CRA stage for this operation warrants it,
+    /// otherwise the standard multiple-choice challenge. Either way the same
+    /// `ChallengeStarted` event fires and the learner gets the same signal.
+    fn begin_challenge(&mut self, ac: ActiveChallenge) {
+        self.events.push(GameEvent::ChallengeStarted {
+            question: ac.challenge.display_text.clone(),
+        });
+        if self.features.cra_manipulatives {
+            if let Some(manip) = try_make_manipulative(&self.profile, &ac.challenge) {
+                self.active_manipulative = Some(ActiveManipulative {
+                    manip,
+                    challenge: ac.challenge,
+                    complete_timer: 0.0,
+                    start_time: self.game_time,
+                });
+                self.set_state(GameState::Manipulative);
+                return;
+            }
+        }
+        audio::tts::speak("Sparky", &ac.challenge.speech_text);
+        self.active_challenge = Some(ac);
+        self.set_state(GameState::Challenge);
+    }
+
+    fn step_manipulative(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        let mut resolve = false;
+        if let Some(ref mut am) = self.active_manipulative {
+            if am.manip.is_complete() {
+                am.complete_timer += dt;
+                if am.complete_timer >= 2.0
+                    || input.pressed(KeyCode::Space)
+                    || input.pressed(KeyCode::Enter)
+                    || input.mouse_clicked
+                {
+                    resolve = true;
+                }
+            } else {
+                let layout = ui::manipulative::layout(&am.manip, screen);
+                let intent = if input.mouse_clicked {
+                    let (mx, my) = input.mouse_pos;
+                    ui::manipulative::handle_click(mx, my, &am.manip, &layout)
+                } else {
+                    ui::manipulative::handle_key(&am.manip, input, &layout)
+                };
+                if let Some(intent) = intent {
+                    apply_manip_intent(&mut am.manip, intent);
+                }
+            }
+        }
+
+        if resolve {
+            if let Some(am) = self.active_manipulative.take() {
+                let response_ms = ((self.game_time - am.start_time) as f64 * 1000.0).min(120000.0);
+                // Manipulatives complete only when correct — same learner signal
+                // as solving the quiz, tagged with the CRA stage actually shown.
+                let cra = self.profile.cra_stages.get(&am.challenge.operation).copied();
+                let event = LearnerEvent::PuzzleAttempted {
+                    correct: true,
+                    operation: am.challenge.operation,
+                    sub_skill: am.challenge.sub_skill,
+                    band: am.challenge.sampled_band,
+                    center_band: Some(am.challenge.center_band),
+                    response_time_ms: Some(response_ms),
+                    hint_used: false,
+                    told_me: false,
+                    cra_level_shown: cra,
+                    timestamp: Some(self.game_time as f64 * 1000.0),
+                };
+                self.profile = learner_reducer(self.profile.clone(), event);
+
+                let award = 1u32;
+                self.dum_dums += award;
+                self.dum_dum_hud.flash();
+                self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                self.events.push(GameEvent::ChallengeResolved { correct: true, response_ms });
+            }
+            self.set_state(GameState::Playing);
         }
     }
 
@@ -2081,6 +2214,7 @@ impl Game {
                         self.active_balance = None;
                         self.active_sudoku = None;
                         self.active_shop = None;
+                        self.active_manipulative = None;
                         self.pending_challenge = false;
                         self.set_state(GameState::Title);
                     }
@@ -2671,6 +2805,12 @@ impl Game {
             ui::shop::draw_shop(&ash.catalog, &ash.owned, self.dum_dums, &view, &layout, ash.message.as_deref());
         }
 
+        // CRA manipulative overlay
+        if let Some(ref am) = self.active_manipulative {
+            let layout = ui::manipulative::layout(&am.manip, screen);
+            ui::manipulative::draw(&am.manip, &am.challenge.display_text, &layout);
+        }
+
         if self.settings_open {
             ui::settings_overlay::draw(screen);
         }
@@ -2935,6 +3075,54 @@ fn apply_sudoku_intent(asd: &mut ActiveSudoku, intent: ui::sudoku::SudokuInput) 
     }
 }
 
+/// Choose a CRA manipulative for an add/sub challenge based on the learner's
+/// CRA stage for that operation. Concrete → hands-on objects; Representational →
+/// number line. Returns `None` for Abstract, other operations, or operands too
+/// large for a tidy manipulative (those keep the standard challenge).
+fn try_make_manipulative(profile: &LearnerProfile, challenge: &Challenge) -> Option<ui::manipulative::Manip> {
+    use ui::manipulative::Manip;
+    let op = challenge.operation;
+    if !matches!(op, Operation::Add | Operation::Sub) {
+        return None;
+    }
+    let (a, b) = (challenge.numbers.a, challenge.numbers.b);
+    if a < 0 || b < 0 || a > 20 || b > 20 {
+        return None;
+    }
+    let (a, b) = (a as u8, b as u8);
+    match profile.cra_stages.get(&op).copied().unwrap_or(CraStage::Concrete) {
+        CraStage::Concrete => {
+            let kind = if op == Operation::Sub { ConcreteKind::TakeAway } else { ConcreteKind::AddGroups };
+            // Keep concrete object counts manageable.
+            if a.saturating_add(b) > 12 {
+                return None;
+            }
+            let puzzle = generate_concrete(kind, a, b, &mut SmallRng::seed_from_u64(0));
+            Some(Manip::Concrete(manipulate_concrete::ConcreteSession::new(puzzle)))
+        }
+        CraStage::Representational => {
+            let puzzle = generate_number_line(a, b, op, &mut SmallRng::seed_from_u64(0));
+            Some(Manip::NumberLine(number_line::NumberLineSession::new(puzzle)))
+        }
+        CraStage::Abstract => None,
+    }
+}
+
+fn apply_manip_intent(manip: &mut ui::manipulative::Manip, intent: ui::manipulative::ManipInput) {
+    use ui::manipulative::{Manip, ManipInput};
+    match (manip, intent) {
+        (Manip::Concrete(s), ManipInput::Concrete(a)) => {
+            *s = manipulate_concrete::concrete_reducer(s.clone(), a);
+        }
+        (Manip::NumberLine(s), ManipInput::NumberLine(a)) => {
+            *s = number_line::number_line_reducer(s.clone(), a);
+        }
+        // Mismatched pairings can't occur (layout builds inputs from the same
+        // session), so ignore them rather than panic.
+        _ => {}
+    }
+}
+
 fn apply_kenken_intent(ak: &mut ActiveKenKen, intent: ui::kenken::KenKenInput) {
     match intent {
         ui::kenken::KenKenInput::Action(action) => {
@@ -3117,7 +3305,8 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
         | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance
         | CtrlTriggerSudoku | CtrlTriggerChallenge
-        | CtrlToggleEncounters | CtrlTriggerEncounter => &["Hello there!"],
+        | CtrlToggleEncounters | CtrlTriggerEncounter
+        | CtrlToggleManipulatives | CtrlTriggerManipulative => &["Hello there!"],
     };
     let idx = rng.gen_range(0..lines.len());
     vec![DialogueLine { speaker: npc.name().into(), text: lines[idx].into() }]

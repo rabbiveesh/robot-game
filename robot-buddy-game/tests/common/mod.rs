@@ -555,6 +555,54 @@ impl Harness {
         self.wait_until(|g| g.state == GameState::Playing);
     }
 
+    // ─── CRA manipulative helpers ────────────────────────
+
+    fn click_manip_button(&mut self, label: &str) {
+        let (x, y) = {
+            let am = self.game.active_manipulative().expect("click_manip_button: no manipulative");
+            let layout = ui::manipulative::layout(&am.manip, SCREEN);
+            let b = layout.buttons.iter().find(|b| b.label == label)
+                .unwrap_or_else(|| panic!("no manip button '{label}'"));
+            (b.rect.x + b.rect.w / 2.0, b.rect.y + b.rect.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Drive the active CRA manipulative to completion with the correct moves,
+    /// then dismiss and land back in Playing.
+    pub fn solve_manipulative(&mut self) {
+        use robot_buddy_game::ui::manipulative::Manip;
+        use robot_buddy_domain::logic::manipulate_concrete::ConcreteKind;
+        let labels: Vec<&'static str> = {
+            let am = self.game.active_manipulative().expect("solve_manipulative: no manipulative");
+            match &am.manip {
+                Manip::Concrete(s) => match s.puzzle.kind {
+                    ConcreteKind::AddGroups => {
+                        let mut v = vec!["+ Red"; s.puzzle.a as usize];
+                        v.extend(std::iter::repeat("+ Blue").take(s.puzzle.b as usize));
+                        v
+                    }
+                    ConcreteKind::Count | ConcreteKind::BuildTower => {
+                        vec!["Add one"; s.puzzle.target as usize]
+                    }
+                    ConcreteKind::TakeAway => vec!["Take one"; s.puzzle.b as usize],
+                },
+                Manip::NumberLine(s) => {
+                    if s.puzzle.target >= s.puzzle.start {
+                        vec!["Forward ▶"; (s.puzzle.target - s.puzzle.start) as usize]
+                    } else {
+                        vec!["◀ Back"; (s.puzzle.start - s.puzzle.target) as usize]
+                    }
+                }
+            }
+        };
+        for label in labels {
+            self.click_manip_button(label);
+        }
+        self.press(KeyCode::Space);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
     // ─── Event-log access ────────────────────────────────
 
     /// Snapshot the event log length. Capture before an action, then read

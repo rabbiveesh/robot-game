@@ -12,3 +12,8 @@ rand = { version = "0.8", default-features = false, features = ["small_rng"] }
 
 # No wasm-specific deps — macroquad uses sapp-wasm, not wasm-bindgen.
 # localStorage access is via extern "C" functions defined in index.html.
+
+[dev-dependencies]
+# Integration tests reach into domain types (e.g. manipulative session kinds)
+# to compute the moves a player would make.
+robot-buddy-domain = { path = "../robot-buddy-domain" }

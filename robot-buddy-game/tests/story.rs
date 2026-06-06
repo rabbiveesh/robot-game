@@ -342,6 +342,45 @@ fn shopkeeper_sells_a_cosmetic_via_embedded_subtraction() {
 }
 
 #[test]
+fn dev_toggle_flips_the_manipulatives_flag() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    assert!(!h.game.features.cra_manipulatives, "manipulatives default OFF");
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlToggleManipulatives);
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    assert!(h.game.features.cra_manipulatives, "dev knob should enable CRA manipulatives");
+}
+
+#[test]
+fn dev_manipulative_is_hands_on_and_rewards_like_a_challenge() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlTriggerManipulative);
+
+    let mark = h.mark();
+    let start = h.game.dum_dums;
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Manipulative);
+    assert!(h.game.active_manipulative().is_some(), "a manipulative should be active");
+
+    h.solve_manipulative();
+    assert_eq!(h.game.state, GameState::Playing);
+    assert_eq!(h.game.dum_dums, start + 1, "solving the manipulative rewards a Dum Dum");
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::ChallengeResolved { correct: true, .. })),
+        "manipulative completion feeds the same resolved signal; got: {:?}", events,
+    );
+}
+
+#[test]
 fn dev_toggle_flips_the_encounters_flag() {
     use macroquad::prelude::KeyCode;
     let mut h = Harness::new(7);
