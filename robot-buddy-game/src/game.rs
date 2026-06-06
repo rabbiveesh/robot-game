@@ -396,6 +396,15 @@ pub struct Game {
     /// when walking by keyboard. Cleared by keyboard input, interaction, and
     /// map changes.
     player_path: Vec<(usize, usize)>,
+    /// When a tap targeted an interactable (NPC / Sparky / chest), the tile to
+    /// auto-interact with on arrival. Taken (one-shot) when the player lands
+    /// adjacent.
+    pending_interact: Option<(usize, usize)>,
+    /// Set for one frame when an arrival should fire the interaction, as if the
+    /// kid pressed Space facing the target.
+    auto_interact: bool,
+    /// The tapped destination tile, shown as a walk marker until arrival.
+    click_target: Option<(usize, usize)>,
 
     // Time
     pub game_time: f32,
@@ -480,6 +489,9 @@ impl Game {
             sparky: Follower::new(14, 13),
             camera: GameCamera { x: 0.0, y: 0.0 },
             player_path: Vec::new(),
+            pending_interact: None,
+            auto_interact: false,
+            click_target: None,
             npcs,
             npcs_offstage: HashMap::new(),
             companion: None,
@@ -726,7 +738,7 @@ impl Game {
             if self.map.id != prev_map {
                 arrived_npcs.clear();
                 // A queued walk path is tile-indexed for the old map — drop it.
-                self.player_path.clear();
+                self.clear_walk();
             }
         }
 
@@ -1085,18 +1097,48 @@ impl Game {
             return;
         }
         let start = (self.player.tile_x, self.player.tile_y);
+        let interactable = self.interactable_at(goal);
         let path_opt = {
             let map = &self.map;
             let walkable = |c: usize, r: usize| !map.is_solid(c, r);
-            if walkable(goal.0, goal.1) {
-                crate::pathfinding::find_path(start, goal, w, h, walkable)
-            } else {
+            // Walk onto a free tile; walk *up to* a solid or an interactable
+            // (NPC / Sparky / chest) you can't stand on.
+            if interactable || map.is_solid(goal.0, goal.1) {
                 crate::pathfinding::find_path_adjacent(start, goal, w, h, walkable)
+            } else {
+                crate::pathfinding::find_path(start, goal, w, h, walkable)
             }
         };
         if let Some(path) = path_opt {
             self.player_path = path;
+            self.click_target = Some(goal);
+            // Remember to auto-interact on arrival when the tap was on something
+            // you talk to / open.
+            self.pending_interact = if interactable { Some(goal) } else { None };
         }
+    }
+
+    /// Cancel any in-progress click-to-walk: drop the path, the pending
+    /// interaction, and the on-screen marker.
+    fn clear_walk(&mut self) {
+        self.player_path.clear();
+        self.pending_interact = None;
+        self.click_target = None;
+    }
+
+    /// Whether `tile` holds something the player interacts with (NPC, Sparky,
+    /// or a treasure chest) on the current map.
+    fn interactable_at(&self, tile: (usize, usize)) -> bool {
+        let (c, r) = tile;
+        if r < self.map.height && c < self.map.width && self.map.tiles[r][c] == tilemap::Tile::Chest {
+            return true;
+        }
+        if self.sparky_is_here()
+            && (self.sparky.entity.tile_x, self.sparky.entity.tile_y) == tile
+        {
+            return true;
+        }
+        self.npcs.iter().any(|n| (n.entity.tile_x, n.entity.tile_y) == tile)
     }
 
     /// Derive a one-tile move toward the next tile on the queued walk path.
@@ -1145,11 +1187,32 @@ impl Game {
         }
         let player_intent = match read_player_intent(input, &mut self.player) {
             MoveIntent::Move(d) => {
-                self.player_path.clear(); // keyboard takes over from auto-walk
+                self.clear_walk(); // keyboard takes over from auto-walk
                 MoveIntent::Move(d)
             }
             MoveIntent::Stay => self.next_path_intent(),
         };
+
+        // Arrival: once the walk path is spent and the player is standing still,
+        // either fire the queued auto-interact (face the NPC/chest and act as if
+        // Space was pressed) or just drop the walk marker.
+        if !self.player.moving && self.player_path.is_empty() {
+            if let Some(tgt) = self.pending_interact.take() {
+                let dx = tgt.0 as i32 - self.player.tile_x as i32;
+                let dy = tgt.1 as i32 - self.player.tile_y as i32;
+                if dx.unsigned_abs() + dy.unsigned_abs() == 1 {
+                    self.player.dir = match (dx, dy) {
+                        (1, 0) => Dir::Right,
+                        (-1, 0) => Dir::Left,
+                        (0, 1) => Dir::Down,
+                        _ => Dir::Up,
+                    };
+                    self.auto_interact = true;
+                }
+            }
+            self.click_target = None;
+        }
+
         let player_at = (self.player.tile_x, self.player.tile_y);
         let sparky_here = self.sparky_is_here();
         // Active Sparky follows the player's path; parked Sparky idles near
@@ -1283,9 +1346,11 @@ impl Game {
             }
         }
 
-        // Space: interact
-        if input.pressed(KeyCode::Space) && !self.player.moving {
-            self.player_path.clear(); // stop auto-walking when the kid interacts
+        // Space (or an arrival auto-interact): interact with what's in front.
+        if (input.pressed(KeyCode::Space) || std::mem::take(&mut self.auto_interact))
+            && !self.player.moving
+        {
+            self.clear_walk(); // stop auto-walking when the kid interacts
             let facing = facing_tile(self.player.tile_x, self.player.tile_y, self.player.dir);
             let facing_chest = facing.0 < self.map.width && facing.1 < self.map.height
                 && self.map.tiles[facing.1][facing.0] == tilemap::Tile::Chest;
@@ -2913,6 +2978,18 @@ impl Game {
 
             clear_background(Color::from_rgba(26, 26, 46, 255));
             tilemap::draw_map(&self.map, self.camera.x, self.camera.y, GAME_W, GAME_H, self.game_time);
+
+            // Click-to-walk destination marker: a pulsing ring on the tapped
+            // tile, drawn on the ground (under the sprites) until arrival.
+            if let Some((tc, tr)) = self.click_target {
+                let cx = (tc as f32 + 0.5) * TILE_SIZE;
+                let cy = (tr as f32 + 0.5) * TILE_SIZE;
+                let pulse = (self.game_time * 6.0).sin() * 0.5 + 0.5; // 0..1
+                let r = TILE_SIZE * 0.28 + pulse * TILE_SIZE * 0.10;
+                let gold = Color::new(1.0, 0.84, 0.30, 0.85);
+                draw_circle_lines(cx, cy, r, 3.0, gold);
+                draw_circle(cx, cy, 4.0, gold);
+            }
 
             enum SpriteKind<'a> { Player, Sparky, Npc(&'a npc::Npc) }
             struct Renderable<'a> { y: f32, kind: SpriteKind<'a> }

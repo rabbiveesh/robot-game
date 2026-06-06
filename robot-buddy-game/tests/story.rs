@@ -387,6 +387,26 @@ fn click_to_walk_routes_the_player_toward_the_tapped_tile() {
 }
 
 #[test]
+fn tapping_an_npc_walks_over_and_auto_interacts() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    // Stand next to Sage first (reliable), then tap Sage — arrival should fire
+    // the interaction automatically (Sage is a puzzler → the menu opens), no
+    // separate Space press.
+    h.walk_to_npc(NpcKind::Sage);
+    let sage = h.game.npcs.iter().find(|n| n.kind == NpcKind::Sage)
+        .map(|n| (n.entity.tile_x, n.entity.tile_y))
+        .expect("Sage on the dev map");
+
+    h.click_tile(sage.0, sage.1);
+    h.wait_until(|g| g.state == GameState::InteractionMenu);
+
+    let p = (h.game.player.tile_x, h.game.player.tile_y);
+    let dist = (p.0 as i32 - sage.0 as i32).abs() + (p.1 as i32 - sage.1 as i32).abs();
+    assert_eq!(dist, 1, "player should be standing next to Sage when it auto-interacts");
+}
+
+#[test]
 fn parent_overlay_toggles_feature_flags_in_game() {
     use robot_buddy_game::ui::settings_overlay::Feature;
     let mut h = Harness::new(7);
