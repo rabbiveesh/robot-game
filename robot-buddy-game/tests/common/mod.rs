@@ -451,6 +451,46 @@ impl Harness {
         self.wait_until(|g| g.state == GameState::Playing);
     }
 
+    // ─── Sudoku helpers ──────────────────────────────────
+
+    /// Place `value` at (row, col) in the active Sudoku by clicking the cell
+    /// then the matching picker — same cell-select → value-pick flow as KenKen.
+    pub fn place_sudoku_cell(&mut self, row: u8, col: u8, value: u8) {
+        let (cell_x, cell_y, picker_x, picker_y) = {
+            let asd = self.game.active_sudoku().expect("place_sudoku_cell: no active Sudoku");
+            let layout = ui::sudoku::layout(&asd.session, SCREEN);
+            let cell = layout.cells[row as usize][col as usize];
+            let picker = &layout.pickers[(value - 1) as usize].rect;
+            (cell.x + cell.w / 2.0, cell.y + cell.h / 2.0,
+             picker.x + picker.w / 2.0, picker.y + picker.h / 2.0)
+        };
+        self.click(cell_x, cell_y);
+        self.click(picker_x, picker_y);
+    }
+
+    /// Fill every blank cell with the known solution, then dismiss the
+    /// celebration and land back in Playing.
+    pub fn solve_sudoku_correctly(&mut self) {
+        let fills = {
+            let asd = self.game.active_sudoku().expect("solve_sudoku_correctly: no active Sudoku");
+            let n = asd.session.puzzle.grid_size as usize;
+            let mut fills: Vec<(u8, u8, u8)> = Vec::new();
+            for r in 0..n {
+                for c in 0..n {
+                    if asd.session.grid[r][c].is_none() {
+                        fills.push((r as u8, c as u8, asd.session.puzzle.solution[r][c]));
+                    }
+                }
+            }
+            fills
+        };
+        for (r, c, v) in fills {
+            self.place_sudoku_cell(r, c, v);
+        }
+        self.press(KeyCode::Space);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
     // ─── Event-log access ────────────────────────────────
 
     /// Snapshot the event log length. Capture before an action, then read

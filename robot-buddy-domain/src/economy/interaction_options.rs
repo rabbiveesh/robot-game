@@ -74,6 +74,12 @@ pub fn get_interaction_options(npc: &NpcInfo, player_state: &PlayerState) -> Vec
             label: "Balance the Scale".into(),
             key,
         });
+        let key = (options.len() + 1).to_string();
+        options.push(InteractionOption {
+            option_type: "sudoku".into(),
+            label: "Animal Sudoku".into(),
+            key,
+        });
     }
 
     options

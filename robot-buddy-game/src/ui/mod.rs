@@ -3,6 +3,7 @@ pub mod challenge;
 pub mod balance;
 pub mod kenken;
 pub mod patterns;
+pub mod sudoku;
 pub mod visuals;
 pub mod title_screen;
 pub mod hud;

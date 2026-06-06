@@ -280,6 +280,41 @@ fn balance_wrong_guess_tips_then_solves() {
 }
 
 #[test]
+fn sage_offers_sudoku_and_solving_it_rewards() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Sage);
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu);
+
+    let mark = h.mark();
+    let start_dums = h.game.dum_dums;
+    h.select_option("sudoku");
+    h.wait_until(|g| g.state == GameState::Sudoku);
+
+    let grid = h.game.active_sudoku().expect("active Sudoku after picking 'sudoku'")
+        .session.puzzle.grid_size;
+    assert!(grid == 4 || grid == 6, "sudoku grid should be 4 or 6, got {grid}");
+
+    h.solve_sudoku_correctly();
+
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::SudokuStarted { .. })),
+        "expected SudokuStarted; got: {:?}", events,
+    );
+    let resolved = events.iter().find_map(|e| match e {
+        GameEvent::SudokuResolved { correct, grid_size, constraint_violations, .. } =>
+            Some((*correct, *grid_size, *constraint_violations)),
+        _ => None,
+    }).expect(&format!("expected SudokuResolved; got: {:?}", events));
+    assert_eq!(resolved, (true, grid, 0),
+        "solving by the known solution resolves correct with no violations");
+    assert_eq!(h.game.dum_dums, start_dums + 1, "solving a sudoku awards a dum dum");
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
 fn kenken_intro_shows_on_first_puzzle_only() {
     let mut h = Harness::new(7);
     h.start_dev_game();

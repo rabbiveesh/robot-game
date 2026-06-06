@@ -36,6 +36,9 @@ use robot_buddy_domain::logic::patterns::{
 use robot_buddy_domain::logic::balance::{
     self, BalancePhase, BalanceSession, generate_for_band as generate_balance_for_band,
 };
+use robot_buddy_domain::logic::sudoku::{
+    self, SudokuPhase, SudokuSession, generate_for_level as generate_sudoku_for_level,
+};
 use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel};
 use robot_buddy_domain::world::movement::{
     Direction, EntityId, EntityState, GridDims, MoveIntent, MoveResolution,
@@ -82,6 +85,7 @@ pub enum GameState {
     KenKen,
     Pattern,
     Balance,
+    Sudoku,
 }
 
 #[derive(PartialEq, Debug)]
@@ -146,6 +150,14 @@ pub struct ActivePattern {
 
 pub struct ActiveBalance {
     pub session: BalanceSession,
+    pub complete_timer: f32,
+    pub start_time: f32,
+    pub source_npc: String,
+}
+
+pub struct ActiveSudoku {
+    pub session: SudokuSession,
+    pub selected: Option<(u8, u8)>,
     pub complete_timer: f32,
     pub start_time: f32,
     pub source_npc: String,
@@ -272,6 +284,13 @@ pub enum GameEvent {
         attempts: u8,
         response_ms: f64,
     },
+    SudokuStarted { grid_size: u8, source: String },
+    SudokuResolved {
+        correct: bool,
+        grid_size: u8,
+        constraint_violations: u8,
+        response_ms: f64,
+    },
 }
 
 // ─── The Game ───────────────────────────────────────────
@@ -318,6 +337,7 @@ pub struct Game {
     active_kenken: Option<ActiveKenKen>,
     active_pattern: Option<ActivePattern>,
     active_balance: Option<ActiveBalance>,
+    active_sudoku: Option<ActiveSudoku>,
     pending_challenge: bool,
     new_game_form: Option<NewGameForm>,
 
@@ -391,6 +411,7 @@ impl Game {
             active_kenken: None,
             active_pattern: None,
             active_balance: None,
+            active_sudoku: None,
             pending_challenge: false,
             new_game_form: None,
             player_name: String::new(),
@@ -485,6 +506,12 @@ impl Game {
         self.active_balance.as_ref()
     }
 
+    /// Read-only view of the active Sudoku session (None if none is on screen).
+    /// Tests use this with `ui::sudoku::layout` to compute click targets.
+    pub fn active_sudoku(&self) -> Option<&ActiveSudoku> {
+        self.active_sudoku.as_ref()
+    }
+
     /// Snapshot of the event log length. Pair with `events_since(mark)` to
     /// read events emitted by a specific action — the basic assertion pattern
     /// for tests that care about *what just happened*, not just end-state.
@@ -544,6 +571,7 @@ impl Game {
             self.active_kenken = None;
             self.active_pattern = None;
             self.active_balance = None;
+            self.active_sudoku = None;
             self.pending_challenge = false;
         }
         self.dum_dum_hud.update(dt);
@@ -631,6 +659,7 @@ impl Game {
             GameState::KenKen => { self.step_kenken(input, dt, screen); false }
             GameState::Pattern => { self.step_pattern(input, dt, screen); false }
             GameState::Balance => { self.step_balance(input, dt, screen); false }
+            GameState::Sudoku => { self.step_sudoku(input, dt, screen); false }
         }
     }
 
@@ -1391,6 +1420,16 @@ impl Game {
                 self.active_balance = Some(ab);
                 self.set_state(GameState::Balance);
             }
+            CtrlTriggerSudoku => {
+                let source = kind.as_str().to_string();
+                let asd = start_sudoku(&mut self.rng, &self.profile, self.game_time, source.clone());
+                self.events.push(GameEvent::SudokuStarted {
+                    grid_size: asd.session.puzzle.grid_size,
+                    source,
+                });
+                self.active_sudoku = Some(asd);
+                self.set_state(GameState::Sudoku);
+            }
             CtrlTriggerChallenge => {
                 let ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
                 self.events.push(GameEvent::ChallengeStarted {
@@ -1640,6 +1679,62 @@ impl Game {
         }
     }
 
+    fn step_sudoku(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        let mut dismiss = false;
+        if let Some(ref mut asd) = self.active_sudoku {
+            if asd.session.phase == SudokuPhase::Complete {
+                asd.complete_timer += dt;
+                if asd.complete_timer >= 2.5 {
+                    dismiss = true;
+                }
+                if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) || input.mouse_clicked {
+                    dismiss = true;
+                }
+            } else {
+                let layout = ui::sudoku::layout(&asd.session, screen);
+                if let Some(intent) = ui::sudoku::handle_key(&asd.session, input, asd.selected) {
+                    apply_sudoku_intent(asd, intent);
+                }
+                if input.mouse_clicked {
+                    let (mx, my) = input.mouse_pos;
+                    if let Some(intent) = ui::sudoku::handle_click(mx, my, &asd.session, &layout, asd.selected) {
+                        apply_sudoku_intent(asd, intent);
+                    }
+                }
+            }
+        }
+
+        if dismiss {
+            if let Some(asd) = self.active_sudoku.take() {
+                let was_correct = asd.session.phase == SudokuPhase::Complete;
+                let response_ms = ((self.game_time - asd.start_time) as f64 * 1000.0).min(120000.0);
+                let grid_size = asd.session.puzzle.grid_size;
+                let violations = asd.session.constraint_violations;
+
+                if was_correct {
+                    let award = 1u32;
+                    self.dum_dums += award;
+                    self.dum_dum_hud.flash();
+                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                }
+
+                self.events.push(GameEvent::SudokuResolved {
+                    correct: was_correct,
+                    grid_size,
+                    constraint_violations: violations,
+                    response_ms,
+                });
+            }
+            self.set_state(GameState::Playing);
+
+            if self.map.id != "dev" {
+                let save_data = self.gather_save_data();
+                self.save_backend.save_to(self.active_slot, &save_data);
+                self.auto_save_timer = 0.0;
+            }
+        }
+    }
+
     fn handle_interaction_menu(&mut self, input: &FrameInput, screen: (f32, f32)) {
         let layout = ui::interaction_menu::layout(&self.menu_options, screen);
         let action = ui::interaction_menu::handle_input(&layout, input);
@@ -1698,6 +1793,16 @@ impl Game {
                     });
                     self.active_balance = Some(ab);
                     self.set_state(GameState::Balance);
+                }
+                "sudoku" => {
+                    let source = self.menu_target_id.clone();
+                    let asd = start_sudoku(&mut self.rng, &self.profile, self.game_time, source);
+                    self.events.push(GameEvent::SudokuStarted {
+                        grid_size: asd.session.puzzle.grid_size,
+                        source: asd.source_npc.clone(),
+                    });
+                    self.active_sudoku = Some(asd);
+                    self.set_state(GameState::Sudoku);
                 }
                 "give" => {
                     if !give::can_give(self.dum_dums) {
@@ -1765,6 +1870,7 @@ impl Game {
                         self.active_kenken = None;
                         self.active_pattern = None;
                         self.active_balance = None;
+                        self.active_sudoku = None;
                         self.pending_challenge = false;
                         self.set_state(GameState::Title);
                     }
@@ -2342,6 +2448,12 @@ impl Game {
             ui::balance::draw_balance(&ab.session, &layout, self.game_time);
         }
 
+        // Sudoku overlay
+        if let Some(ref asd) = self.active_sudoku {
+            let layout = ui::sudoku::layout(&asd.session, screen);
+            ui::sudoku::draw_sudoku(&asd.session, &layout, asd.selected);
+        }
+
         if self.settings_open {
             ui::settings_overlay::draw(screen);
         }
@@ -2535,6 +2647,44 @@ fn start_balance(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, s
     }
 }
 
+fn start_sudoku(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, source: String) -> ActiveSudoku {
+    // Sudoku is pure logic; reuse the kenken level dial as a "logic grid" size
+    // signal: a kid comfortable with bigger kenken grids gets the 6x6 board.
+    let level = if profile.kenken_level >= 4 { 3 } else { 1 };
+    let puzzle = generate_sudoku_for_level(level, rng);
+    ActiveSudoku {
+        session: SudokuSession::new(puzzle),
+        selected: None,
+        complete_timer: 0.0,
+        start_time: game_time,
+        source_npc: source,
+    }
+}
+
+fn apply_sudoku_intent(asd: &mut ActiveSudoku, intent: ui::sudoku::SudokuInput) {
+    use robot_buddy_domain::logic::sudoku::SudokuAction;
+    match intent {
+        ui::sudoku::SudokuInput::Action(action) => {
+            asd.session = sudoku::sudoku_reducer(asd.session.clone(), action);
+            // Drop selection after a clean placement; keep it on a conflict so
+            // the kid can retry the same cell and the violation stays anchored.
+            if let SudokuAction::CellPlaced { .. } = action {
+                if asd.session.last_violation.is_none() {
+                    asd.selected = None;
+                }
+            }
+        }
+        ui::sudoku::SudokuInput::SelectCell(r, c) => {
+            asd.selected = Some((r, c));
+            asd.session.last_violation = None;
+        }
+        ui::sudoku::SudokuInput::Deselect => {
+            asd.selected = None;
+            asd.session.last_violation = None;
+        }
+    }
+}
+
 fn apply_kenken_intent(ak: &mut ActiveKenKen, intent: ui::kenken::KenKenInput) {
     match intent {
         ui::kenken::KenKenInput::Action(action) => {
@@ -2716,7 +2866,7 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
         // Dev-control NPCs go through apply_dev_control, never this path.
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
         | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance
-        | CtrlTriggerChallenge => &["Hello there!"],
+        | CtrlTriggerSudoku | CtrlTriggerChallenge => &["Hello there!"],
     };
     let idx = rng.gen_range(0..lines.len());
     vec![DialogueLine { speaker: npc.name().into(), text: lines[idx].into() }]
