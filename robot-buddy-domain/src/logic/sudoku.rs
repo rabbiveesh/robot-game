@@ -285,7 +285,11 @@ fn full_solution(grid_size: u8, box_rows: u8, box_cols: u8, rng: &mut impl Rng) 
     let n = grid_size as usize;
     let mut grid = vec![vec![0u8; n]; n];
     let proto = SudokuPuzzle { grid_size, box_rows, box_cols, solution: vec![], givens: vec![] };
-    fill_recursive(&mut grid, 0, &proto, rng);
+    // An empty grid of a supported size always has a completion, so backtracking
+    // never fails here — but assert it rather than silently returning a grid with
+    // 0s that would poison hole-digging.
+    let filled = fill_recursive(&mut grid, 0, &proto, rng);
+    assert!(filled, "sudoku full_solution: backtracking failed for {n}x{n}");
     grid
 }
 

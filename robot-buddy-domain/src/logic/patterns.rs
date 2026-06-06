@@ -241,15 +241,29 @@ fn generate_numeric(kind: PatternKind, rng: &mut impl Rng) -> PatternPuzzle {
         .collect();
     let correct_answer = PatternElement::Number { value: correct };
 
-    let mut choices = vec![correct_answer.clone()];
-    for &d in &[correct - 1, correct + 1, correct - 2, correct + 2, correct + 3] {
-        if choices.len() >= 4 {
+    // Nearby distractors. Don't show negative tiles unless the answer itself is
+    // negative (keeps a counting question kid-friendly), and guarantee at least
+    // three distinct tiles regardless of the answer's sign/magnitude — so the
+    // choice set is never degenerate even for an unusual sequence.
+    let mut values = vec![correct];
+    for d in [correct + 1, correct - 1, correct + 2, correct - 2, correct + 3, correct + 4] {
+        if values.len() >= 4 {
             break;
         }
-        if d > 0 && !choices.contains(&PatternElement::Number { value: d }) {
-            choices.push(PatternElement::Number { value: d });
+        let sign_ok = correct < 0 || d >= 0;
+        if sign_ok && !values.contains(&d) {
+            values.push(d);
         }
     }
+    let mut extra = correct + 5;
+    while values.len() < 3 {
+        if !values.contains(&extra) {
+            values.push(extra);
+        }
+        extra += 1;
+    }
+    let mut choices: Vec<PatternElement> =
+        values.into_iter().map(|v| PatternElement::Number { value: v }).collect();
     choices.shuffle(rng);
 
     PatternPuzzle { kind, visible_elements, correct_answer, choices }
@@ -445,9 +459,35 @@ mod tests {
                 let p = generate_pattern(kind, &mut r);
                 for c in &p.choices {
                     if let PatternElement::Number { value } = c {
-                        assert!(*value > 0, "{kind:?} seed={seed}: choice {value} not positive");
+                        assert!(*value >= 0, "{kind:?} seed={seed}: choice {value} negative");
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_choices_stay_well_formed_for_odd_sequences() {
+        // Even a non-game sequence (negative step → negative answer) must yield
+        // a usable choice set: the answer is present, choices are distinct, and
+        // there are at least three tiles. Guards the choice generator's floor.
+        for kind in [
+            PatternKind::CountBy { step: -2 },
+            PatternKind::CountBy { step: 0 },
+            PatternKind::CountBy { step: 1 },
+        ] {
+            for seed in 0..50u64 {
+                let mut r = SmallRng::seed_from_u64(seed);
+                let p = generate_pattern(kind, &mut r);
+                assert!(p.choices.contains(&p.correct_answer), "{kind:?}: answer present");
+                assert!(p.choices.len() >= 3, "{kind:?} seed={seed}: too few choices {:?}", p.choices);
+                let mut seen = p.choices.clone();
+                seen.sort_by_key(|e| match e {
+                    PatternElement::Number { value } => *value,
+                    _ => 0,
+                });
+                seen.dedup();
+                assert_eq!(seen.len(), p.choices.len(), "{kind:?}: choices distinct");
             }
         }
     }
