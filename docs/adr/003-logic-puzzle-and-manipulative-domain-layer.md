@@ -1,6 +1,7 @@
 # ADR-003: Logic-Puzzle, CRA-Manipulative, and Quest Domain Layer
 
-**Status:** Domain layer accepted and implemented; presentation wiring partial
+**Status:** Domain layer implemented; logic puzzles + shop wired; encounters,
+CRA manipulatives, and quests wired behind opt-in feature flags (see Addendum)
 **Date:** 2026-06-06
 **Deciders:** Veesh, Claude
 
@@ -140,3 +141,43 @@ Module-specific notes:
   which incidentally removed the integration step entirely. The layered split
   (pure domain modules, serial wiring) is the durable decision regardless of how
   many workers are available.
+
+## Addendum (2026-06-06): opt-in feature flags for the hard-to-reverse paths
+
+The shop, all four logic puzzles, and the KenKen fix are wired for default play.
+The three cross-cutting / feel-sensitive paths — **random encounters**, **CRA
+manipulatives in the challenge flow**, and **quests** — are now wired but gated
+behind a default-off `FeatureFlags { encounters, cra_manipulatives, quest }` on
+`Game`. This was a deliberate call: ship them so they're playtestable, without
+disturbing the test suite or normal play, accepting a sliver of tech debt while
+they bake.
+
+- **Default off** means every existing test and the normal play loop are
+  unaffected (the suite never sets a flag). Toggle them at runtime in the **dev
+  control room** ("Encounters Flag", "Manipulatives Flag", "Quest Flag"), and
+  fire one-shots with "Trigger Encounter / Manipulative" and "Start Quest".
+- **Encounters**: after a completed tile step, `should_trigger_encounter` may
+  fire `pick_encounter`, routed by `fire_encounter` to dialogue / a free Dum Dum
+  / the normal challenge.
+- **CRA manipulatives**: `begin_challenge` routes an add/sub challenge to a
+  hands-on manipulative (concrete `manipulate_concrete` or representational
+  `number_line`, by CRA stage) instead of the quiz; completion feeds the same
+  `PUZZLE_ATTEMPTED` signal and reward. Operands >20 (or concrete sums >12), the
+  Abstract stage, and non-add/sub ops fall back to the standard challenge.
+- **Quest**: a self-contained `GameState::Quest` runner — narrative/travel/reward
+  beats plus inline multiple-choice `MathPuzzle` steps built from the step
+  operands — so it never has to hand control to the challenge state and back.
+
+Each path has story-test coverage that enables the flag (or uses the one-shot dev
+trigger) and drives it to completion, plus a toggle test.
+
+### Still open (intentionally deferred)
+
+- Decide when these graduate from flags to default-on (production `main.rs` could
+  flip them, or a settings/parent toggle).
+- Manipulatives: a `base_ten` UI (multi-digit carry/borrow) and richer concrete
+  visuals; real CRA-stage-aware selection tuning.
+- Quests: quest-giver NPCs offering quests when the flag is on; `Travel` steps as
+  *real* walking (via `pathfinding`) rather than tap-to-advance; a journal UI.
+- Shop: persist owned cosmetics + a Sparky sprite hook.
+- Skipped entirely (per direction): all AI dialogue/speech (network/API/browser).
