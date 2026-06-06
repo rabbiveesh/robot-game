@@ -603,6 +603,25 @@ impl Harness {
         self.wait_until(|g| g.state == GameState::Playing);
     }
 
+    // ─── Settings / parent overlay helpers ──────────────
+
+    /// Open the settings overlay (the in-game gear; T key).
+    pub fn open_settings(&mut self) {
+        self.press(KeyCode::T);
+    }
+
+    /// Click the "Parent options" reveal row in the open settings overlay.
+    pub fn click_parent_options(&mut self) {
+        let (x, y) = robot_buddy_game::ui::settings_overlay::parent_toggle_center(SCREEN);
+        self.click(x, y);
+    }
+
+    /// Click a feature toggle in the (revealed) parent section.
+    pub fn toggle_feature_in_settings(&mut self, feature: robot_buddy_game::ui::settings_overlay::Feature) {
+        let (x, y) = robot_buddy_game::ui::settings_overlay::feature_toggle_center(SCREEN, feature);
+        self.click(x, y);
+    }
+
     // ─── Quest helpers ───────────────────────────────────
 
     /// Play the active quest to completion: tap Continue through narrative /

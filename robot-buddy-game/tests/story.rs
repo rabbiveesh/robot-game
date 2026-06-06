@@ -342,6 +342,27 @@ fn shopkeeper_sells_a_cosmetic_via_embedded_subtraction() {
 }
 
 #[test]
+fn parent_overlay_toggles_feature_flags_in_game() {
+    use robot_buddy_game::ui::settings_overlay::Feature;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    assert!(!h.game.features.encounters);
+    assert!(!h.game.features.quest);
+
+    // Open settings → reveal the parent section → flip two features on.
+    h.open_settings();
+    h.click_parent_options();
+    h.toggle_feature_in_settings(Feature::Encounters);
+    assert!(h.game.features.encounters, "parent overlay should enable encounters");
+    h.toggle_feature_in_settings(Feature::Quest);
+    assert!(h.game.features.quest, "parent overlay should enable quests");
+
+    // Toggling again turns it back off (it's a real toggle).
+    h.toggle_feature_in_settings(Feature::Encounters);
+    assert!(!h.game.features.encounters, "toggling again disables it");
+}
+
+#[test]
 fn dev_toggle_flips_the_quest_flag() {
     use macroquad::prelude::KeyCode;
     let mut h = Harness::new(7);

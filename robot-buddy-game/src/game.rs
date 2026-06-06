@@ -441,6 +441,8 @@ pub struct Game {
     dum_dum_hud: DumDumHud,
     debug_overlay: DebugOverlay,
     settings_open: bool,
+    /// Whether the settings overlay's parent-only experimental section is shown.
+    parent_panel_open: bool,
 
     // Soft-block pressure per entity (driver of `Solidity::SoftAfter`).
     // Sparky and the companion are soft-blockers — pressure accumulates while
@@ -515,6 +517,7 @@ impl Game {
             dum_dum_hud: DumDumHud::new(),
             debug_overlay: DebugOverlay::new(),
             settings_open: false,
+            parent_panel_open: false,
             pressure: HashMap::new(),
             rng: SmallRng::seed_from_u64(seed),
             events: Vec::new(),
@@ -2320,11 +2323,27 @@ impl Game {
 
     fn handle_settings_input(&mut self, input: &FrameInput, screen: (f32, f32)) {
         if self.settings_open {
-            if let Some(result) = ui::settings_overlay::handle_input(input, screen) {
-                self.settings_open = false;
+            use ui::settings_overlay::{Feature, SettingsResult};
+            if let Some(result) = ui::settings_overlay::handle_input(input, screen, self.parent_panel_open) {
                 match result {
-                    ui::settings_overlay::SettingsResult::Close => {}
-                    ui::settings_overlay::SettingsResult::BackToTitle => {
+                    // These stay in the overlay — just mutate state, don't close.
+                    SettingsResult::ToggleParentPanel => {
+                        self.parent_panel_open = !self.parent_panel_open;
+                    }
+                    SettingsResult::ToggleFeature(f) => match f {
+                        Feature::Encounters => self.features.encounters = !self.features.encounters,
+                        Feature::Manipulatives => {
+                            self.features.cra_manipulatives = !self.features.cra_manipulatives
+                        }
+                        Feature::Quest => self.features.quest = !self.features.quest,
+                    },
+                    SettingsResult::Close => {
+                        self.settings_open = false;
+                        self.parent_panel_open = false;
+                    }
+                    SettingsResult::BackToTitle => {
+                        self.settings_open = false;
+                        self.parent_panel_open = false;
                         audio::tts::cancel();
                         self.dialogue.active = false;
                         self.active_challenge = None;
@@ -2941,7 +2960,7 @@ impl Game {
         }
 
         if self.settings_open {
-            ui::settings_overlay::draw(screen);
+            ui::settings_overlay::draw(screen, self.features, self.parent_panel_open);
         }
     }
 
