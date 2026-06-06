@@ -41,6 +41,7 @@ use robot_buddy_domain::logic::sudoku::{
     self, SudokuPhase, SudokuSession, generate_for_level as generate_sudoku_for_level,
 };
 use robot_buddy_domain::economy::shop::{self, ShopItem};
+use robot_buddy_domain::world::encounters::{self, EncounterConfig, EncounterKind};
 use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel};
 use robot_buddy_domain::world::movement::{
     Direction, EntityId, EntityState, GridDims, MoveIntent, MoveResolution,
@@ -89,6 +90,21 @@ pub enum GameState {
     Balance,
     Sudoku,
     Shop,
+}
+
+/// Opt-in toggles for in-development paths that aren't ready for default play.
+/// All default OFF so the test suite and normal play are unaffected; flip them
+/// on in the dev control room (or in production wiring) to playtest. A drop of
+/// tech debt traded for being able to try these before they're fully baked.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FeatureFlags {
+    /// Random encounters fire as the kid explores.
+    pub encounters: bool,
+    /// Add/sub challenges route to a hands-on CRA manipulative instead of the
+    /// multiple-choice quiz when the learner's CRA stage for the op warrants it.
+    pub cra_manipulatives: bool,
+    /// Quests are offered and executable.
+    pub quest: bool,
 }
 
 #[derive(PartialEq, Debug)]
@@ -303,6 +319,8 @@ pub enum GameEvent {
     },
     /// A shop purchase succeeded: the kid solved the cost subtraction.
     DumDumsSpent { amount: u32, item: String },
+    /// A random encounter fired ("flavor" | "dum_dum" | "challenge" | "sighting").
+    EncounterTriggered { kind: String },
     SudokuStarted { grid_size: u8, source: String },
     SudokuResolved {
         correct: bool,
@@ -360,6 +378,10 @@ pub struct Game {
     active_shop: Option<ActiveShop>,
     /// Cosmetics bought from Bolt this session (in-memory; not yet persisted).
     shop_owned: std::collections::HashSet<String>,
+    /// Opt-in in-development feature toggles (default all off).
+    pub features: FeatureFlags,
+    /// Tiles walked since the last random encounter (for encounter pacing).
+    steps_since_encounter: u32,
     pending_challenge: bool,
     new_game_form: Option<NewGameForm>,
 
@@ -436,6 +458,8 @@ impl Game {
             active_sudoku: None,
             active_shop: None,
             shop_owned: std::collections::HashSet::new(),
+            features: FeatureFlags::default(),
+            steps_since_encounter: 0,
             pending_challenge: false,
             new_game_form: None,
             player_name: String::new(),
@@ -652,6 +676,23 @@ impl Game {
 
         if self.state == GameState::Playing && !arrived_npcs.is_empty() {
             self.handle_npc_portals(&arrived_npcs);
+        }
+
+        // Random encounters (opt-in): after a completed tile step, the world
+        // may spring something. Off by default — flip the dev flag to playtest.
+        if self.features.encounters && arrived && self.state == GameState::Playing && !self.player.moving {
+            self.steps_since_encounter = self.steps_since_encounter.saturating_add(1);
+            let cfg = EncounterConfig {
+                steps_since_last_encounter: self.steps_since_encounter,
+                min_steps_between: 15,
+                challenge_freq: self.profile.challenge_freq,
+                area: self.map.id.to_string(),
+            };
+            if encounters::should_trigger_encounter(&cfg, &mut self.rng) {
+                let kind = encounters::pick_encounter(&cfg, &mut self.rng);
+                self.steps_since_encounter = 0;
+                self.fire_encounter(kind);
+            }
         }
 
         self.camera.follow(self.player.x, self.player.y, &self.map, GAME_W, GAME_H);
@@ -1470,10 +1511,67 @@ impl Game {
                 self.active_challenge = Some(ac);
                 self.set_state(GameState::Challenge);
             }
+            CtrlToggleEncounters => {
+                self.features.encounters = !self.features.encounters;
+                let on = if self.features.encounters { "ON" } else { "OFF" };
+                self.start_dialogue(vec![line(&format!("BEEP. Random encounters are now {on}."))]);
+                self.set_state(GameState::Dialogue);
+            }
+            CtrlTriggerEncounter => {
+                // Fire one encounter right now for testing (ignores the flag and
+                // the step pacing). Routes through the same handler as live play.
+                let cfg = EncounterConfig {
+                    steps_since_last_encounter: 999,
+                    min_steps_between: 0,
+                    challenge_freq: self.profile.challenge_freq,
+                    area: self.map.id.to_string(),
+                };
+                let kind = encounters::pick_encounter(&cfg, &mut self.rng);
+                self.fire_encounter(kind);
+            }
             // Non-dev kinds shouldn't reach here -- caller gates on is_dev_control.
             other => {
                 self.start_dialogue(vec![line(&format!("Unknown control: {}", other.as_str()))]);
                 self.set_state(GameState::Dialogue);
+            }
+        }
+    }
+
+    /// Route a rolled encounter to the right presentation: flavor/sighting →
+    /// dialogue, found Dum Dum → reward + dialogue, challenge → the normal
+    /// challenge lifecycle. Caller has already confirmed we're in Playing.
+    fn fire_encounter(&mut self, kind: EncounterKind) {
+        let label = match &kind {
+            EncounterKind::FlavorDialogue { .. } => "flavor",
+            EncounterKind::FoundDumDum => "dum_dum",
+            EncounterKind::Challenge => "challenge",
+            EncounterKind::MathSighting { .. } => "sighting",
+        };
+        self.events.push(GameEvent::EncounterTriggered { kind: label.into() });
+        match kind {
+            EncounterKind::FlavorDialogue { speaker, text }
+            | EncounterKind::MathSighting { speaker, text } => {
+                self.start_dialogue(vec![DialogueLine { speaker, text }]);
+                self.set_state(GameState::Dialogue);
+            }
+            EncounterKind::FoundDumDum => {
+                self.dum_dums += 1;
+                self.dum_dum_hud.flash();
+                self.events.push(GameEvent::DumDumsAwarded { amount: 1 });
+                self.start_dialogue(vec![DialogueLine {
+                    speaker: "Sparky".into(),
+                    text: "Ooh! A shiny Dum Dum, just sitting here!".into(),
+                }]);
+                self.set_state(GameState::Dialogue);
+            }
+            EncounterKind::Challenge => {
+                let ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
+                self.events.push(GameEvent::ChallengeStarted {
+                    question: ac.challenge.display_text.clone(),
+                });
+                audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                self.active_challenge = Some(ac);
+                self.set_state(GameState::Challenge);
             }
         }
     }
@@ -3018,7 +3116,8 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
         // Dev-control NPCs go through apply_dev_control, never this path.
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
         | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance
-        | CtrlTriggerSudoku | CtrlTriggerChallenge => &["Hello there!"],
+        | CtrlTriggerSudoku | CtrlTriggerChallenge
+        | CtrlToggleEncounters | CtrlTriggerEncounter => &["Hello there!"],
     };
     let idx = rng.gen_range(0..lines.len());
     vec![DialogueLine { speaker: npc.name().into(), text: lines[idx].into() }]

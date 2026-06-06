@@ -26,6 +26,8 @@ pub enum NpcKind {
     CtrlTriggerBalance,
     CtrlTriggerSudoku,
     CtrlTriggerChallenge,
+    CtrlToggleEncounters,
+    CtrlTriggerEncounter,
 }
 
 impl NpcKind {
@@ -52,6 +54,8 @@ impl NpcKind {
             NpcKind::CtrlTriggerBalance => "ctrl_trigger_balance",
             NpcKind::CtrlTriggerSudoku => "ctrl_trigger_sudoku",
             NpcKind::CtrlTriggerChallenge => "ctrl_trigger_challenge",
+            NpcKind::CtrlToggleEncounters => "ctrl_toggle_encounters",
+            NpcKind::CtrlTriggerEncounter => "ctrl_trigger_encounter",
         }
     }
 
@@ -75,6 +79,8 @@ impl NpcKind {
             NpcKind::CtrlTriggerBalance => "Trigger Balance",
             NpcKind::CtrlTriggerSudoku => "Trigger Sudoku",
             NpcKind::CtrlTriggerChallenge => "Trigger Challenge",
+            NpcKind::CtrlToggleEncounters => "Encounters Flag",
+            NpcKind::CtrlTriggerEncounter => "Trigger Encounter",
         }
     }
 
@@ -87,7 +93,7 @@ impl NpcKind {
         NpcKind::GroveSpirit, NpcKind::Pip, NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
         NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerBalance, NpcKind::CtrlTriggerSudoku,
-        NpcKind::CtrlTriggerChallenge,
+        NpcKind::CtrlTriggerChallenge, NpcKind::CtrlToggleEncounters, NpcKind::CtrlTriggerEncounter,
     ];
 
     /// Inverse of `as_str`. Resolves a stable id token back to its kind without
@@ -102,7 +108,8 @@ impl NpcKind {
             NpcKind::CtrlBand | NpcKind::CtrlKenkenLevel | NpcKind::CtrlCraReset
             | NpcKind::CtrlIntroReset | NpcKind::CtrlTriggerKenken
             | NpcKind::CtrlTriggerPattern | NpcKind::CtrlTriggerBalance
-            | NpcKind::CtrlTriggerSudoku | NpcKind::CtrlTriggerChallenge)
+            | NpcKind::CtrlTriggerSudoku | NpcKind::CtrlTriggerChallenge
+            | NpcKind::CtrlToggleEncounters | NpcKind::CtrlTriggerEncounter)
     }
 }
 
@@ -381,6 +388,8 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(CtrlTriggerPattern,   5,  5, S::Sage,       false, true, false),
             n(CtrlTriggerBalance,   6,  5, S::OldOak,     false, true, false),
             n(CtrlTriggerSudoku,    7,  5, S::Kid1,       false, true, false),
+            n(CtrlToggleEncounters, 2,  7, S::Dog,        false, true, false),
+            n(CtrlTriggerEncounter, 4,  7, S::Sage,       false, true, false),
             n(CtrlTriggerChallenge, 8,  5, S::Kid2,       false, true, false),
         ],
         "dev" => vec![

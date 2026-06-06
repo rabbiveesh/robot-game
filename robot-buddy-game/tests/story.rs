@@ -342,6 +342,44 @@ fn shopkeeper_sells_a_cosmetic_via_embedded_subtraction() {
 }
 
 #[test]
+fn dev_toggle_flips_the_encounters_flag() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    assert!(!h.game.features.encounters, "encounters default OFF (suite + normal play unaffected)");
+
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlToggleEncounters);
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    assert!(h.game.features.encounters, "the dev knob should enable encounters for playtesting");
+}
+
+#[test]
+fn dev_trigger_fires_and_routes_an_encounter() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlTriggerEncounter);
+
+    let mark = h.mark();
+    h.interact();
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::EncounterTriggered { .. })),
+        "expected an EncounterTriggered event; got: {:?}", events,
+    );
+    // Encounters route to dialogue (flavor / sighting / found-dum-dum) or a challenge.
+    assert!(
+        matches!(h.game.state, GameState::Dialogue | GameState::Challenge),
+        "encounter should open dialogue or a challenge, got {:?}", h.game.state,
+    );
+}
+
+#[test]
 fn kenken_intro_shows_on_first_puzzle_only() {
     let mut h = Harness::new(7);
     h.start_dev_game();
