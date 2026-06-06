@@ -639,25 +639,27 @@ impl Harness {
     pub fn play_quest(&mut self) {
         use robot_buddy_domain::quest::QuestStep;
         for _ in 0..80 {
-            let puzzle_key = {
+            // Number-key index to press: the answer tile for a MathPuzzle, or
+            // the first option for a Choice. `None` = a Continue beat (Space).
+            let key_idx = {
                 let Some(aq) = self.game.active_quest() else { break };
                 match aq.session.current_step() {
                     Some(QuestStep::MathPuzzle { .. }) => {
                         let p = aq.puzzle.as_ref().expect("puzzle step must have generated choices");
-                        let idx = p.choices.iter().position(|&c| c == p.answer)
-                            .expect("answer must be among the choices");
-                        Some(idx)
+                        Some(p.choices.iter().position(|&c| c == p.answer)
+                            .expect("answer must be among the choices"))
                     }
-                    Some(_) => None,           // narrative / travel / reward → Continue
+                    Some(QuestStep::Choice { .. }) => Some(0), // pick the first option
+                    Some(_) => None,                            // narrative / travel / reward
                     None => break,
                 }
             };
-            match puzzle_key {
+            match key_idx {
                 Some(0) => self.press(KeyCode::Key1),
                 Some(1) => self.press(KeyCode::Key2),
                 Some(2) => self.press(KeyCode::Key3),
                 Some(3) => self.press(KeyCode::Key4),
-                Some(_) => panic!("unexpected answer tile index"),
+                Some(_) => panic!("unexpected tile index"),
                 None => self.press(KeyCode::Space),
             }
         }

@@ -30,6 +30,8 @@ pub enum QuestView<'a> {
     Narrative { speaker: &'a str, lines: &'a [String] },
     Travel { label: String },
     Puzzle { prompt: &'a str, choices: &'a [i32] },
+    /// A branching decision — the player taps one of the labelled options.
+    Choice { prompt: &'a str, options: &'a [String] },
     Reward { dum_dums: u32 },
 }
 
@@ -38,17 +40,27 @@ pub struct AnswerTile {
     pub value: i32,
 }
 
+/// A labelled, full-width button for a quest Choice step.
+pub struct OptionButton {
+    pub rect: UiRect,
+    pub index: usize,
+    pub label: String,
+}
+
 pub struct QuestLayout {
     pub panel: UiRect,
     /// Present for Narrative / Travel / Reward steps — tap to continue.
     pub continue_btn: Option<UiRect>,
     /// Present for a Puzzle step.
     pub answers: Vec<AnswerTile>,
+    /// Present for a Choice step.
+    pub options: Vec<OptionButton>,
 }
 
 pub enum QuestClick {
     Continue,
     Answer(i32),
+    Choose(usize),
 }
 
 pub fn layout(view: &QuestView, screen: (f32, f32)) -> QuestLayout {
@@ -61,6 +73,7 @@ pub fn layout(view: &QuestView, screen: (f32, f32)) -> QuestLayout {
 
     let mut continue_btn = None;
     let mut answers = Vec::new();
+    let mut options = Vec::new();
     match view {
         QuestView::Puzzle { choices, .. } => {
             let tile = 84.0;
@@ -76,6 +89,22 @@ pub fn layout(view: &QuestView, screen: (f32, f32)) -> QuestLayout {
                 });
             }
         }
+        QuestView::Choice { options: opts, .. } => {
+            // Stacked full-width buttons, bottom-aligned.
+            let bh = 46.0;
+            let gap = 12.0;
+            let bw = panel_w - 64.0;
+            let n = opts.len();
+            let block_h = n as f32 * bh + (n as f32 - 1.0).max(0.0) * gap;
+            let start_y = panel_y + panel_h - 24.0 - block_h;
+            for (i, label) in opts.iter().enumerate() {
+                options.push(OptionButton {
+                    rect: UiRect { x: panel_x + 32.0, y: start_y + i as f32 * (bh + gap), w: bw, h: bh },
+                    index: i,
+                    label: label.clone(),
+                });
+            }
+        }
         _ => {
             continue_btn = Some(UiRect {
                 x: panel_x + panel_w / 2.0 - 90.0,
@@ -85,7 +114,7 @@ pub fn layout(view: &QuestView, screen: (f32, f32)) -> QuestLayout {
             });
         }
     }
-    QuestLayout { panel, continue_btn, answers }
+    QuestLayout { panel, continue_btn, answers, options }
 }
 
 pub fn handle_click(mx: f32, my: f32, layout: &QuestLayout) -> Option<QuestClick> {
@@ -99,6 +128,11 @@ pub fn handle_click(mx: f32, my: f32, layout: &QuestLayout) -> Option<QuestClick
             return Some(QuestClick::Answer(tile.value));
         }
     }
+    for opt in &layout.options {
+        if opt.rect.contains(mx, my) {
+            return Some(QuestClick::Choose(opt.index));
+        }
+    }
     None
 }
 
@@ -110,6 +144,11 @@ pub fn handle_key(input: &FrameInput, layout: &QuestLayout) -> Option<QuestClick
     for (i, key) in keys.iter().take(layout.answers.len()).enumerate() {
         if input.pressed(*key) {
             return Some(QuestClick::Answer(layout.answers[i].value));
+        }
+    }
+    for (i, key) in keys.iter().take(layout.options.len()).enumerate() {
+        if input.pressed(*key) {
+            return Some(QuestClick::Choose(layout.options[i].index));
         }
     }
     None
@@ -154,6 +193,7 @@ pub fn draw(view: &QuestView, title: &str, message: Option<&str>, layout: &Quest
         QuestView::Narrative { speaker, lines } => format!("{speaker}: {}", lines.join(" ")),
         QuestView::Travel { label } => label.clone(),
         QuestView::Puzzle { prompt, .. } => prompt.to_string(),
+        QuestView::Choice { prompt, .. } => prompt.to_string(),
         QuestView::Reward { dum_dums } => format!("You earned {dum_dums} Dum Dums!"),
     };
     let mut y = p.y + 86.0;
@@ -172,6 +212,15 @@ pub fn draw(view: &QuestView, title: &str, message: Option<&str>, layout: &Quest
         draw_text(&s, t.x + t.w / 2.0 - sw2 / 2.0, t.y + t.h / 2.0 + 12.0, size as f32, WHITE);
     }
 
+    for opt in &layout.options {
+        let r = opt.rect;
+        draw_rectangle(r.x, r.y, r.w, r.h, TILE_BG);
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.4));
+        let label = format!("{}. {}", opt.index + 1, opt.label);
+        let lw = measure_text(&label, None, 22, 1.0).width;
+        draw_text(&label, r.x + r.w / 2.0 - lw / 2.0, r.y + r.h / 2.0 + 8.0, 22.0, WHITE);
+    }
+
     if let Some(msg) = message {
         let mw = measure_text(msg, None, 22, 1.0).width;
         draw_text(msg, p.x + p.w / 2.0 - mw / 2.0, p.y + p.h - 96.0, 22.0, GOLD);
@@ -183,5 +232,36 @@ pub fn draw(view: &QuestView, title: &str, message: Option<&str>, layout: &Quest
         let label = "Continue";
         let lw = measure_text(label, None, 22, 1.0).width;
         draw_text(label, btn.x + btn.w / 2.0 - lw / 2.0, btn.y + btn.h / 2.0 + 8.0, 22.0, WHITE);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A Choice step must render one button per option and report the TAPPED
+    // index — not always 0 (the bug this fixes).
+    #[test]
+    fn choice_options_map_to_their_own_index() {
+        let opts = vec!["Confront".to_string(), "Set a trap".to_string()];
+        let view = QuestView::Choice { prompt: "How?", options: &opts };
+        let screen = (960.0, 720.0);
+        let layout = layout(&view, screen);
+        assert_eq!(layout.options.len(), 2, "one button per option");
+        assert!(layout.continue_btn.is_none(), "a Choice has no Continue button");
+
+        // Tapping the second option's centre yields Choose(1), not Choose(0).
+        let r = layout.options[1].rect;
+        match handle_click(r.x + r.w / 2.0, r.y + r.h / 2.0, &layout) {
+            Some(QuestClick::Choose(1)) => {}
+            other => panic!("expected Choose(1), got something else: {}",
+                matches!(other, Some(QuestClick::Choose(0)))),
+        }
+        // First option → Choose(0).
+        let r0 = layout.options[0].rect;
+        assert!(matches!(
+            handle_click(r0.x + r0.w / 2.0, r0.y + r0.h / 2.0, &layout),
+            Some(QuestClick::Choose(0)),
+        ));
     }
 }

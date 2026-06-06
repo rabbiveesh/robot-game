@@ -1975,7 +1975,7 @@ impl Game {
                     self.events.push(GameEvent::DumDumsAwarded { amount: *dum_dums });
                     act = Some(QuestAction::AdvanceStep);
                 }
-                QuestStep::Choice { .. } => act = Some(QuestAction::ChooseOption { index: 0 }),
+                QuestStep::Choice { .. } => {} // chosen via Choose, not Continue
                 QuestStep::MathPuzzle { .. } => {}
             },
             QuestClick::Answer(v) => {
@@ -1987,6 +1987,11 @@ impl Game {
                         self.active_quest.as_mut().unwrap().message =
                             Some("Hmm, not quite — try again!".into());
                     }
+                }
+            }
+            QuestClick::Choose(index) => {
+                if let QuestStep::Choice { .. } = &step {
+                    act = Some(QuestAction::ChooseOption { index });
                 }
             }
         }
@@ -3265,9 +3270,7 @@ fn quest_view(aq: &ActiveQuest) -> Option<ui::quest::QuestView<'_>> {
             let choices = aq.puzzle.as_ref().map(|p| p.choices.as_slice()).unwrap_or(&[]);
             QuestView::Puzzle { prompt: context, choices }
         }
-        QuestStep::Choice { prompt, .. } => {
-            QuestView::Narrative { speaker: "Choose", lines: std::slice::from_ref(prompt) }
-        }
+        QuestStep::Choice { prompt, options } => QuestView::Choice { prompt, options },
         QuestStep::Reward { dum_dums } => QuestView::Reward { dum_dums: *dum_dums },
     })
 }
