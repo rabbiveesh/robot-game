@@ -44,6 +44,7 @@ use robot_buddy_domain::economy::shop::{self, ShopItem};
 use robot_buddy_domain::world::encounters::{self, EncounterConfig, EncounterKind};
 use robot_buddy_domain::logic::manipulate_concrete::{self, ConcreteKind, generate_concrete};
 use robot_buddy_domain::logic::number_line::{self, generate_number_line};
+use robot_buddy_domain::quest::{self, Quest, QuestAction, QuestSession, QuestStatus, QuestStep};
 use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel, Operation};
 use robot_buddy_domain::world::movement::{
     Direction, EntityId, EntityState, GridDims, MoveIntent, MoveResolution,
@@ -93,6 +94,7 @@ pub enum GameState {
     Sudoku,
     Shop,
     Manipulative,
+    Quest,
 }
 
 /// Opt-in toggles for in-development paths that aren't ready for default play.
@@ -183,6 +185,21 @@ pub struct ActiveSudoku {
     pub complete_timer: f32,
     pub start_time: f32,
     pub source_npc: String,
+}
+
+/// Inline multiple-choice for a quest's MathPuzzle step (kept self-contained so
+/// quests never hand control to the challenge state and back).
+#[derive(Clone)]
+pub struct QuestPuzzle {
+    pub choices: Vec<i32>,
+    pub answer: i32,
+}
+
+pub struct ActiveQuest {
+    pub session: QuestSession,
+    /// Present while the current step is a MathPuzzle.
+    pub puzzle: Option<QuestPuzzle>,
+    pub message: Option<String>,
 }
 
 pub struct ActiveManipulative {
@@ -333,6 +350,8 @@ pub enum GameEvent {
     DumDumsSpent { amount: u32, item: String },
     /// A random encounter fired ("flavor" | "dum_dum" | "challenge" | "sighting").
     EncounterTriggered { kind: String },
+    /// A quest run reached its final step.
+    QuestCompleted,
     SudokuStarted { grid_size: u8, source: String },
     SudokuResolved {
         correct: bool,
@@ -389,6 +408,7 @@ pub struct Game {
     active_sudoku: Option<ActiveSudoku>,
     active_shop: Option<ActiveShop>,
     active_manipulative: Option<ActiveManipulative>,
+    active_quest: Option<ActiveQuest>,
     /// Cosmetics bought from Bolt this session (in-memory; not yet persisted).
     shop_owned: std::collections::HashSet<String>,
     /// Opt-in in-development feature toggles (default all off).
@@ -471,6 +491,7 @@ impl Game {
             active_sudoku: None,
             active_shop: None,
             active_manipulative: None,
+            active_quest: None,
             shop_owned: std::collections::HashSet::new(),
             features: FeatureFlags::default(),
             steps_since_encounter: 0,
@@ -584,6 +605,11 @@ impl Game {
         self.active_manipulative.as_ref()
     }
 
+    /// Read-only view of the active quest run (None if not on a quest).
+    pub fn active_quest(&self) -> Option<&ActiveQuest> {
+        self.active_quest.as_ref()
+    }
+
     /// Snapshot of the event log length. Pair with `events_since(mark)` to
     /// read events emitted by a specific action — the basic assertion pattern
     /// for tests that care about *what just happened*, not just end-state.
@@ -646,6 +672,7 @@ impl Game {
             self.active_sudoku = None;
             self.active_shop = None;
             self.active_manipulative = None;
+            self.active_quest = None;
             self.pending_challenge = false;
         }
         self.dum_dum_hud.update(dt);
@@ -753,6 +780,7 @@ impl Game {
             GameState::Sudoku => { self.step_sudoku(input, dt, screen); false }
             GameState::Shop => { self.step_shop(input, screen); false }
             GameState::Manipulative => { self.step_manipulative(input, dt, screen); false }
+            GameState::Quest => { self.step_quest(input, screen); false }
         }
     }
 
@@ -1581,6 +1609,15 @@ impl Game {
                     self.set_state(GameState::Dialogue);
                 }
             }
+            CtrlToggleQuest => {
+                self.features.quest = !self.features.quest;
+                let on = if self.features.quest { "ON" } else { "OFF" };
+                self.start_dialogue(vec![line(&format!("BEEP. Quests are now {on}."))]);
+                self.set_state(GameState::Dialogue);
+            }
+            CtrlStartQuest => {
+                self.start_quest(quest::welcome_quest());
+            }
             // Non-dev kinds shouldn't reach here -- caller gates on is_dev_control.
             other => {
                 self.start_dialogue(vec![line(&format!("Unknown control: {}", other.as_str()))]);
@@ -1706,6 +1743,88 @@ impl Game {
                 self.events.push(GameEvent::ChallengeResolved { correct: true, response_ms });
             }
             self.set_state(GameState::Playing);
+        }
+    }
+
+    fn start_quest(&mut self, quest: Quest) {
+        let session = quest::quest_reducer(QuestSession::new(quest), QuestAction::Start);
+        let puzzle = build_quest_puzzle(&session, &mut self.rng);
+        self.active_quest = Some(ActiveQuest { session, puzzle, message: None });
+        self.set_state(GameState::Quest);
+    }
+
+    fn step_quest(&mut self, input: &FrameInput, screen: (f32, f32)) {
+        // Pull the current step (clone) so we can mutate the session afterward.
+        let step = match self.active_quest.as_ref().and_then(|aq| aq.session.current_step().cloned()) {
+            Some(s) => s,
+            None => {
+                self.active_quest = None;
+                self.set_state(GameState::Playing);
+                return;
+            }
+        };
+
+        let intent = {
+            let aq = self.active_quest.as_ref().unwrap();
+            let Some(view) = quest_view(aq) else { return };
+            let layout = ui::quest::layout(&view, screen);
+            if input.mouse_clicked {
+                let (mx, my) = input.mouse_pos;
+                ui::quest::handle_click(mx, my, &layout)
+            } else {
+                ui::quest::handle_key(input, &layout)
+            }
+        };
+        let Some(intent) = intent else { return };
+
+        use ui::quest::QuestClick;
+        let mut act: Option<QuestAction> = None;
+        match intent {
+            QuestClick::Continue => match &step {
+                QuestStep::Dialogue { .. } => act = Some(QuestAction::AdvanceStep),
+                QuestStep::Travel { map, x, y } => {
+                    act = Some(QuestAction::ArriveAt { map: map.clone(), x: *x, y: *y })
+                }
+                QuestStep::Reward { dum_dums } => {
+                    self.dum_dums += *dum_dums;
+                    self.dum_dum_hud.flash();
+                    self.events.push(GameEvent::DumDumsAwarded { amount: *dum_dums });
+                    act = Some(QuestAction::AdvanceStep);
+                }
+                QuestStep::Choice { .. } => act = Some(QuestAction::ChooseOption { index: 0 }),
+                QuestStep::MathPuzzle { .. } => {}
+            },
+            QuestClick::Answer(v) => {
+                if let QuestStep::MathPuzzle { .. } = &step {
+                    let answer = self.active_quest.as_ref().unwrap().puzzle.as_ref().map(|p| p.answer);
+                    if Some(v) == answer {
+                        act = Some(QuestAction::CompletePuzzle { correct: true });
+                    } else {
+                        self.active_quest.as_mut().unwrap().message =
+                            Some("Hmm, not quite — try again!".into());
+                    }
+                }
+            }
+        }
+
+        if let Some(action) = act {
+            // Apply on a detached session so self.rng is free for the next
+            // puzzle without overlapping the active_quest borrow.
+            let mut session = self.active_quest.as_ref().unwrap().session.clone();
+            session = quest::quest_reducer(session, action);
+            let new_puzzle = build_quest_puzzle(&session, &mut self.rng);
+            let complete = session.status == QuestStatus::Complete;
+            {
+                let aq = self.active_quest.as_mut().unwrap();
+                aq.session = session;
+                aq.puzzle = new_puzzle;
+                aq.message = None;
+            }
+            if complete {
+                self.events.push(GameEvent::QuestCompleted);
+                self.active_quest = None;
+                self.set_state(GameState::Playing);
+            }
         }
     }
 
@@ -2215,6 +2334,7 @@ impl Game {
                         self.active_sudoku = None;
                         self.active_shop = None;
                         self.active_manipulative = None;
+                        self.active_quest = None;
                         self.pending_challenge = false;
                         self.set_state(GameState::Title);
                     }
@@ -2811,6 +2931,15 @@ impl Game {
             ui::manipulative::draw(&am.manip, &am.challenge.display_text, &layout);
         }
 
+        // Quest overlay
+        if let Some(ref aq) = self.active_quest {
+            if let Some(view) = quest_view(aq) {
+                let layout = ui::quest::layout(&view, screen);
+                let title = aq.session.quest.title.clone();
+                ui::quest::draw(&view, &title, aq.message.as_deref(), &layout);
+            }
+        }
+
         if self.settings_open {
             ui::settings_overlay::draw(screen);
         }
@@ -2909,6 +3038,63 @@ impl Game {
 }
 
 // ─── Free helpers ──────────────────────────────────────
+
+/// Build the player-facing view of the quest's current step (borrows the step
+/// + generated choices). `None` once the quest is complete/inactive.
+fn quest_view(aq: &ActiveQuest) -> Option<ui::quest::QuestView<'_>> {
+    use ui::quest::QuestView;
+    let step = aq.session.current_step()?;
+    Some(match step {
+        QuestStep::Dialogue { speaker, lines } => QuestView::Narrative { speaker, lines },
+        QuestStep::Travel { map, x, y } => {
+            QuestView::Travel { label: format!("Head to {map} at ({x}, {y})...") }
+        }
+        QuestStep::MathPuzzle { context, .. } => {
+            let choices = aq.puzzle.as_ref().map(|p| p.choices.as_slice()).unwrap_or(&[]);
+            QuestView::Puzzle { prompt: context, choices }
+        }
+        QuestStep::Choice { prompt, .. } => {
+            QuestView::Narrative { speaker: "Choose", lines: std::slice::from_ref(prompt) }
+        }
+        QuestStep::Reward { dum_dums } => QuestView::Reward { dum_dums: *dum_dums },
+    })
+}
+
+/// Generate the inline multiple-choice for the current MathPuzzle step (if any)
+/// from its operands + operation. The answer is computed; the distractors are
+/// nearby values.
+fn build_quest_puzzle(session: &QuestSession, rng: &mut SmallRng) -> Option<QuestPuzzle> {
+    match session.current_step()? {
+        QuestStep::MathPuzzle { operation, operands, .. } => {
+            let (a, b) = (*operands)?;
+            let (a, b) = (a as i32, b as i32);
+            let answer = match operation {
+                Operation::Sub => a - b,
+                Operation::Multiply => a * b,
+                Operation::Divide => if b != 0 { a / b } else { 0 },
+                _ => a + b, // Add / NumberBond
+            };
+            Some(QuestPuzzle { choices: quest_answer_choices(answer, rng), answer })
+        }
+        _ => None,
+    }
+}
+
+/// Answer tiles for a quest puzzle: the correct value plus nearby positive
+/// distractors, shuffled. Always includes the answer.
+fn quest_answer_choices(answer: i32, rng: &mut SmallRng) -> Vec<i32> {
+    let mut out = vec![answer];
+    for d in [answer + 1, answer - 1, answer + 2, answer - 2, answer + 3] {
+        if out.len() >= 4 {
+            break;
+        }
+        if d >= 0 && !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    out.shuffle(rng);
+    out
+}
 
 /// Build the shop's current view (Browsing vs. solving a purchase subtraction)
 /// from the active session. Borrows the session so the layout/draw can read it.
@@ -3306,7 +3492,8 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
         | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance
         | CtrlTriggerSudoku | CtrlTriggerChallenge
         | CtrlToggleEncounters | CtrlTriggerEncounter
-        | CtrlToggleManipulatives | CtrlTriggerManipulative => &["Hello there!"],
+        | CtrlToggleManipulatives | CtrlTriggerManipulative
+        | CtrlToggleQuest | CtrlStartQuest => &["Hello there!"],
     };
     let idx = rng.gen_range(0..lines.len());
     vec![DialogueLine { speaker: npc.name().into(), text: lines[idx].into() }]

@@ -603,6 +603,39 @@ impl Harness {
         self.wait_until(|g| g.state == GameState::Playing);
     }
 
+    // ─── Quest helpers ───────────────────────────────────
+
+    /// Play the active quest to completion: tap Continue through narrative /
+    /// travel / reward beats, and answer each embedded MathPuzzle correctly
+    /// (picking the answer's tile by number key). Lands back in Playing.
+    pub fn play_quest(&mut self) {
+        use robot_buddy_domain::quest::QuestStep;
+        for _ in 0..80 {
+            let puzzle_key = {
+                let Some(aq) = self.game.active_quest() else { break };
+                match aq.session.current_step() {
+                    Some(QuestStep::MathPuzzle { .. }) => {
+                        let p = aq.puzzle.as_ref().expect("puzzle step must have generated choices");
+                        let idx = p.choices.iter().position(|&c| c == p.answer)
+                            .expect("answer must be among the choices");
+                        Some(idx)
+                    }
+                    Some(_) => None,           // narrative / travel / reward → Continue
+                    None => break,
+                }
+            };
+            match puzzle_key {
+                Some(0) => self.press(KeyCode::Key1),
+                Some(1) => self.press(KeyCode::Key2),
+                Some(2) => self.press(KeyCode::Key3),
+                Some(3) => self.press(KeyCode::Key4),
+                Some(_) => panic!("unexpected answer tile index"),
+                None => self.press(KeyCode::Space),
+            }
+        }
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
     // ─── Event-log access ────────────────────────────────
 
     /// Snapshot the event log length. Capture before an action, then read

@@ -342,6 +342,45 @@ fn shopkeeper_sells_a_cosmetic_via_embedded_subtraction() {
 }
 
 #[test]
+fn dev_toggle_flips_the_quest_flag() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    assert!(!h.game.features.quest, "quests default OFF");
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlToggleQuest);
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    assert!(h.game.features.quest, "dev knob should enable quests");
+}
+
+#[test]
+fn dev_quest_runs_to_completion_with_embedded_math() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlStartQuest);
+
+    let mark = h.mark();
+    let start = h.game.dum_dums;
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Quest);
+    assert!(h.game.active_quest().is_some(), "a quest should be running");
+
+    h.play_quest();
+    assert_eq!(h.game.state, GameState::Playing, "finishing the quest returns to play");
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::QuestCompleted)),
+        "expected QuestCompleted; got: {:?}", events,
+    );
+    assert_eq!(h.game.dum_dums, start + 3, "the welcome quest pays out 3 Dum Dums");
+}
+
+#[test]
 fn dev_toggle_flips_the_manipulatives_flag() {
     use macroquad::prelude::KeyCode;
     let mut h = Harness::new(7);

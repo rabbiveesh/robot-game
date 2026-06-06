@@ -4,6 +4,7 @@ pub mod balance;
 pub mod kenken;
 pub mod manipulative;
 pub mod patterns;
+pub mod quest;
 pub mod shop;
 pub mod sudoku;
 pub mod visuals;

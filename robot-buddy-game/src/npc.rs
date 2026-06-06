@@ -30,6 +30,8 @@ pub enum NpcKind {
     CtrlTriggerEncounter,
     CtrlToggleManipulatives,
     CtrlTriggerManipulative,
+    CtrlToggleQuest,
+    CtrlStartQuest,
 }
 
 impl NpcKind {
@@ -60,6 +62,8 @@ impl NpcKind {
             NpcKind::CtrlTriggerEncounter => "ctrl_trigger_encounter",
             NpcKind::CtrlToggleManipulatives => "ctrl_toggle_manipulatives",
             NpcKind::CtrlTriggerManipulative => "ctrl_trigger_manipulative",
+            NpcKind::CtrlToggleQuest => "ctrl_toggle_quest",
+            NpcKind::CtrlStartQuest => "ctrl_start_quest",
         }
     }
 
@@ -87,6 +91,8 @@ impl NpcKind {
             NpcKind::CtrlTriggerEncounter => "Trigger Encounter",
             NpcKind::CtrlToggleManipulatives => "Manipulatives Flag",
             NpcKind::CtrlTriggerManipulative => "Trigger Manipulative",
+            NpcKind::CtrlToggleQuest => "Quest Flag",
+            NpcKind::CtrlStartQuest => "Start Quest",
         }
     }
 
@@ -101,6 +107,7 @@ impl NpcKind {
         NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerBalance, NpcKind::CtrlTriggerSudoku,
         NpcKind::CtrlTriggerChallenge, NpcKind::CtrlToggleEncounters, NpcKind::CtrlTriggerEncounter,
         NpcKind::CtrlToggleManipulatives, NpcKind::CtrlTriggerManipulative,
+        NpcKind::CtrlToggleQuest, NpcKind::CtrlStartQuest,
     ];
 
     /// Inverse of `as_str`. Resolves a stable id token back to its kind without
@@ -117,7 +124,8 @@ impl NpcKind {
             | NpcKind::CtrlTriggerPattern | NpcKind::CtrlTriggerBalance
             | NpcKind::CtrlTriggerSudoku | NpcKind::CtrlTriggerChallenge
             | NpcKind::CtrlToggleEncounters | NpcKind::CtrlTriggerEncounter
-            | NpcKind::CtrlToggleManipulatives | NpcKind::CtrlTriggerManipulative)
+            | NpcKind::CtrlToggleManipulatives | NpcKind::CtrlTriggerManipulative
+            | NpcKind::CtrlToggleQuest | NpcKind::CtrlStartQuest)
     }
 }
 
@@ -400,6 +408,8 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(CtrlTriggerEncounter, 4,  7, S::Sage,       false, true, false),
             n(CtrlToggleManipulatives, 6, 3, S::Kid2,    false, true, false),
             n(CtrlTriggerManipulative, 8, 7, S::Mommy,    false, true, false),
+            n(CtrlToggleQuest,      10, 5, S::OldOak,     false, true, false),
+            n(CtrlStartQuest,       10, 7, S::Sage,       false, true, false),
             n(CtrlTriggerChallenge, 8,  5, S::Kid2,       false, true, false),
         ],
         "dev" => vec![
