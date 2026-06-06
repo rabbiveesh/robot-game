@@ -644,6 +644,12 @@ impl Game {
 
     fn set_state(&mut self, new_state: GameState) {
         if self.state != new_state {
+            // Leaving active play cancels any click-to-walk in progress, so the
+            // player never auto-resumes a stale path — or auto-interacts with a
+            // since-moved tile — after a dialogue / challenge / encounter.
+            if self.state == GameState::Playing && new_state != GameState::Playing {
+                self.clear_walk();
+            }
             self.events.push(GameEvent::StateChanged { from: self.state, to: new_state });
             self.state = new_state;
         }
@@ -791,7 +797,7 @@ impl Game {
             GameState::Title => { self.step_title(input, screen); true }
             GameState::NewGame => { self.step_new_game(input, dt, screen); true }
             GameState::Intake => { self.step_intake(input, dt, screen); false }
-            GameState::Playing => { self.step_playing(input, dt); false }
+            GameState::Playing => { self.step_playing(input, dt, screen); false }
             GameState::InteractionMenu => false,
             GameState::Dialogue => { self.step_dialogue(input); false }
             GameState::Challenge => { self.step_challenge(input, dt, screen); false }
@@ -1081,13 +1087,16 @@ impl Game {
         self.intake = Some(iq);
     }
 
-    /// Translate a screen-space tap into a walk path. The camera maps world to
-    /// screen 1:1 with an offset (`screen = world - camera`), so the inverse is
-    /// `world = screen + camera`. Walks onto the tapped tile, or up to a tile
-    /// adjacent to it when the target is solid (a wall, an NPC, the chest).
-    fn set_path_from_click(&mut self, mx: f32, my: f32) {
-        let wx = mx + self.camera.x;
-        let wy = my + self.camera.y;
+    /// Translate a screen-space tap into a walk path. The renderer centres the
+    /// world on `camera + GAME_W/2` and draws 1:1, so a world point maps to
+    /// `screen = world - camera + (sw - GAME_W)/2`; inverting gives the formula
+    /// below (exact at any window size, not just 960×720). Walks onto the tapped
+    /// tile, or up to a tile adjacent to it when the target is solid (a wall, an
+    /// NPC, the chest).
+    fn set_path_from_click(&mut self, mx: f32, my: f32, screen: (f32, f32)) {
+        let (sw, sh) = screen;
+        let wx = mx + self.camera.x + (GAME_W - sw) / 2.0;
+        let wy = my + self.camera.y + (GAME_H - sh) / 2.0;
         if wx < 0.0 || wy < 0.0 {
             return;
         }
@@ -1098,9 +1107,16 @@ impl Game {
         }
         let start = (self.player.tile_x, self.player.tile_y);
         let interactable = self.interactable_at(goal);
+        // Tiles occupied by another entity are impassable to the router, so a
+        // tap never wedges the player walking-in-place against a standing NPC.
+        // The player's own tile (start) is never excluded, and the goal of an
+        // interactable tap is reached via `find_path_adjacent` anyway.
+        let occupied = self.occupied_tiles();
         let path_opt = {
             let map = &self.map;
-            let walkable = |c: usize, r: usize| !map.is_solid(c, r);
+            let walkable = |c: usize, r: usize| {
+                !map.is_solid(c, r) && ((c, r) == start || !occupied.contains(&(c, r)))
+            };
             // Walk onto a free tile; walk *up to* a solid or an interactable
             // (NPC / Sparky / chest) you can't stand on.
             if interactable || map.is_solid(goal.0, goal.1) {
@@ -1124,6 +1140,18 @@ impl Game {
         self.player_path.clear();
         self.pending_interact = None;
         self.click_target = None;
+    }
+
+    /// Tiles currently occupied by a blocking entity (roster NPCs + on-map
+    /// Sparky). The companion is excluded — it trails the player and steps out
+    /// of the way rather than blocking a route.
+    fn occupied_tiles(&self) -> Vec<(usize, usize)> {
+        let mut out: Vec<(usize, usize)> =
+            self.npcs.iter().map(|n| (n.entity.tile_x, n.entity.tile_y)).collect();
+        if self.sparky_is_here() {
+            out.push((self.sparky.entity.tile_x, self.sparky.entity.tile_y));
+        }
+        out
     }
 
     /// Whether `tile` holds something the player interacts with (NPC, Sparky,
@@ -1177,13 +1205,13 @@ impl Game {
         MoveIntent::Move(dir)
     }
 
-    fn step_playing(&mut self, input: &FrameInput, dt: f32) {
+    fn step_playing(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         // ── Movement: collect intents, resolve, apply ───────────────────
         // A tap on the map sets a walk path (click-to-walk); keyboard input
         // overrides it. The debug overlay owns clicks when it's up.
         if input.mouse_clicked && !self.debug_overlay.visible {
             let (mx, my) = input.mouse_pos;
-            self.set_path_from_click(mx, my);
+            self.set_path_from_click(mx, my, screen);
         }
         let player_intent = match read_player_intent(input, &mut self.player) {
             MoveIntent::Move(d) => {
@@ -1828,6 +1856,9 @@ impl Game {
         });
         if self.features.cra_manipulatives {
             if let Some(manip) = try_make_manipulative(&self.profile, &ac.challenge) {
+                // Speak the prompt too, so a TTS-on parent hears it whether the
+                // kid gets the quiz or the hands-on version.
+                audio::tts::speak("Sparky", &ac.challenge.speech_text);
                 self.active_manipulative = Some(ActiveManipulative {
                     manip,
                     challenge: ac.challenge,
@@ -3250,7 +3281,9 @@ fn build_quest_puzzle(session: &QuestSession, rng: &mut SmallRng) -> Option<Ques
             let (a, b) = (*operands)?;
             let (a, b) = (a as i32, b as i32);
             let answer = match operation {
-                Operation::Sub => a - b,
+                // Operands may be authored in either order; a quest answer is a
+                // count, so keep it non-negative (the magnitude of the difference).
+                Operation::Sub => (a - b).abs(),
                 Operation::Multiply => a * b,
                 Operation::Divide => if b != 0 { a / b } else { 0 },
                 _ => a + b, // Add / NumberBond
@@ -3819,5 +3852,97 @@ fn secret_entry_dialogue(map_id: &str) -> Vec<DialogueLine> {
                 text: "This place is SO pretty! And SO secret! The trees are whispering!".into() },
         ],
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::save::InMemoryBackend;
+    use ::rand::SeedableRng;
+    use ::rand::rngs::SmallRng;
+    use robot_buddy_domain::quest::{Quest, QuestAction, QuestSession, QuestStep};
+
+    fn game() -> Game {
+        Game::with_backend(7, Box::new(InMemoryBackend::default()))
+    }
+
+    // ── Fix #1: leaving Playing cancels an in-progress click-to-walk ──
+    #[test]
+    fn leaving_playing_clears_walk_state() {
+        let mut g = game();
+        g.set_state(GameState::Playing);
+        g.player_path = vec![(1, 1), (2, 1)];
+        g.pending_interact = Some((3, 1));
+        g.click_target = Some((3, 1));
+
+        g.set_state(GameState::Dialogue); // e.g. a random encounter interrupts
+
+        assert!(g.player_path.is_empty(), "walk path must not survive into another state");
+        assert_eq!(g.pending_interact, None, "pending auto-interact must be cancelled");
+        assert_eq!(g.click_target, None, "walk marker must be cleared");
+    }
+
+    // ── Fix #2: tap→tile mapping holds when the window isn't 960×720 ──
+    #[test]
+    fn click_maps_to_tile_at_any_window_size() {
+        const TILE: f32 = TILE_SIZE;
+        for (sw, sh) in [(GAME_W, GAME_H), (480.0, 360.0), (1280.0, 800.0)] {
+            let mut g = game();
+            g.camera = GameCamera { x: 0.0, y: 0.0 };
+            let goal = (g.player.tile_x, g.player.tile_y); // own tile: always reachable
+            // Screen position the renderer would put this tile's centre at.
+            let sx = (goal.0 as f32 + 0.5) * TILE - g.camera.x + (sw - GAME_W) / 2.0;
+            let sy = (goal.1 as f32 + 0.5) * TILE - g.camera.y + (sh - GAME_H) / 2.0;
+            g.set_path_from_click(sx, sy, (sw, sh));
+            assert_eq!(
+                g.click_target,
+                Some(goal),
+                "tap should resolve to the intended tile at window {sw}x{sh}",
+            );
+        }
+    }
+
+    // ── Fix #3: a quest subtraction step never yields a negative answer ──
+    #[test]
+    fn quest_subtraction_answer_is_non_negative_either_operand_order() {
+        for (a, b) in [(2u16, 5u16), (5, 2), (3, 3)] {
+            let quest = Quest {
+                id: "t".into(),
+                title: "t".into(),
+                description: "t".into(),
+                steps: vec![QuestStep::MathPuzzle {
+                    operation: Operation::Sub,
+                    band: 3,
+                    context: "take away".into(),
+                    operands: Some((a, b)),
+                }],
+                math_domain: vec![Operation::Sub],
+                min_band: 1,
+                max_band: 5,
+            };
+            let session = quest::quest_reducer(QuestSession::new(quest), QuestAction::Start);
+            let mut rng = SmallRng::seed_from_u64(1);
+            let p = build_quest_puzzle(&session, &mut rng).expect("math step yields a puzzle");
+            assert_eq!(p.answer, (a as i32 - b as i32).abs());
+            assert!(p.answer >= 0);
+            assert!(p.choices.contains(&p.answer));
+            assert!(p.choices.len() >= 2, "need at least two tiles, got {:?}", p.choices);
+            assert!(p.choices.iter().all(|&c| c >= 0), "no negative tiles: {:?}", p.choices);
+        }
+    }
+
+    #[test]
+    fn quest_answer_choices_are_non_negative_and_distinct() {
+        let mut rng = SmallRng::seed_from_u64(2);
+        for answer in 0..6 {
+            let ch = quest_answer_choices(answer, &mut rng);
+            assert!(ch.contains(&answer));
+            assert!(ch.iter().all(|&c| c >= 0));
+            let mut sorted = ch.clone();
+            sorted.sort();
+            sorted.dedup();
+            assert_eq!(sorted.len(), ch.len(), "choices distinct: {ch:?}");
+        }
     }
 }
