@@ -688,8 +688,17 @@ impl Game {
         };
         if early_exit { return; }
 
-        // P key: toggle debug overlay (any gameplay state)
+        // P opens the parent overlay (settings, with the parent section already
+        // expanded so the feature flags are right there).
         if !self.settings_open && input.pressed(KeyCode::P)
+            && self.state != GameState::Title && self.state != GameState::NewGame
+        {
+            self.settings_open = true;
+            self.parent_panel_open = true;
+        }
+
+        // Backtick toggles the dev debug overlay (moved off P).
+        if !self.settings_open && input.pressed(KeyCode::GraveAccent)
             && self.state != GameState::Title && self.state != GameState::NewGame
         {
             self.debug_overlay.toggle();
@@ -3077,7 +3086,10 @@ impl Game {
                         Gender::Boy => sprites::player::draw_player_boy(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
                         Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
                     },
-                    SpriteKind::Sparky => sprites::robot::draw_robot(self.sparky.entity.x, self.sparky.entity.y, self.sparky.entity.dir, self.sparky.entity.frame, self.game_time),
+                    SpriteKind::Sparky => {
+                        sprites::robot::draw_robot(self.sparky.entity.x, self.sparky.entity.y, self.sparky.entity.dir, self.sparky.entity.frame, self.game_time);
+                        sprites::robot::draw_robot_cosmetics(self.sparky.entity.x, self.sparky.entity.y, self.game_time, &self.shop_owned);
+                    }
                     SpriteKind::Npc(n) => n.draw(self.game_time),
                 }
             }

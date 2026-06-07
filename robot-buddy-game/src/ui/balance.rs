@@ -140,18 +140,20 @@ fn item_label(item: &BalanceItem) -> String {
     }
 }
 
-/// Vertical tilt offset (pixels) applied to the pans. Balanced → 0; an unsolved
-/// puzzle leans toward whichever side is heavier under the kid's last guess.
-fn tilt_offset(session: &BalanceSession) -> f32 {
+/// Vertical pan offsets `(left, right)` in pixels; a positive value means that
+/// pan drops. The heavier pan (more weight under the kid's last guess) drops —
+/// the physically-correct direction.
+fn pan_offsets(session: &BalanceSession) -> (f32, f32) {
     if session.phase == BalancePhase::Complete {
-        return 0.0;
+        return (0.0, 0.0);
     }
     match session.last_wrong {
         Some(guess) => {
-            let t = session.puzzle.tilt(guess); // >0 right-heavy, <0 left-heavy
-            (t.signum() as f32) * 26.0
+            // tilt() > 0 → right side heavier → right pan drops.
+            let lean = (session.puzzle.tilt(guess).signum() as f32) * 26.0;
+            (-lean, lean)
         }
-        None => 0.0,
+        None => (0.0, 0.0),
     }
 }
 
@@ -204,7 +206,6 @@ pub fn draw_balance(session: &BalanceSession, layout: &BalanceLayout, _time: f32
 
     let (fx, fy) = layout.fulcrum;
     let half = layout.beam_half;
-    let tilt = tilt_offset(session);
 
     // Stand + fulcrum triangle.
     draw_line(fx, fy, fx, fy + 120.0, 6.0, BEAM);
@@ -216,8 +217,9 @@ pub fn draw_balance(session: &BalanceSession, layout: &BalanceLayout, _time: f32
     );
 
     // Beam tilts: left pan rises/falls opposite the right pan.
-    let left_y = fy + tilt;
-    let right_y = fy - tilt;
+    let (left_dy, right_dy) = pan_offsets(session);
+    let left_y = fy + left_dy;
+    let right_y = fy + right_dy;
     draw_line(fx - half, left_y, fx + half, right_y, 6.0, BEAM);
 
     // Hangers + pans.
@@ -246,5 +248,37 @@ pub fn draw_balance(session: &BalanceSession, layout: &BalanceLayout, _time: f32
         if (get_time() * 4.0).sin() > 0.0 {
             draw_text(dismiss, p.x + p.w / 2.0 - dw / 2.0, p.y + p.h - 30.0, 24.0, GOLD);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use robot_buddy_domain::logic::balance::{BalanceItem, BalancePuzzle, BalanceSession};
+    use robot_buddy_domain::types::Operation;
+
+    #[test]
+    fn heavier_pan_drops() {
+        // Puzzle: ? + 3 = 5 (answer 2). left = [?, +, 3], right = [5].
+        let puzzle = BalancePuzzle {
+            left_side: vec![
+                BalanceItem::Unknown,
+                BalanceItem::Op { op: Operation::Add },
+                BalanceItem::Known { value: 3 },
+            ],
+            right_side: vec![BalanceItem::Known { value: 5 }],
+            correct_answer: 2,
+            choices: vec![1, 2, 3],
+        };
+        let mut s = BalanceSession::new(puzzle);
+        // Guess too high (4): left = 4+3 = 7 > right 5 → LEFT is heavier → left drops.
+        s.last_wrong = Some(4);
+        let (left, right) = pan_offsets(&s);
+        assert!(left > right, "left (heavier) pan should drop: left={left}, right={right}");
+
+        // Guess too low (0): left = 0+3 = 3 < right 5 → RIGHT heavier → right drops.
+        s.last_wrong = Some(0);
+        let (left, right) = pan_offsets(&s);
+        assert!(right > left, "right (heavier) pan should drop: left={left}, right={right}");
     }
 }
