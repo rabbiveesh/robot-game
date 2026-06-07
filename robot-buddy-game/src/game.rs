@@ -3082,13 +3082,16 @@ impl Game {
 
             for r in &renderables {
                 match &r.kind {
-                    SpriteKind::Player => match self.player_gender {
-                        Gender::Boy => sprites::player::draw_player_boy(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
-                        Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
-                    },
+                    SpriteKind::Player => {
+                        match self.player_gender {
+                            Gender::Boy => sprites::player::draw_player_boy(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
+                            Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
+                        }
+                        // Cosmetics bought from Bolt's shop ride on the kid.
+                        sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.frame, &self.shop_owned);
+                    }
                     SpriteKind::Sparky => {
                         sprites::robot::draw_robot(self.sparky.entity.x, self.sparky.entity.y, self.sparky.entity.dir, self.sparky.entity.frame, self.game_time);
-                        sprites::robot::draw_robot_cosmetics(self.sparky.entity.x, self.sparky.entity.y, self.game_time, &self.shop_owned);
                     }
                     SpriteKind::Npc(n) => n.draw(self.game_time),
                 }
