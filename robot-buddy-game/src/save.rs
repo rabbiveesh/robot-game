@@ -38,6 +38,9 @@ pub struct SaveData {
     /// kind's home map. Older saves without this field deserialize as None.
     #[serde(default)]
     pub companion: Option<CompanionSave>,
+    /// Cosmetics bought from Bolt's shop (item ids). Older saves load as empty.
+    #[serde(default)]
+    pub shop_owned: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

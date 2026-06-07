@@ -2380,20 +2380,37 @@ impl Game {
                 }
             }
             ui::shop::ShopInput::Answer(v) => {
-                let ash = self.active_shop.as_mut().unwrap();
-                let Some(i) = ash.selected else { return };
-                if v == ash.answer {
-                    let item = ash.catalog[i].clone();
-                    self.dum_dums = ash.answer;
-                    ash.owned.insert(item.id.clone());
-                    ash.selected = None;
-                    ash.choices.clear();
-                    ash.message = Some(format!("Sparky LOVES the {}!", item.name));
+                // Resolve the guess on the shop session, then drop that borrow
+                // before touching `self` (balance, events, save).
+                let purchase = {
+                    let ash = self.active_shop.as_mut().unwrap();
+                    let Some(i) = ash.selected else { return };
+                    if v == ash.answer {
+                        let item = ash.catalog[i].clone();
+                        ash.owned.insert(item.id.clone());
+                        ash.selected = None;
+                        ash.choices.clear();
+                        ash.message = Some(format!("Sparky LOVES the {}!", item.name));
+                        Some((item.id, ash.cost, ash.answer))
+                    } else {
+                        // Natural consequence, not punishment — recount and retry.
+                        ash.message = Some("Hmm, let me count again...".into());
+                        None
+                    }
+                };
+                if let Some((item_id, cost, new_balance)) = purchase {
+                    self.dum_dums = new_balance;
                     self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsSpent { amount: ash.cost, item: item.id });
-                } else {
-                    // Natural consequence, not punishment — recount and retry.
-                    ash.message = Some("Hmm, let me count again...".into());
+                    self.events.push(GameEvent::DumDumsSpent { amount: cost, item: item_id });
+                    // Persist immediately so the cosmetic (and the spent Dum
+                    // Dums) survive a reload even if the kid quits right now.
+                    if let Some(ash) = self.active_shop.as_ref() {
+                        self.shop_owned = ash.owned.clone();
+                    }
+                    if self.map.id != "dev" {
+                        let save_data = self.gather_save_data();
+                        self.save_backend.save_to(self.active_slot, &save_data);
+                    }
                 }
             }
         }
@@ -3240,6 +3257,7 @@ impl Game {
                 tile_x: c.entity.tile_x,
                 tile_y: c.entity.tile_y,
             }),
+            shop_owned: self.shop_owned.iter().cloned().collect(),
         }
     }
 
@@ -3250,6 +3268,7 @@ impl Game {
         self.dum_dums = save_data.dum_dums;
         self.play_time = save_data.play_time;
         self.gifts_given = save_data.gifts_given.clone();
+        self.shop_owned = save_data.shop_owned.iter().cloned().collect();
 
         self.map = Map::by_id(&save_data.map_id);
         self.npcs_offstage.clear();
@@ -3398,11 +3417,13 @@ fn subtraction_choices(balance: u32, cost: u32, rng: &mut SmallRng) -> Vec<u32> 
     out
 }
 
-/// Screen-space rect of the on-screen settings gear (top-left), so parents can
-/// open settings — and the feature flags inside — without a keyboard.
+/// Screen-space rect of the on-screen settings gear (bottom-right, clear of the
+/// top HUD/area-name), so parents can open settings — and the feature flags
+/// inside — without a keyboard.
 fn settings_gear_rect(screen: (f32, f32)) -> (f32, f32, f32, f32) {
-    let _ = screen;
-    (12.0, 10.0, 44.0, 44.0)
+    let (sw, sh) = screen;
+    let size = 44.0;
+    (sw - size - 12.0, sh - size - 12.0, size, size)
 }
 
 fn is_dev_zone_code(name: &str) -> bool {
@@ -4028,5 +4049,20 @@ mod tests {
         let click = crate::input::FrameInput::empty().with_mouse_click(480.0, 360.0);
         g.step(&click, 1.0 / 60.0, (960.0, 720.0));
         assert!(!g.settings_open, "a non-gear tap must not open settings");
+    }
+
+    // ── Shop cosmetics survive save → load ──
+    #[test]
+    fn shop_cosmetics_persist_through_save_load() {
+        let mut g = game();
+        g.shop_owned.insert("hat".to_string());
+        g.shop_owned.insert("bow_tie".to_string());
+        let data = g.gather_save_data();
+
+        let mut g2 = game();
+        assert!(g2.shop_owned.is_empty());
+        g2.load_from_save(&data);
+        assert!(g2.shop_owned.contains("hat"), "hat should persist");
+        assert!(g2.shop_owned.contains("bow_tie"), "bow tie should persist");
     }
 }
