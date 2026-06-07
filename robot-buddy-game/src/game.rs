@@ -669,6 +669,18 @@ impl Game {
     pub fn step(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         self.game_time += dt;
 
+        // Tap the on-screen gear to open settings (so it works without a
+        // keyboard). Handle it before dispatch so the same tap can't also start
+        // a click-to-walk; consume the frame.
+        if !self.settings_open && self.state == GameState::Playing && input.mouse_clicked {
+            let (gx, gy, gw, gh) = settings_gear_rect(screen);
+            let (mx, my) = input.mouse_pos;
+            if mx >= gx && mx <= gx + gw && my >= gy && my <= gy + gh {
+                self.settings_open = true;
+                return;
+            }
+        }
+
         let early_exit = if self.settings_open {
             false
         } else {
@@ -3077,6 +3089,22 @@ impl Game {
     fn render_hud(&mut self, screen: (f32, f32)) {
         ui::hud::draw_area_name(self.map.id, self.player.tile_x, self.player.tile_y);
         self.dum_dum_hud.draw(self.dum_dums, screen);
+        // On-screen settings gear (tap to open settings → parent options),
+        // shown during free play so it's reachable without a keyboard.
+        if self.state == GameState::Playing && !self.settings_open {
+            let (gx, gy, gw, gh) = settings_gear_rect(screen);
+            let (cx, cy) = (gx + gw / 2.0, gy + gh / 2.0);
+            draw_rectangle(gx, gy, gw, gh, Color::new(0.078, 0.078, 0.157, 0.8));
+            draw_rectangle_lines(gx, gy, gw, gh, 2.0, Color::new(1.0, 0.835, 0.310, 0.9));
+            // A simple cog: ring of teeth + body + hub hole.
+            let gold = Color::new(1.0, 0.835, 0.310, 1.0);
+            for i in 0..8 {
+                let a = i as f32 * std::f32::consts::PI / 4.0;
+                draw_circle(cx + a.cos() * 13.0, cy + a.sin() * 13.0, 3.0, gold);
+            }
+            draw_circle(cx, cy, 11.0, gold);
+            draw_circle(cx, cy, 4.5, Color::new(0.078, 0.078, 0.157, 1.0));
+        }
         self.debug_overlay.draw(
             self.map.id, self.player.tile_x, self.player.tile_y,
             self.dum_dums, self.play_time,
@@ -3353,6 +3381,13 @@ fn subtraction_choices(balance: u32, cost: u32, rng: &mut SmallRng) -> Vec<u32> 
     }
     out.shuffle(rng);
     out
+}
+
+/// Screen-space rect of the on-screen settings gear (top-left), so parents can
+/// open settings — and the feature flags inside — without a keyboard.
+fn settings_gear_rect(screen: (f32, f32)) -> (f32, f32, f32, f32) {
+    let _ = screen;
+    (12.0, 10.0, 44.0, 44.0)
 }
 
 fn is_dev_zone_code(name: &str) -> bool {
@@ -3956,5 +3991,27 @@ mod tests {
             sorted.dedup();
             assert_eq!(sorted.len(), ch.len(), "choices distinct: {ch:?}");
         }
+    }
+
+    // ── On-screen settings gear opens the overlay (keyboard-free access) ──
+    #[test]
+    fn tapping_the_gear_opens_settings() {
+        let mut g = game();
+        g.set_state(GameState::Playing);
+        assert!(!g.settings_open);
+        let (gx, gy, gw, gh) = settings_gear_rect((960.0, 720.0));
+        let click = crate::input::FrameInput::empty().with_mouse_click(gx + gw / 2.0, gy + gh / 2.0);
+        g.step(&click, 1.0 / 60.0, (960.0, 720.0));
+        assert!(g.settings_open, "tapping the gear should open settings");
+    }
+
+    #[test]
+    fn tapping_elsewhere_does_not_open_settings() {
+        let mut g = game();
+        g.set_state(GameState::Playing);
+        // A tap in the middle of the screen is gameplay (click-to-walk), not the gear.
+        let click = crate::input::FrameInput::empty().with_mouse_click(480.0, 360.0);
+        g.step(&click, 1.0 / 60.0, (960.0, 720.0));
+        assert!(!g.settings_open, "a non-gear tap must not open settings");
     }
 }
