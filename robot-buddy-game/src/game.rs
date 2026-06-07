@@ -24,7 +24,7 @@ use robot_buddy_domain::learning::frustration_detector::{
     BehaviorSignal, detect_frustration,
 };
 use robot_buddy_domain::learning::intake_assessor::{
-    IntakeAnswer, generate_intake_question, process_intake_results, next_intake_band,
+    IntakeAnswer, generate_intake_question, process_intake_results, next_intake_band, intake_complete,
 };
 use robot_buddy_domain::economy::give;
 use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
@@ -69,7 +69,6 @@ use crate::input::FrameInput;
 pub const GAME_W: f32 = 960.0;
 pub const GAME_H: f32 = 720.0;
 const MOVE_SPEED: f32 = 200.0;
-const INTAKE_QUESTION_COUNT: usize = 5;
 
 /// Where Sparky waits when an NPC has taken over the buddy slot — next to
 /// Professor Gizmo on the overworld so the kid always knows where to find him.
@@ -1035,7 +1034,11 @@ impl Game {
                     self.save_backend.save_to(self.active_slot, &save_data);
                     self.auto_save_timer = 0.0;
 
-                    if iq.question_index >= INTAKE_QUESTION_COUNT {
+                    // Adaptive length: stop as soon as placement has converged
+                    // (bracketed / floored / ceilinged) so low-level intake
+                    // isn't a string of identical band-1 questions.
+                    let ceiling = (iq.configured_band as u16 + 2).min(10) as u8;
+                    if intake_complete(&iq.answers, ceiling) {
                         iq.phase = IntakePhase::Complete;
                     } else {
                         iq.phase = IntakePhase::Transition;
@@ -2998,7 +3001,8 @@ impl Game {
 
             if let Some(ref iq) = self.intake {
                 if iq.phase == IntakePhase::Question || iq.phase == IntakePhase::Transition {
-                    let progress_text = format!("Question {} of {}", iq.question_index + 1, INTAKE_QUESTION_COUNT);
+                    // Length is adaptive, so don't promise a fixed total.
+                    let progress_text = format!("Question {}", iq.question_index + 1);
                     let tw = measure_text(&progress_text, None, 26, 1.0).width;
                     draw_text(&progress_text, sw / 2.0 - tw / 2.0, 134.0,
                         26.0, Color::from_rgba(144, 202, 249, 200));

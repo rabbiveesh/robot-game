@@ -75,6 +75,34 @@ pub fn next_intake_band(current_band: u8, correct: bool, ceiling: u8) -> u8 {
     if correct { (current_band + 2).min(ceiling) } else { (current_band.max(1)) - if current_band > 1 { 1 } else { 0 } }
 }
 
+/// Fewest intake questions worth asking — enough samples for the timing dials
+/// (pace / scaffolding) to mean something.
+pub const INTAKE_MIN_QUESTIONS: usize = 2;
+/// Cap so a kid who keeps succeeding still finishes promptly.
+pub const INTAKE_MAX_QUESTIONS: usize = 5;
+
+/// Whether the intake has learned enough to place the kid, so it can stop early
+/// rather than always asking the maximum. Once ability is *bracketed* (at least
+/// one correct and one wrong answer), or the kid bottomed out at band 1 / topped
+/// out at the ceiling, further same-band questions teach nothing and just feel
+/// repetitive — exactly what drags at the low end, where a struggling kid would
+/// otherwise get five near-identical band-1 problems.
+pub fn intake_complete(answers: &[IntakeAnswer], ceiling: u8) -> bool {
+    let n = answers.len();
+    if n >= INTAKE_MAX_QUESTIONS {
+        return true;
+    }
+    if n < INTAKE_MIN_QUESTIONS {
+        return false;
+    }
+    let have_correct = answers.iter().any(|a| a.correct);
+    let have_wrong = answers.iter().any(|a| !a.correct);
+    let last = answers.last().unwrap();
+    let at_floor = !last.correct && last.band <= 1;
+    let at_ceiling = last.correct && last.band >= ceiling;
+    (have_correct && have_wrong) || at_floor || at_ceiling
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +141,45 @@ mod tests {
     fn next_band_wrong() {
         assert_eq!(next_intake_band(3, false, 10), 2);
         assert_eq!(next_intake_band(1, false, 10), 1);
+    }
+
+    fn ans(band: u8, correct: bool) -> IntakeAnswer {
+        IntakeAnswer { band, correct, response_time_ms: Some(3000.0), skipped_text: false }
+    }
+
+    #[test]
+    fn intake_needs_a_minimum_before_stopping() {
+        // One answer is never enough, even at the floor.
+        assert!(!intake_complete(&[ans(1, false)], 3));
+    }
+
+    #[test]
+    fn intake_stops_early_at_the_floor() {
+        // A struggling kid wrong twice at band 1: placement is the floor, so we
+        // stop at the minimum instead of asking five identical questions.
+        assert!(intake_complete(&[ans(1, false), ans(1, false)], 3));
+    }
+
+    #[test]
+    fn intake_stops_once_ability_is_bracketed() {
+        // Correct then wrong brackets the band — no need to keep probing.
+        assert!(intake_complete(&[ans(1, true), ans(3, false)], 5));
+    }
+
+    #[test]
+    fn intake_stops_at_the_ceiling() {
+        assert!(intake_complete(&[ans(1, true), ans(3, true)], 3));
+    }
+
+    #[test]
+    fn intake_keeps_climbing_when_still_succeeding() {
+        // All correct and not yet at the ceiling → keep going (each question is
+        // harder, so it isn't repetitive) up to the max.
+        assert!(!intake_complete(&[ans(1, true), ans(3, true)], 10));
+        assert!(!intake_complete(&[ans(1, true), ans(3, true), ans(5, true), ans(7, true)], 10));
+        assert!(intake_complete(
+            &[ans(1, true), ans(3, true), ans(5, true), ans(7, true), ans(9, true)],
+            10,
+        ));
     }
 }

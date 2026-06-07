@@ -156,10 +156,21 @@ impl Harness {
         // Advance Sparky's intro dialogue.
         self.finish_dialogue();
 
-        // Five questions; each ends with Phase::Complete which gets dismissed,
-        // then either a Transition phase or the Complete branch (final dialogue).
-        for _ in 0..5 {
-            self.wait_until(|g| g.correct_choice_index().is_some());
+        // Intake length is adaptive, so answer questions until it ends (the
+        // game leaves Intake for the "all done!" dialogue) rather than a fixed
+        // count. Safety-bounded so a stuck intake fails loudly.
+        for _ in 0..8 {
+            if self.game.state != GameState::Intake {
+                break;
+            }
+            // Either a question is on screen, or we're between questions.
+            self.run_until(
+                |g| g.correct_choice_index().is_some() || g.state != GameState::Intake,
+                DEFAULT_BUDGET,
+            );
+            if self.game.state != GameState::Intake {
+                break;
+            }
             self.answer_challenge_correctly();
         }
 
