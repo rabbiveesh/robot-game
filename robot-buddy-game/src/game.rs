@@ -3024,9 +3024,14 @@ impl Game {
         if dest_map == self.map.id {
             self.npcs.push(npc_obj);
         } else {
+            // Seed a never-visited destination's stash with its REAL roster
+            // before adding the intruder. Otherwise the stash would hold only
+            // the pushed NPC, and `load_map_roster` (which prefers an existing
+            // stash over `npcs_for_map`) would spawn the map with its regular
+            // residents missing.
             self.npcs_offstage
                 .entry(dest_map.to_string())
-                .or_insert_with(Vec::new)
+                .or_insert_with(|| npc::npcs_for_map(dest_map))
                 .push(npc_obj);
         }
     }

@@ -1775,3 +1775,51 @@ fn solving_the_reef_shark_opens_the_passage() {
         "the solved gate is recorded so it stays open across sessions",
     );
 }
+
+#[test]
+fn pushing_an_npc_into_an_unvisited_map_keeps_its_regular_residents() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    // Regression: shoving an NPC into a map whose roster was never stashed must
+    // NOT replace that map's residents with just the intruder. Push Pip
+    // annex->dev (dev has no stash yet), then follow her in — dev must still
+    // have its own regulars alongside Pip.
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = Map::annex();
+    h.game.npcs = npc_mod::npcs_for_map("annex");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+
+    let pip_idx = h.game.npcs.iter().position(|n| n.kind == NpcKind::Pip).unwrap();
+    {
+        let n = &mut h.game.npcs[pip_idx];
+        n.entity.tile_x = 4; n.entity.tile_y = 5;
+        n.entity.x = 4.0 * 48.0; n.entity.y = 5.0 * 48.0;
+        n.entity.target_x = n.entity.x; n.entity.target_y = n.entity.y;
+        n.entity.moving = false;
+        n.wander_cooldown = 9999.0;
+    }
+    park_sparky(&mut h);
+    snap_player(&mut h, 4, 4);
+
+    // Shove Pip down through the annex door at (4,6).
+    for _ in 0..12 { h.hold(KeyCode::Down); }
+    h.advance(20);
+    assert!(!h.game.npcs.iter().any(|n| n.kind == NpcKind::Pip),
+        "Pip should have been pushed off the annex");
+
+    // Follow her through the same door into dev.
+    h.step_through_portal(KeyCode::Down, "dev");
+    assert_eq!(h.game.map.id, "dev");
+
+    // Dev's own residents must still spawn (the bug wiped them)...
+    assert!(h.game.npcs.iter().any(|n| n.kind == NpcKind::Sage),
+        "dev's regular residents must still be present; got {:?}",
+        h.game.npcs.iter().map(|n| n.kind).collect::<Vec<_>>());
+    // ...with the pushed-in Pip joining them.
+    assert!(h.game.npcs.iter().any(|n| n.kind == NpcKind::Pip),
+        "the pushed-in Pip should be present on dev too");
+}
