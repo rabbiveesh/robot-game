@@ -79,6 +79,14 @@ fn flavor_pool(area: &str) -> &'static [(&'static str, &'static str, &'static st
             ("dum_dum", "Sparky", "Ooh! A Dum Dum, sealed in a shiny bubble! Pop pop pop!"),
             ("flavor", "Sparky", "A jellyfish drifted by. It wiggled hello! ...I think."),
         ],
+        "space_hub" | "moon" | "mars" | "asteroid_base" => &[
+            ("flavor", "Sparky", "WHEEEE! Zero gravity! My bolts are FLOATING! BEEP BOOP!"),
+            ("sighting", "Sparky", "I counted 4 stars in that cluster, then 3 more blinked on! How many stars?"),
+            ("flavor", "Sparky", "A little green alien just waved at us! Hi, friend! *waves back with all arms*"),
+            ("sighting", "Sparky", "That planet has 2 moons and 3 rings. How many space things in all?"),
+            ("dum_dum", "Sparky", "A Dum Dum, floating in zero-g! I grabbed it before it drifted off!"),
+            ("flavor", "Sparky", "Space is SO quiet out here. ...except for me. BLEEP BLOOP!"),
+        ],
         "lab" => &[
             ("flavor", "Sparky", "BZZT! A blinky light! I love blinky lights!"),
             ("dum_dum", "Sparky", "A Dum Dum rolled under the workbench. Score!"),
@@ -152,7 +160,7 @@ mod tests {
     #[test]
     fn flavor_pools_cover_known_and_unknown_areas() {
         let mut r = SmallRng::seed_from_u64(9);
-        for area in ["home", "pond", "reef", "lab", "overworld", "some_new_map"] {
+        for area in ["home", "pond", "reef", "moon", "space_hub", "lab", "overworld", "some_new_map"] {
             // Pull several to make sure every entry is constructible and non-empty.
             for _ in 0..50 {
                 match pick_flavor(area, &mut r) {

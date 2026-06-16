@@ -40,6 +40,11 @@ pub fn get_area_name(map_id: &str, tx: usize, ty: usize) -> &'static str {
         "dev" => "Dev Zone",
         "control" => "Control Room",
         "annex" => "The Annex",
+        "reef" => "Coral Reef",
+        "space_hub" => "Orbital Hub",
+        "moon" => "The Moon",
+        "mars" => "Red Planet",
+        "asteroid_base" => "Asteroid Base",
         _ => "???",
     }
 }
@@ -116,6 +121,41 @@ impl DumDumHud {
         draw_text(&text, sx + bg_w * scale - tw - 10.0, sy + bg_h * scale / 2.0 + 8.0,
             22.0, Color::from_rgba(255, 82, 82, 255));
     }
+}
+
+// ─── FUEL GAUGE (space maps) ────────────────────────────
+
+/// Draw the rocket's fuel gauge just under the Dum Dum counter. Shown only on
+/// space maps. Bar turns amber when low so kids know to refuel.
+pub fn draw_fuel_gauge(fuel: u32, max: u32, screen: (f32, f32)) {
+    let sw = screen.0;
+    let bg_w = 96.0;
+    let bg_h = 30.0;
+    let x = sw - bg_w - 12.0;
+    let y = 62.0; // sits below the 44px-tall Dum Dum HUD at y=10
+
+    draw_rectangle(x, y, bg_w, bg_h, Color::new(0.078, 0.078, 0.157, 0.8));
+
+    // Little fuel-pump icon.
+    let icon_x = x + 14.0;
+    let icon_y = y + bg_h / 2.0;
+    draw_rectangle(icon_x - 5.0, icon_y - 7.0, 10.0, 14.0, Color::from_rgba(120, 130, 150, 255));
+    draw_rectangle(icon_x - 3.0, icon_y - 4.0, 6.0, 4.0, Color::from_rgba(102, 220, 120, 255));
+
+    // Bar.
+    let bar_x = x + 28.0;
+    let bar_w = bg_w - 38.0;
+    let bar_h = 12.0;
+    let bar_y = y + (bg_h - bar_h) / 2.0;
+    draw_rectangle(bar_x, bar_y, bar_w, bar_h, Color::from_rgba(20, 24, 34, 255));
+    let frac = if max == 0 { 0.0 } else { (fuel as f32 / max as f32).clamp(0.0, 1.0) };
+    let fill = if frac <= 0.25 {
+        Color::from_rgba(255, 167, 38, 255) // amber when low
+    } else {
+        Color::from_rgba(102, 220, 120, 255) // green
+    };
+    draw_rectangle(bar_x + 1.0, bar_y + 1.0, (bar_w - 2.0) * frac, bar_h - 2.0, fill);
+    draw_rectangle_lines(bar_x, bar_y, bar_w, bar_h, 1.0, Color::from_rgba(90, 100, 124, 255));
 }
 
 // ─── PARENT DEBUG OVERLAY (P key) ───────────────────────

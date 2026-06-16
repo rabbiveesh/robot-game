@@ -23,6 +23,12 @@ pub enum NpcKind {
     Dolphin,
     Crab,
     Jelly,
+    // Space creatures
+    MoonAlien,
+    FuelBot,
+    MarsGuardian,
+    StarKeeper,
+    StationAlien,
     CtrlBand,
     CtrlKenkenLevel,
     CtrlCraReset,
@@ -60,6 +66,11 @@ impl NpcKind {
             NpcKind::Dolphin => "dolphin",
             NpcKind::Crab => "crab",
             NpcKind::Jelly => "jelly",
+            NpcKind::MoonAlien => "moon_alien",
+            NpcKind::FuelBot => "fuel_bot",
+            NpcKind::MarsGuardian => "mars_guardian",
+            NpcKind::StarKeeper => "star_keeper",
+            NpcKind::StationAlien => "station_alien",
             NpcKind::CtrlBand => "ctrl_band",
             NpcKind::CtrlKenkenLevel => "ctrl_kenken_level",
             NpcKind::CtrlCraReset => "ctrl_cra_reset",
@@ -94,6 +105,11 @@ impl NpcKind {
             NpcKind::Dolphin => "Echo",
             NpcKind::Crab => "Pinchy",
             NpcKind::Jelly => "Wobble",
+            NpcKind::MoonAlien => "Zorp",
+            NpcKind::FuelBot => "Tank",
+            NpcKind::MarsGuardian => "Rok",
+            NpcKind::StarKeeper => "Cassi",
+            NpcKind::StationAlien => "Bleep",
             NpcKind::CtrlBand => "Band Knob",
             NpcKind::CtrlKenkenLevel => "KenKen Knob",
             NpcKind::CtrlCraReset => "CRA Reset",
@@ -120,6 +136,7 @@ impl NpcKind {
         NpcKind::Kid1, NpcKind::Kid2, NpcKind::Shopkeeper, NpcKind::GlitchDog,
         NpcKind::GroveSpirit, NpcKind::Pip,
         NpcKind::ReefShark, NpcKind::SeaTurtle, NpcKind::Dolphin, NpcKind::Crab, NpcKind::Jelly,
+        NpcKind::MoonAlien, NpcKind::FuelBot, NpcKind::MarsGuardian, NpcKind::StarKeeper, NpcKind::StationAlien,
         NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
         NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerBalance, NpcKind::CtrlTriggerSudoku,
@@ -161,6 +178,10 @@ pub enum SpriteType {
     Dolphin,
     Crab,
     Jellyfish,
+    AlienGreen,
+    AlienRed,
+    FuelDepot,
+    StarTerminal,
 }
 
 /// Manhattan radius an NPC may wander away from its home tile. Keeps wanderers
@@ -244,6 +265,10 @@ pub struct Npc {
     /// Stable id for a gate guardian, used to persist "this gate is solved"
     /// across saves. `Some` only for gate NPCs.
     pub gate_id: Option<&'static str>,
+    /// True for a fuel depot: interacting always poses a puzzle that, when
+    /// solved, refills the rocket's fuel. Like `gate`, it short-circuits the
+    /// normal interaction menu.
+    pub refuel: bool,
 }
 
 impl Npc {
@@ -352,6 +377,13 @@ impl Npc {
         self
     }
 
+    /// Builder: mark this NPC as a fuel depot — interacting refuels the rocket
+    /// after a puzzle.
+    pub fn refueling(mut self) -> Self {
+        self.refuel = true;
+        self
+    }
+
     pub fn draw(&self, time: f32) {
         let x = self.entity.x;
         let y = self.entity.y;
@@ -376,6 +408,12 @@ impl Npc {
             SpriteType::Dolphin => sprites::npcs::draw_dolphin(x, y, time),
             SpriteType::Crab => sprites::npcs::draw_crab(x, y, time),
             SpriteType::Jellyfish => sprites::npcs::draw_jellyfish(x, y, time),
+            SpriteType::AlienGreen => sprites::npcs::draw_alien(x, y, time,
+                Color::from_rgba(124, 207, 120, 255)),
+            SpriteType::AlienRed => sprites::npcs::draw_alien(x, y, time,
+                Color::from_rgba(229, 130, 110, 255)),
+            SpriteType::FuelDepot => sprites::npcs::draw_fuel_depot(x, y, time),
+            SpriteType::StarTerminal => sprites::npcs::draw_star_terminal(x, y, time),
         }
     }
 }
@@ -401,6 +439,7 @@ fn npc(home_map: &'static str, kind: NpcKind, tx: usize, ty: usize, sprite: Spri
         pathing: None,
         gate: false,
         gate_id: None,
+        refuel: false,
     }
 }
 
@@ -452,6 +491,25 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(Dolphin,  11, 8, S::Dolphin,   true, false, false).wandering(),
             n(Crab,      3, 9, S::Crab,      true, true,  false).wandering(),
             n(Jelly,     5, 2, S::Jellyfish, true, true,  false).wandering(),
+        ],
+        // Orbital hub — Tank the fuel droid tops up the rocket (solve to refuel).
+        "space_hub" => vec![
+            n(FuelBot, 12, 9, S::FuelDepot, false, true, false).refueling(),
+        ],
+        // The Moon — Zorp, a giftable green pal who bounces around the craters.
+        "moon" => vec![
+            n(MoonAlien, 3, 4, S::AlienGreen, true, false, false).wandering(),
+        ],
+        // Red Planet — Rok guards the only gap in the rock wall; solving his
+        // navigation puzzle waves the rocket-kid through to the treasure.
+        "mars" => vec![
+            n(MarsGuardian, 5, 4, S::AlienRed, true, true, false).gating("mars_gate_1"),
+        ],
+        // Asteroid Base — Cassi runs the star-chart (pattern) console; Bleep is
+        // a giftable station buddy.
+        "asteroid_base" => vec![
+            n(StarKeeper,   6, 4, S::StarTerminal, true, false, true),
+            n(StationAlien, 9, 5, S::AlienGreen,   true, true,  false).wandering(),
         ],
         "control" => vec![
             // Dev knob bay -- each NPC is one control. game.rs intercepts dev-control

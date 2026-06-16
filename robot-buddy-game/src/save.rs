@@ -53,7 +53,12 @@ pub struct SaveData {
     /// reef dive). Older saves load as empty. Reusable for any paid portal.
     #[serde(default)]
     pub paid_tolls: Vec<String>,
+    /// Rocket fuel for space jumps. Older saves load with a full tank.
+    #[serde(default = "default_fuel")]
+    pub fuel: u32,
 }
+
+fn default_fuel() -> u32 { 10 }
 
 fn default_color_choice() -> String {
     crate::sprites::player::OUTFIT_COLORS[0].0.to_string()

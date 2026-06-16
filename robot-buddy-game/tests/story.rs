@@ -1823,3 +1823,77 @@ fn pushing_an_npc_into_an_unvisited_map_keeps_its_regular_residents() {
     assert!(h.game.npcs.iter().any(|n| n.kind == NpcKind::Pip),
         "the pushed-in Pip should be present on dev too");
 }
+
+// ─── Space: launchpad, rocket fuel, depot refill ─────────────────────────
+
+#[test]
+fn launching_from_the_lab_reaches_the_orbital_hub() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(3);
+    h.start_dev_game();
+    h.game.map = Map::lab();
+    h.game.npcs = npc_mod::npcs_for_map("lab");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+
+    // Stand just below Gizmo's launchpad at (10,2) and blast off.
+    snap_player(&mut h, 10, 3);
+    let fuel_before = h.game.fuel();
+    h.step_through_portal(KeyCode::Up, "space_hub");
+    assert_eq!(h.game.map.id, "space_hub", "the launchpad blasts off to the hub");
+    assert_eq!(h.game.fuel(), fuel_before, "launching to the hub is free");
+
+    // The Moon is a free hop from the hub.
+    h.finish_dialogue(); // "BLAST OFF!" entry beat
+    snap_player(&mut h, 3, 3); // just below the Moon pad at (3,2)
+    h.step_through_portal(KeyCode::Up, "moon");
+    assert_eq!(h.game.map.id, "moon");
+    assert_eq!(h.game.fuel(), fuel_before, "the Moon hop costs no fuel");
+}
+
+#[test]
+fn rocket_jumps_burn_fuel_and_the_depot_refills() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(21);
+    h.start_dev_game();
+    h.game.map = Map::space_hub();
+    h.game.npcs = npc_mod::npcs_for_map("space_hub");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+
+    // Empty tank: the Mars jump (3 fuel) is gently refused — no transfer.
+    h.game.set_fuel(0);
+    snap_player(&mut h, 11, 3); // just below the Mars pad at (11,2)
+    for _ in 0..24 { h.hold(KeyCode::Up); }
+    assert_eq!(h.game.map.id, "space_hub", "an empty tank can't make the Mars jump");
+    h.finish_dialogue();
+
+    // Refuel at Tank the fuel droid by solving its puzzle.
+    snap_player(&mut h, 12, 8); // just above the depot at (12,9)
+    h.hold(KeyCode::Down);      // face the droid
+    let mark = h.mark();
+    h.interact();
+    h.finish_dialogue();        // depot greeting → refill puzzle
+    h.wait_until(|g| g.state == GameState::Challenge);
+    h.answer_correctly();
+    h.wait_until(|g| g.state == GameState::Playing);
+    assert_eq!(h.game.fuel(), 10, "solving the depot tops the tank to full");
+    assert!(
+        h.events_since(mark).iter().any(|e| matches!(e, GameEvent::Refueled { .. })),
+        "refueling emits Refueled; got {:?}", h.events_since(mark),
+    );
+
+    // Now the Mars jump goes through and burns 3 fuel.
+    snap_player(&mut h, 11, 3);
+    h.step_through_portal(KeyCode::Up, "mars");
+    assert_eq!(h.game.map.id, "mars");
+    assert_eq!(h.game.fuel(), 7, "the Mars jump burns 3 fuel");
+}

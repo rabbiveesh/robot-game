@@ -32,6 +32,17 @@ pub enum Tile {
     // Portal markers — walkable tiles that visibly flag a special exit. A
     // reusable family: each themed map gets its own (DiveSpot today).
     DiveSpot = 23, // swirling whirlpool → reef dive portal
+    // Space tiles (hub + planets, and future cosmic maps)
+    Space = 24,       // deep-space floor (walkable, dark)
+    Star = 25,        // twinkling star decoration (walkable)
+    SpaceRock = 26,   // solid asteroid / hull wall
+    Launchpad = 27,   // walkable launch marker (lab → hub, hub → lab)
+    MoonPad = 28,     // hub marker → Moon
+    MarsPad = 29,     // hub marker → Red Planet
+    AsteroidPad = 30, // hub marker → Asteroid Base
+    MoonGround = 31,  // walkable gray crater floor
+    MarsGround = 32,  // walkable red dust
+    StationFloor = 33,// walkable metal station floor
     // Glitch-only tiles (doghouse)
     Glitch95 = 95,
     Glitch96 = 96,
@@ -54,49 +65,63 @@ pub struct Portal {
     pub to_y: usize,
     pub dir: Dir,
     pub secret: bool,
-    /// Dum Dums the player must spend to pass. 0 = free. A reusable toll so any
-    /// map can sit behind a price; `handle_portal` charges and blocks generically.
+    /// Dum Dums the player must spend to pass. 0 = free. A reusable one-time
+    /// toll so any map can sit behind a price; `handle_portal` charges once.
     pub cost: u32,
+    /// Fuel spent each time the player takes this portal (0 = free). Unlike
+    /// `cost` this is charged every trip — it's how rocket jumps burn fuel.
+    pub fuel_cost: u32,
 }
 
 /// All portals in the game. Checked after each player move.
 pub fn all_portals() -> &'static [Portal] {
     &[
         // Home: overworld door → home interior, home door → overworld
-        Portal { from_map: "overworld", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0 },
-        Portal { from_map: "home", from_x: 4, from_y: 6, to_map: "overworld", to_x: 5, to_y: 8, dir: Dir::Down, secret: false, cost: 0 },
+        Portal { from_map: "overworld", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "home", from_x: 4, from_y: 6, to_map: "overworld", to_x: 5, to_y: 8, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
         // Lab: overworld east house → lab interior
-        Portal { from_map: "overworld", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0 },
-        Portal { from_map: "lab", from_x: 5, from_y: 7, to_map: "overworld", to_x: 22, to_y: 6, dir: Dir::Down, secret: false, cost: 0 },
+        Portal { from_map: "overworld", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "lab", from_x: 5, from_y: 7, to_map: "overworld", to_x: 22, to_y: 6, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
         // Shop: overworld south house → shop interior
-        Portal { from_map: "overworld", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0 },
-        Portal { from_map: "shop", from_x: 4, from_y: 6, to_map: "overworld", to_x: 24, to_y: 18, dir: Dir::Down, secret: false, cost: 0 },
+        Portal { from_map: "overworld", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "shop", from_x: 4, from_y: 6, to_map: "overworld", to_x: 24, to_y: 18, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
         // SECRET: Dream world — water tile past bridge
-        Portal { from_map: "overworld", from_x: 16, from_y: 14, to_map: "dream", to_x: 14, to_y: 13, dir: Dir::Down, secret: true, cost: 0 },
-        Portal { from_map: "dream", from_x: 16, from_y: 14, to_map: "overworld", to_x: 13, to_y: 14, dir: Dir::Left, secret: false, cost: 0 },
+        Portal { from_map: "overworld", from_x: 16, from_y: 14, to_map: "dream", to_x: 14, to_y: 13, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "dream", from_x: 16, from_y: 14, to_map: "overworld", to_x: 13, to_y: 14, dir: Dir::Left, secret: false, cost: 0, fuel_cost: 0 },
         // Dream-mode mirrors of overworld portals (same doors work in dream)
-        Portal { from_map: "dream", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0 },
-        Portal { from_map: "dream", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0 },
-        Portal { from_map: "dream", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0 },
+        Portal { from_map: "dream", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "dream", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "dream", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
         // SECRET: Doghouse land — roof tile behind home
-        Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0 },
-        Portal { from_map: "dream", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0 },
-        Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: Dir::Down, secret: false, cost: 0 },
+        Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "dream", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
         // SECRET: Hidden grove — tree at top border
-        Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0 },
-        Portal { from_map: "dream", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0 },
-        Portal { from_map: "grove", from_x: 5, from_y: 8, to_map: "overworld", to_x: 15, to_y: 1, dir: Dir::Down, secret: false, cost: 0 },
+        Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "dream", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "grove", from_x: 5, from_y: 8, to_map: "overworld", to_x: 15, to_y: 1, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
         // Dev → Control Room (knob bay for testing puzzle parameters in isolation)
-        Portal { from_map: "dev", from_x: 1, from_y: 9, to_map: "control", to_x: 6, to_y: 1, dir: Dir::Down, secret: false, cost: 0 },
-        Portal { from_map: "control", from_x: 6, from_y: 7, to_map: "dev", to_x: 1, to_y: 9, dir: Dir::Up, secret: false, cost: 0 },
+        Portal { from_map: "dev", from_x: 1, from_y: 9, to_map: "control", to_x: 6, to_y: 1, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "control", from_x: 6, from_y: 7, to_map: "dev", to_x: 1, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
         // Dev → Annex (validation field for new-map genericity)
-        Portal { from_map: "dev", from_x: 13, from_y: 10, to_map: "annex", to_x: 4, to_y: 5, dir: Dir::Down, secret: false, cost: 0 },
-        Portal { from_map: "annex", from_x: 4, from_y: 6, to_map: "dev", to_x: 13, to_y: 9, dir: Dir::Up, secret: false, cost: 0 },
+        Portal { from_map: "dev", from_x: 13, from_y: 10, to_map: "annex", to_x: 4, to_y: 5, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "annex", from_x: 4, from_y: 6, to_map: "dev", to_x: 13, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
         // SECRET: Coral reef — dive spot at the south edge of the pond. Costs a
         // few Dum Dums to dive in (the reef's toll); resurface for free.
-        Portal { from_map: "overworld", from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3 },
-        Portal { from_map: "dream",     from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3 },
-        Portal { from_map: "reef", from_x: 8, from_y: 10, to_map: "overworld", to_x: 17, to_y: 16, dir: Dir::Down, secret: false, cost: 0 },
+        Portal { from_map: "overworld", from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0 },
+        Portal { from_map: "dream",     from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0 },
+        Portal { from_map: "reef", from_x: 8, from_y: 10, to_map: "overworld", to_x: 17, to_y: 16, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        // SPACE: Gizmo's lab launchpad → the orbital hub, and back.
+        Portal { from_map: "lab", from_x: 10, from_y: 2, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "space_hub", from_x: 8, from_y: 10, to_map: "lab", to_x: 10, to_y: 3, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        // Hub → planets. The Moon is a free hop; deeper worlds burn fuel.
+        Portal { from_map: "space_hub", from_x: 3,  from_y: 2, to_map: "moon",          to_x: 6, to_y: 2, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "space_hub", from_x: 11, from_y: 2, to_map: "mars",          to_x: 6, to_y: 7, dir: Dir::Up,   secret: false, cost: 0, fuel_cost: 3 },
+        Portal { from_map: "space_hub", from_x: 8,  from_y: 4, to_map: "asteroid_base", to_x: 6, to_y: 2, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 4 },
+        // Planet return pads → back to the hub (free).
+        Portal { from_map: "moon",          from_x: 6, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "mars",          from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "asteroid_base", from_x: 3, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
     ]
 }
 
@@ -138,6 +163,9 @@ pub enum RenderMode {
     /// Underwater theme — teal palette + drifting bubble overlay. Reusable by
     /// any submerged map (reef today, deeper zones later).
     Aquatic,
+    /// Space theme — dark void + twinkling starfield overlay. Used by the hub
+    /// and every planet surface; per-tile colors carry each world's look.
+    Cosmic,
 }
 
 impl Map {
@@ -148,7 +176,7 @@ impl Map {
         if col >= self.width || row >= self.height { return true; }
         if is_secret_walkable(self.id, col, row) { return false; }
         let tile = self.tiles[row][col];
-        matches!(tile, Tile::Water | Tile::Wall | Tile::Tree | Tile::HouseWall | Tile::Roof | Tile::Window | Tile::Fence | Tile::Sign | Tile::Chest | Tile::Table | Tile::Bookshelf | Tile::GlitchWall | Tile::Coral | Tile::Kelp)
+        matches!(tile, Tile::Water | Tile::Wall | Tile::Tree | Tile::HouseWall | Tile::Roof | Tile::Window | Tile::Fence | Tile::Sign | Tile::Chest | Tile::Table | Tile::Bookshelf | Tile::GlitchWall | Tile::Coral | Tile::Kelp | Tile::SpaceRock)
     }
 
     #[allow(non_snake_case)]
@@ -212,12 +240,13 @@ impl Map {
     pub fn lab() -> Self {
         use Tile::*;
         let (Wl, WF, Rg, Tb, Bs, Dr, Ch) = (Wall, WoodFloor, Rug, Table, Bookshelf, Door, Chest);
+        let Lp = Launchpad;
         Map {
             id: "lab", width: 12, height: 9, render_mode: RenderMode::Normal,
             tiles: vec![
                 vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
                 vec![Wl,WF,WF,Bs,Bs,WF,WF,Bs,Bs,WF,WF,Wl],
-                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,WF,Wl],
+                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,Lp,Wl],
                 vec![Wl,WF,Tb,WF,WF,WF,WF,WF,WF,Tb,WF,Wl],
                 vec![Wl,WF,WF,WF,Rg,Rg,Rg,Rg,WF,WF,WF,Wl],
                 vec![Wl,WF,WF,WF,Rg,Ch,Ch,Rg,WF,WF,WF,Wl],
@@ -394,6 +423,98 @@ impl Map {
         }
     }
 
+    /// Orbital hub — the flyable starfield. You pilot the rocket (arrow keys)
+    /// between planet pads. Border is solid asteroid rock; pads are portals.
+    /// Cosmic render mode floats a starfield over everything.
+    #[allow(non_snake_case)]
+    pub fn space_hub() -> Self {
+        use Tile::*;
+        let (SR, Sp, St, Lp) = (SpaceRock, Space, Star, Launchpad);
+        let (Mo, Ma, As) = (MoonPad, MarsPad, AsteroidPad);
+        Map {
+            id: "space_hub", width: 16, height: 12, render_mode: RenderMode::Cosmic,
+            tiles: vec![
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+                vec![SR,Sp,St,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,SR],
+                vec![SR,Sp,Sp,Mo,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Ma,Sp,Sp,Sp,SR],
+                vec![SR,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,St,Sp,Sp,Sp,Sp,Sp,SR],
+                vec![SR,Sp,Sp,Sp,Sp,Sp,Sp,Sp,As,Sp,Sp,Sp,Sp,Sp,Sp,SR],
+                vec![SR,Sp,St,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,SR],
+                vec![SR,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,SR],
+                vec![SR,Sp,Sp,Sp,St,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,Sp,Sp,SR],
+                vec![SR,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,SR],
+                vec![SR,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,SR],
+                vec![SR,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Lp,Sp,Sp,Sp,Sp,Sp,Sp,SR],
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+            ],
+        }
+    }
+
+    /// The Moon — a gentle gray crater world, the free first stop.
+    #[allow(non_snake_case)]
+    pub fn moon() -> Self {
+        use Tile::*;
+        let (SR, MG, Lp) = (SpaceRock, MoonGround, Launchpad);
+        Map {
+            id: "moon", width: 12, height: 9, render_mode: RenderMode::Cosmic,
+            tiles: vec![
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+                vec![SR,MG,MG,MG,MG,MG,MG,MG,MG,MG,MG,SR],
+                vec![SR,MG,MG,MG,MG,MG,MG,MG,MG,MG,MG,SR],
+                vec![SR,MG,MG,SR,MG,MG,MG,MG,SR,MG,MG,SR],
+                vec![SR,MG,MG,MG,MG,MG,MG,MG,MG,MG,MG,SR],
+                vec![SR,MG,SR,MG,MG,MG,MG,MG,MG,SR,MG,SR],
+                vec![SR,MG,MG,MG,MG,MG,MG,MG,MG,MG,MG,SR],
+                vec![SR,MG,MG,MG,MG,MG,Lp,MG,MG,MG,MG,SR],
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+            ],
+        }
+    }
+
+    /// The Red Planet — dusty, with a rock wall split by a single gap that a
+    /// friendly alien guards. Treasure waits in the cove above the wall.
+    #[allow(non_snake_case)]
+    pub fn mars() -> Self {
+        use Tile::*;
+        let (SR, RG, Lp, Ch) = (SpaceRock, MarsGround, Launchpad, Chest);
+        Map {
+            id: "mars", width: 12, height: 9, render_mode: RenderMode::Cosmic,
+            tiles: vec![
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+                vec![SR,RG,RG,RG,RG,RG,RG,RG,RG,RG,RG,SR],
+                vec![SR,RG,RG,RG,RG,Ch,RG,RG,RG,RG,RG,SR],
+                vec![SR,RG,RG,RG,RG,RG,RG,RG,RG,RG,RG,SR],
+                vec![SR,SR,SR,SR,SR,RG,SR,SR,SR,SR,SR,SR],
+                vec![SR,RG,RG,RG,RG,RG,RG,RG,RG,RG,RG,SR],
+                vec![SR,RG,RG,RG,RG,RG,RG,RG,RG,RG,RG,SR],
+                vec![SR,RG,Lp,RG,RG,RG,RG,RG,RG,RG,RG,SR],
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+            ],
+        }
+    }
+
+    /// Asteroid Base — a metal station interior. A star-chart terminal alien
+    /// runs constellation (pattern) puzzles; other aliens mill about.
+    #[allow(non_snake_case)]
+    pub fn asteroid_base() -> Self {
+        use Tile::*;
+        let (SR, ST, Lp) = (SpaceRock, StationFloor, Launchpad);
+        Map {
+            id: "asteroid_base", width: 12, height: 9, render_mode: RenderMode::Cosmic,
+            tiles: vec![
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,SR,ST,ST,ST,ST,ST,SR,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,SR,ST,ST,ST,ST,ST,ST,SR,ST,SR],
+                vec![SR,ST,ST,Lp,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+            ],
+        }
+    }
+
     pub fn by_id(id: &str) -> Self {
         match id {
             "overworld" => Self::overworld(),
@@ -407,6 +528,10 @@ impl Map {
             "control" => Self::control(),
             "annex" => Self::annex(),
             "reef" => Self::reef(),
+            "space_hub" => Self::space_hub(),
+            "moon" => Self::moon(),
+            "mars" => Self::mars(),
+            "asteroid_base" => Self::asteroid_base(),
             _ => Self::overworld(),
         }
     }
@@ -452,6 +577,11 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
             Tile::Kelp      => dream_grass,
             Tile::Bubble    => dream_water,
             Tile::DiveSpot  => dream_water,
+            Tile::Space | Tile::Star => dream_dark,
+            Tile::SpaceRock => dream_dark,
+            Tile::Launchpad | Tile::MoonPad | Tile::MarsPad | Tile::AsteroidPad
+                            => dream_cream,
+            Tile::MoonGround | Tile::MarsGround | Tile::StationFloor => dream_grass,
             Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98
                             => dream_dark,
             Tile::GlitchWall => dream_dark,
@@ -462,7 +592,31 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
         return tile_color_aquatic(tile);
     }
 
+    if mode == RenderMode::Cosmic {
+        return tile_color_cosmic(tile);
+    }
+
     tile_color_normal(tile)
+}
+
+/// Space palette. Dark void with per-world ground colors so the hub, Moon,
+/// Mars and the station each read distinctly under one Cosmic render mode.
+fn tile_color_cosmic(tile: Tile) -> Color {
+    let void = Color::from_rgba(10, 12, 28, 255);     // deep space
+    match tile {
+        Tile::Space        => void,
+        Tile::Star         => void,
+        Tile::SpaceRock    => Color::from_rgba(58, 54, 74, 255),    // asteroid rock
+        Tile::Launchpad    => Color::from_rgba(40, 44, 70, 255),    // pad base
+        Tile::MoonPad      => Color::from_rgba(40, 44, 70, 255),
+        Tile::MarsPad      => Color::from_rgba(40, 44, 70, 255),
+        Tile::AsteroidPad  => Color::from_rgba(40, 44, 70, 255),
+        Tile::MoonGround   => Color::from_rgba(120, 120, 130, 255), // lunar gray
+        Tile::MarsGround   => Color::from_rgba(160, 78, 54, 255),   // rusty red
+        Tile::StationFloor => Color::from_rgba(70, 78, 96, 255),    // metal deck
+        // Land tiles a future cosmic map might reuse fade into the void.
+        _                  => void,
+    }
 }
 
 /// Underwater palette. Land tiles still appear (a map can reuse Grass/Path),
@@ -516,6 +670,13 @@ fn tile_color_normal(tile: Tile) -> Color {
         Tile::Kelp      => Color::from_rgba(34, 110, 80, 255),     // kelp
         Tile::Bubble    => Color::from_rgba(38, 120, 140, 255),    // bubble vent (sea floor base)
         Tile::DiveSpot  => Color::from_rgba(66, 165, 245, 255),    // dive spot (water base)
+        Tile::Space | Tile::Star => Color::from_rgba(10, 12, 28, 255),
+        Tile::SpaceRock => Color::from_rgba(58, 54, 74, 255),
+        Tile::Launchpad | Tile::MoonPad | Tile::MarsPad | Tile::AsteroidPad
+                        => Color::from_rgba(40, 44, 70, 255),
+        Tile::MoonGround => Color::from_rgba(120, 120, 130, 255),
+        Tile::MarsGround => Color::from_rgba(160, 78, 54, 255),
+        Tile::StationFloor => Color::from_rgba(70, 78, 96, 255),
         Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98
                         => Color::from_rgba(50, 50, 50, 255),      // glitch tiles
         Tile::GlitchWall => Color::from_rgba(50, 50, 50, 255),     // glitch wall
@@ -552,6 +713,22 @@ pub fn draw_map(map: &Map, cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, tim
     // Underwater bubbles + a soft blue light tint
     if map.render_mode == RenderMode::Aquatic {
         draw_aquatic_overlay(cam_x, cam_y, view_w, view_h, time);
+    }
+
+    // Twinkling starfield drifting over space
+    if map.render_mode == RenderMode::Cosmic {
+        draw_cosmic_overlay(cam_x, cam_y, view_w, view_h, time);
+    }
+}
+
+fn draw_cosmic_overlay(cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, time: f32) {
+    for i in 0..40 {
+        let seed = i as f32 * 137.5; // golden-angle spread
+        let sx = cam_x + ((seed * 7.3).sin() * 0.5 + 0.5) * view_w;
+        let sy = cam_y + ((seed * 13.1).cos() * 0.5 + 0.5) * view_h;
+        let tw = ((time * 2.0 + seed).sin() * 0.5 + 0.5).powf(2.0);
+        let size = 0.6 + tw * 1.6;
+        draw_circle(sx, sy, size, Color::new(1.0, 1.0, 0.95, 0.25 + tw * 0.6));
     }
 }
 
@@ -609,8 +786,98 @@ fn draw_tile_detail(tile: Tile, x: f32, y: f32, time: f32, mode: RenderMode) {
         Tile::Kelp      => draw_kelp_detail(x, y, time),
         Tile::Bubble    => draw_bubble_vent_detail(x, y, time),
         Tile::DiveSpot  => draw_dive_spot_detail(x, y, time),
+        Tile::Star      => draw_star_detail(x, y, time),
+        Tile::SpaceRock => draw_space_rock_detail(x, y),
+        Tile::Launchpad => draw_launchpad_detail(x, y, time),
+        Tile::MoonPad   => draw_planet_pad_detail(x, y, time, Color::from_rgba(200, 200, 210, 255)),
+        Tile::MarsPad   => draw_planet_pad_detail(x, y, time, Color::from_rgba(230, 110, 70, 255)),
+        Tile::AsteroidPad => draw_planet_pad_detail(x, y, time, Color::from_rgba(150, 140, 120, 255)),
+        Tile::MoonGround => draw_moon_ground_detail(x, y),
+        Tile::MarsGround => draw_mars_ground_detail(x, y),
+        Tile::StationFloor => draw_station_floor_detail(x, y),
         _               => {}
     }
+}
+
+fn draw_star_detail(x: f32, y: f32, time: f32) {
+    let cx = x + TILE_SIZE / 2.0;
+    let cy = y + TILE_SIZE / 2.0;
+    let tw = (time * 2.0 + x * 0.3 + y * 0.2).sin() * 0.5 + 0.5;
+    let r = 2.0 + tw * 2.5;
+    let c = Color::new(1.0, 1.0, 0.9, 0.5 + tw * 0.5);
+    draw_circle(cx, cy, r, c);
+    // sparkle cross
+    draw_line(cx - r - 2.0, cy, cx + r + 2.0, cy, 1.0, Color::new(1.0, 1.0, 1.0, tw * 0.6));
+    draw_line(cx, cy - r - 2.0, cx, cy + r + 2.0, 1.0, Color::new(1.0, 1.0, 1.0, tw * 0.6));
+}
+
+fn draw_space_rock_detail(x: f32, y: f32) {
+    // Cratered asteroid lumps
+    let dark = Color::from_rgba(40, 38, 54, 255);
+    let light = Color::from_rgba(78, 74, 96, 255);
+    for i in 0..3 {
+        let rx = seeded_random(x, y, i * 5) * (TILE_SIZE - 14.0) + 7.0;
+        let ry = seeded_random(x, y, i * 5 + 1) * (TILE_SIZE - 14.0) + 7.0;
+        draw_circle(x + rx, y + ry, 4.0, light);
+        draw_circle(x + rx + 1.0, y + ry + 1.0, 2.0, dark);
+    }
+}
+
+fn draw_launchpad_detail(x: f32, y: f32, time: f32) {
+    let cx = x + TILE_SIZE / 2.0;
+    let cy = y + TILE_SIZE / 2.0;
+    // Hazard ring
+    draw_circle(cx, cy, 18.0, Color::from_rgba(255, 193, 7, 200));
+    draw_circle(cx, cy, 14.0, Color::from_rgba(40, 44, 70, 255));
+    // Pulsing "H" pad lights
+    let pulse = (time * 3.0).sin() * 0.5 + 0.5;
+    let lc = Color::new(0.4, 0.9, 1.0, 0.5 + pulse * 0.5);
+    draw_line(cx - 6.0, cy - 7.0, cx - 6.0, cy + 7.0, 2.5, lc);
+    draw_line(cx + 6.0, cy - 7.0, cx + 6.0, cy + 7.0, 2.5, lc);
+    draw_line(cx - 6.0, cy, cx + 6.0, cy, 2.5, lc);
+}
+
+fn draw_planet_pad_detail(x: f32, y: f32, time: f32, planet: Color) {
+    let cx = x + TILE_SIZE / 2.0;
+    let cy = y + TILE_SIZE / 2.0;
+    // Glowing landing ring
+    let pulse = (time * 2.0 + x * 0.1).sin() * 0.5 + 0.5;
+    draw_circle_lines(cx, cy, 20.0, 2.0, Color::new(0.5, 0.8, 1.0, 0.3 + pulse * 0.4));
+    // The destination planet floating above the pad
+    let bob = (time * 1.5).sin() * 2.0;
+    draw_circle(cx, cy - 2.0 + bob, 11.0, planet);
+    // little shading crescent
+    draw_circle(cx + 4.0, cy - 4.0 + bob, 7.0, Color::new(1.0, 1.0, 1.0, 0.12));
+}
+
+fn draw_moon_ground_detail(x: f32, y: f32) {
+    let crater = Color::from_rgba(98, 98, 108, 255);
+    for i in 0..3 {
+        let rx = seeded_random(x, y, i * 4) * (TILE_SIZE - 12.0) + 6.0;
+        let ry = seeded_random(x, y, i * 4 + 1) * (TILE_SIZE - 12.0) + 6.0;
+        let rr = 2.0 + seeded_random(x, y, i * 4 + 2) * 3.0;
+        draw_circle_lines(x + rx, y + ry, rr, 1.5, crater);
+    }
+}
+
+fn draw_mars_ground_detail(x: f32, y: f32) {
+    let dust = Color::from_rgba(140, 64, 44, 255);
+    for i in 0..4 {
+        let rx = seeded_random(x, y, i * 6) * (TILE_SIZE - 8.0) + 4.0;
+        let ry = seeded_random(x, y, i * 6 + 1) * (TILE_SIZE - 8.0) + 4.0;
+        draw_circle(x + rx, y + ry, 1.8, dust);
+    }
+}
+
+fn draw_station_floor_detail(x: f32, y: f32) {
+    // Panel grid + rivets
+    let line = Color::from_rgba(54, 60, 76, 255);
+    draw_rectangle_lines(x + 2.0, y + 2.0, TILE_SIZE - 4.0, TILE_SIZE - 4.0, 1.0, line);
+    let rivet = Color::from_rgba(96, 104, 124, 255);
+    draw_circle(x + 6.0, y + 6.0, 1.3, rivet);
+    draw_circle(x + TILE_SIZE - 6.0, y + 6.0, 1.3, rivet);
+    draw_circle(x + 6.0, y + TILE_SIZE - 6.0, 1.3, rivet);
+    draw_circle(x + TILE_SIZE - 6.0, y + TILE_SIZE - 6.0, 1.3, rivet);
 }
 
 /// A swirling whirlpool that visibly says "dive in here." Concentric rotating

@@ -368,6 +368,99 @@ pub fn draw_jellyfish(x: f32, y: f32, time: f32) {
     draw_circle(cx + 3.0, cy, 1.3, eye);
 }
 
+/// A friendly little alien. `hue` lets reef-style rosters drop in green pals or
+/// a rusty-red Mars guardian without a new sprite. Floaty bob + waving antennae.
+pub fn draw_alien(x: f32, y: f32, time: f32, body: Color) {
+    let cx = x + TS / 2.0;
+    let cy = y + TS / 2.0 + 4.0 + (time * 1.6).sin() * 1.5;
+
+    draw_ellipse(cx, y + TS - 3.0, 11.0, 4.0, 0.0, Color::from_rgba(0, 0, 0, 40));
+
+    // Body / belly
+    draw_ellipse(cx, cy + 2.0, 10.0, 11.0, 0.0, body);
+    draw_ellipse(cx, cy + 5.0, 6.0, 6.0, 0.0, Color::new(1.0, 1.0, 1.0, 0.18));
+
+    // Big head
+    draw_circle(cx, cy - 8.0, 9.0, body);
+
+    // Antennae with wobbling tips
+    let wob = (time * 3.0).sin() * 2.0;
+    let tip = Color::from_rgba(255, 235, 120, 255);
+    draw_line(cx - 4.0, cy - 14.0, cx - 6.0 + wob, cy - 22.0, 1.5, body);
+    draw_line(cx + 4.0, cy - 14.0, cx + 6.0 - wob, cy - 22.0, 1.5, body);
+    draw_circle(cx - 6.0 + wob, cy - 22.0, 2.0, tip);
+    draw_circle(cx + 6.0 - wob, cy - 22.0, 2.0, tip);
+
+    // One big friendly eye + a smaller one
+    draw_circle(cx - 2.0, cy - 8.0, 4.0, WHITE);
+    draw_circle(cx + 5.0, cy - 9.0, 2.5, WHITE);
+    draw_circle(cx - 2.0, cy - 8.0, 1.8, Color::from_rgba(33, 33, 33, 255));
+    draw_circle(cx + 5.0, cy - 9.0, 1.2, Color::from_rgba(33, 33, 33, 255));
+
+    // Smile
+    draw_line(cx - 3.0, cy - 2.0, cx + 3.0, cy - 2.0, 1.2, Color::from_rgba(33, 33, 33, 255));
+
+    // Little arms
+    draw_line(cx - 9.0, cy + 1.0, cx - 13.0, cy - 2.0 + wob, 2.0, body);
+    draw_line(cx + 9.0, cy + 1.0, cx + 13.0, cy - 2.0 - wob, 2.0, body);
+}
+
+/// Fuel depot — a chunky droid with a pulsing gauge. Refuels the rocket when
+/// the kid solves its math.
+pub fn draw_fuel_depot(x: f32, y: f32, time: f32) {
+    let cx = x + TS / 2.0;
+    let cy = y + TS / 2.0 + 2.0;
+    let metal = Color::from_rgba(120, 130, 150, 255);
+    let dark = Color::from_rgba(70, 78, 96, 255);
+
+    draw_ellipse(cx, y + TS - 3.0, 13.0, 4.0, 0.0, Color::from_rgba(0, 0, 0, 40));
+
+    // Tank body
+    draw_rectangle(cx - 11.0, cy - 8.0, 22.0, 24.0, metal);
+    draw_rectangle_lines(cx - 11.0, cy - 8.0, 22.0, 24.0, 2.0, dark);
+    // Cap
+    draw_rectangle(cx - 7.0, cy - 13.0, 14.0, 6.0, dark);
+
+    // Pulsing fuel gauge (green = full vibes)
+    let pulse = (time * 3.0).sin() * 0.5 + 0.5;
+    draw_rectangle(cx - 7.0, cy - 3.0, 14.0, 8.0, Color::from_rgba(20, 24, 34, 255));
+    draw_rectangle(cx - 6.0, cy - 2.0, 12.0 * (0.4 + pulse * 0.6), 6.0,
+        Color::from_rgba(102, 220, 120, 255));
+    // Nozzle + hose
+    draw_line(cx + 11.0, cy + 2.0, cx + 16.0, cy + 6.0, 2.5, dark);
+    // "F" label
+    draw_text("F", cx - 3.0, cy + 13.0, 14.0, Color::from_rgba(255, 235, 120, 255));
+}
+
+/// Star-chart terminal — a glowing console with a tiny constellation that the
+/// asteroid-base keeper uses to run pattern puzzles.
+pub fn draw_star_terminal(x: f32, y: f32, time: f32) {
+    let cx = x + TS / 2.0;
+    let cy = y + TS / 2.0 + 2.0;
+    let frame = Color::from_rgba(90, 100, 124, 255);
+    let screen = Color::from_rgba(18, 24, 48, 255);
+
+    draw_ellipse(cx, y + TS - 3.0, 12.0, 4.0, 0.0, Color::from_rgba(0, 0, 0, 40));
+
+    // Console base
+    draw_rectangle(cx - 9.0, cy + 6.0, 18.0, 10.0, frame);
+    // Screen
+    draw_rectangle(cx - 12.0, cy - 14.0, 24.0, 20.0, frame);
+    draw_rectangle(cx - 10.0, cy - 12.0, 20.0, 16.0, screen);
+
+    // Twinkling constellation on the screen
+    let pts = [(-6.0, -8.0), (-1.0, -4.0), (4.0, -7.0), (6.0, 0.0), (0.0, 1.0)];
+    let star = Color::from_rgba(255, 235, 140, 255);
+    for w in pts.windows(2) {
+        draw_line(cx + w[0].0, cy + w[0].1, cx + w[1].0, cy + w[1].1, 1.0,
+            Color::from_rgba(120, 160, 220, 200));
+    }
+    for (i, (px, py)) in pts.iter().enumerate() {
+        let tw = (time * 3.0 + i as f32).sin() * 0.5 + 0.5;
+        draw_circle(cx + px, cy + py, 1.4 + tw * 1.0, star);
+    }
+}
+
 pub fn draw_old_oak(x: f32, y: f32, time: f32) {
     let cx = x + TS / 2.0;
     let cy = y + TS / 2.0;

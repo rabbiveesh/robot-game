@@ -69,6 +69,8 @@ use crate::input::FrameInput;
 pub const GAME_W: f32 = 960.0;
 pub const GAME_H: f32 = 720.0;
 const MOVE_SPEED: f32 = 200.0;
+/// A full fuel tank. Refilling at a depot tops the rocket back up to this.
+const FUEL_MAX: u32 = 10;
 
 /// Where Sparky waits when an NPC has taken over the buddy slot — next to
 /// Professor Gizmo on the overworld so the kid always knows where to find him.
@@ -320,6 +322,10 @@ pub enum GameEvent {
     ChallengeResolved { correct: bool, response_ms: f64 },
     /// A gate guardian's puzzle was solved; the passage is now open.
     GateOpened { gate_id: String },
+    /// The rocket spent fuel taking a space jump.
+    FuelSpent { amount: u32, remaining: u32 },
+    /// A fuel depot refilled the rocket after its puzzle was solved.
+    Refueled { to: u32 },
     GiftGiven { recipient_id: String, total: u32 },
     /// Emitted when the player's follower NPC changes. `joined` is the NPC who
     /// just became the companion (`None` if the slot was cleared); `left` is
@@ -443,6 +449,12 @@ pub struct Game {
     /// Destination map ids whose one-time entry toll has been paid. After the
     /// first paid trip, that portal is free forever. Persisted. Reusable.
     paid_tolls: std::collections::HashSet<String>,
+    /// Rocket fuel for space jumps. Spent per fuel-costed portal, refilled by
+    /// solving Tank the fuel droid's puzzle. Persisted.
+    fuel: u32,
+    /// True while a fuel-depot's refill puzzle is on screen (set on interact,
+    /// consumed when the challenge resolves).
+    pending_refuel: bool,
     new_game_form: Option<NewGameForm>,
 
     // Save / persistence
@@ -533,6 +545,8 @@ impl Game {
             opening_gate: None,
             satisfied_gates: std::collections::HashSet::new(),
             paid_tolls: std::collections::HashSet::new(),
+            fuel: FUEL_MAX,
+            pending_refuel: false,
             new_game_form: None,
             player_name: String::new(),
             player_gender: Gender::Boy,
@@ -626,6 +640,12 @@ impl Game {
     pub fn gate_is_solved(&self, gate_id: &str) -> bool {
         self.satisfied_gates.contains(gate_id)
     }
+
+    /// Current rocket fuel. Exposed for tests / future HUD reads.
+    pub fn fuel(&self) -> u32 { self.fuel }
+
+    /// Set rocket fuel (tests use this to set up jump scenarios).
+    pub fn set_fuel(&mut self, fuel: u32) { self.fuel = fuel; }
 
     /// Read-only view of the active balance session (None if none is on screen).
     /// Tests use this with `ui::balance::layout` to compute click targets.
@@ -1445,8 +1465,8 @@ impl Game {
             } else if let Some(target) = npc::get_interact_target_with_companion(
                 self.player.tile_x, self.player.tile_y, self.player.dir,
                 &self.npcs, self.companion.as_ref(),
-            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n.gate, n.gate_id, n)) {
-                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, is_gate, gate_id, target_ref) = target;
+            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n.gate, n.gate_id, n.refuel, n)) {
+                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, is_gate, gate_id, is_refuel, target_ref) = target;
                 let target_id = target_kind.as_str().to_string();
                 let target_name = target_kind.display_name().to_string();
 
@@ -1471,6 +1491,21 @@ impl Game {
                         text: "*yaaawn* Oh, hello! I'm napping right across the path. Solve a little number puzzle for me and I'll scooch aside, deal?".into(),
                     }]);
                     self.pending_challenge = true;
+                    self.set_state(GameState::Dialogue);
+                    return;
+                }
+
+                // A fuel depot always poses a puzzle; solving it tops up the
+                // tank. Like the gate, it short-circuits the normal menu.
+                if is_refuel {
+                    self.menu_target_id = target_id;
+                    self.menu_target_name = target_name.clone();
+                    self.pending_refuel = true;
+                    self.pending_challenge = true;
+                    self.start_dialogue(vec![DialogueLine {
+                        speaker: target_name,
+                        text: "BEEP BOOP! Solve a number puzzle and I'll fill the rocket right up to the top!".into(),
+                    }]);
                     self.set_state(GameState::Dialogue);
                     return;
                 }
@@ -1722,6 +1757,13 @@ impl Game {
                         }
                         self.events.push(GameEvent::GateOpened { gate_id: gid });
                     }
+                }
+
+                // Was this a fuel-depot refill? On success, top off the tank.
+                // A miss just means try again — never a setback.
+                if std::mem::take(&mut self.pending_refuel) && was_correct {
+                    self.fuel = FUEL_MAX;
+                    self.events.push(GameEvent::Refueled { to: self.fuel });
                 }
             }
             self.set_state(GameState::Playing);
@@ -3082,7 +3124,26 @@ impl Game {
         let dest_x = portal.to_x;
         let dest_y = portal.to_y;
         let cost = portal.cost;
+        let fuel_cost = portal.fuel_cost;
         let from_map = self.map.id.to_string();
+
+        // Rocket fuel: a fuel-costed jump won't fire on an empty tank. Never a
+        // punishment — Sparky points at the fuel droid; no transfer happens.
+        if fuel_cost > 0 && self.fuel < fuel_cost {
+            self.start_dialogue(vec![DialogueLine {
+                speaker: "Sparky".into(),
+                text: format!(
+                    "Not enough fuel for that jump, boss! It needs {fuel_cost} and we've got {}. Let's find Tank the fuel droid and do some math to top up!",
+                    self.fuel
+                ),
+            }]);
+            self.set_state(GameState::Dialogue);
+            return;
+        }
+        if fuel_cost > 0 {
+            self.fuel -= fuel_cost;
+            self.events.push(GameEvent::FuelSpent { amount: fuel_cost, remaining: self.fuel });
+        }
 
         // One-time toll gate (reusable): a priced portal charges once per
         // destination, then it's unlocked for good. Falling short is never a
@@ -3240,12 +3301,21 @@ impl Game {
             for r in &renderables {
                 match &r.kind {
                     SpriteKind::Player => {
-                        match self.player_gender {
-                            Gender::Boy => sprites::player::draw_player_boy(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
-                            Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
+                        if self.map.id == "space_hub" {
+                            // On the hub the kid pilots the rocket — that's the avatar.
+                            sprites::player::draw_rocket(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time);
+                        } else {
+                            match self.player_gender {
+                                Gender::Boy => sprites::player::draw_player_boy(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
+                                Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
+                            }
+                            // Cosmetics bought from Bolt's shop ride on the kid.
+                            sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.frame, &self.shop_owned, &self.color_choice);
+                            // On planet surfaces the kid wears a space helmet.
+                            if self.map.render_mode == tilemap::RenderMode::Cosmic {
+                                sprites::player::draw_spacesuit_overlay(self.player.x, self.player.y, self.player.frame);
+                            }
                         }
-                        // Cosmetics bought from Bolt's shop ride on the kid.
-                        sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.frame, &self.shop_owned, &self.color_choice);
                     }
                     SpriteKind::Sparky => {
                         sprites::robot::draw_robot(self.sparky.entity.x, self.sparky.entity.y, self.sparky.entity.dir, self.sparky.entity.frame, self.game_time);
@@ -3261,6 +3331,10 @@ impl Game {
     fn render_hud(&mut self, screen: (f32, f32)) {
         ui::hud::draw_area_name(self.map.id, self.player.tile_x, self.player.tile_y);
         self.dum_dum_hud.draw(self.dum_dums, screen);
+        // Rocket fuel gauge — only relevant (and only shown) in space.
+        if self.map.render_mode == tilemap::RenderMode::Cosmic {
+            ui::hud::draw_fuel_gauge(self.fuel, FUEL_MAX, screen);
+        }
         // On-screen settings gear (tap to open settings → parent options),
         // shown during free play so it's reachable without a keyboard.
         if self.state == GameState::Playing && !self.settings_open {
@@ -3401,6 +3475,7 @@ impl Game {
             color_choice: self.color_choice.clone(),
             satisfied_gates: self.satisfied_gates.iter().cloned().collect(),
             paid_tolls: self.paid_tolls.iter().cloned().collect(),
+            fuel: self.fuel,
         }
     }
 
@@ -3415,6 +3490,7 @@ impl Game {
         self.color_choice = save_data.color_choice.clone();
         self.satisfied_gates = save_data.satisfied_gates.iter().cloned().collect();
         self.paid_tolls = save_data.paid_tolls.iter().cloned().collect();
+        self.fuel = save_data.fuel;
 
         self.map = Map::by_id(&save_data.map_id);
         self.npcs_offstage.clear();
@@ -3965,6 +4041,33 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
             "Drifting is a perfectly good plan, thank you very much.",
             "Don't worry, I'm the no-sting kind!",
         ],
+        MoonAlien => &[
+            "Zorp! You bounced all the way to the Moon! Boing boing!",
+            "Low gravity is the BEST. Watch me jump super high! Wheee!",
+            "I collect moon rocks. Wanna see? I have... a LOT.",
+        ],
+        // FuelBot reaches the player through the refuel-challenge path, not here.
+        FuelBot => &[
+            "BEEP. Tank online. Solve my puzzle and I'll top off your rocket!",
+            "Fuel is friendship. ...no wait, that's not right. BEEP.",
+        ],
+        // MarsGuardian normally reaches the player via the gate path; this is
+        // for after he's waved them through.
+        MarsGuardian => &[
+            "Course plotted! Safe travels, little astronaut. Rok approves.",
+            "The cove's all yours now. Mind the red dust!",
+            "Numbers are the best maps. You read them like a pro!",
+        ],
+        StarKeeper => &[
+            "Welcome to the star chart, navigator! Spot the pattern in the stars?",
+            "Every constellation hides a sequence. Can you finish it?",
+            "Cassi has mapped a thousand skies. Today we map one together!",
+        ],
+        StationAlien => &[
+            "Bleep bloop! A visitor! It's been AGES since anyone docked here!",
+            "I keep the station tidy. Floating crumbs are a real problem.",
+            "Did you know space has no up or down? My feet sure don't.",
+        ],
         // Dev-control NPCs go through apply_dev_control, never this path.
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
         | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance
@@ -4120,6 +4223,12 @@ fn secret_entry_dialogue(map_id: &str) -> Vec<DialogueLine> {
                 text: "BLUB BLUB! We're UNDERWATER, boss! And I didn't even rust! Best upgrade EVER!".into() },
             DialogueLine { speaker: "Sparky".into(),
                 text: "Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!".into() },
+        ],
+        "space_hub" => vec![
+            DialogueLine { speaker: "Sparky".into(),
+                text: "3... 2... 1... BLAST OFF! WHEEEE! Boss, we're in SPACE! Actual outer SPACE!".into() },
+            DialogueLine { speaker: "Sparky".into(),
+                text: "Fly the rocket to a glowing pad to visit a planet! Tank the fuel droid is over there if we run low.".into() },
         ],
         _ => vec![],
     }
