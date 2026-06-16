@@ -222,6 +222,9 @@ pub struct ActiveShop {
     pub balance_before: u32,
     pub message: Option<String>,
     pub source_npc: String,
+    /// True while the outfit-color swatches are up (after buying Color
+    /// Change, or re-opened from its catalog row).
+    pub picking_color: bool,
 }
 
 // ─── Sprites/movement ───────────────────────────────────
@@ -315,6 +318,8 @@ pub enum GameEvent {
     DialogueAdvanced,
     ChallengeStarted { question: String },
     ChallengeResolved { correct: bool, response_ms: f64 },
+    /// A gate guardian's puzzle was solved; the passage is now open.
+    GateOpened { gate_id: String },
     GiftGiven { recipient_id: String, total: u32 },
     /// Emitted when the player's follower NPC changes. `joined` is the NPC who
     /// just became the companion (`None` if the slot was cleared); `left` is
@@ -420,13 +425,24 @@ pub struct Game {
     active_shop: Option<ActiveShop>,
     active_manipulative: Option<ActiveManipulative>,
     active_quest: Option<ActiveQuest>,
-    /// Cosmetics bought from Bolt this session (in-memory; not yet persisted).
+    /// Cosmetics bought from Bolt (persisted in the save).
     shop_owned: std::collections::HashSet<String>,
+    /// Outfit color id for the Color Change cosmetic (persisted in the save).
+    color_choice: String,
     /// Opt-in in-development feature toggles (default all off).
     pub features: FeatureFlags,
     /// Tiles walked since the last random encounter (for encounter pacing).
     steps_since_encounter: u32,
     pending_challenge: bool,
+    /// Gate id whose challenge is currently on screen (set when the kid takes
+    /// on a gate guardian; cleared when that challenge resolves).
+    opening_gate: Option<String>,
+    /// Gate ids the kid has already solved. Persisted so a guardian stays
+    /// stepped-aside across sessions. Reusable for any map's gates.
+    satisfied_gates: std::collections::HashSet<String>,
+    /// Destination map ids whose one-time entry toll has been paid. After the
+    /// first paid trip, that portal is free forever. Persisted. Reusable.
+    paid_tolls: std::collections::HashSet<String>,
     new_game_form: Option<NewGameForm>,
 
     // Save / persistence
@@ -510,9 +526,13 @@ impl Game {
             active_manipulative: None,
             active_quest: None,
             shop_owned: std::collections::HashSet::new(),
+            color_choice: sprites::player::OUTFIT_COLORS[0].0.to_string(),
             features: FeatureFlags::default(),
             steps_since_encounter: 0,
             pending_challenge: false,
+            opening_gate: None,
+            satisfied_gates: std::collections::HashSet::new(),
+            paid_tolls: std::collections::HashSet::new(),
             new_game_form: None,
             player_name: String::new(),
             player_gender: Gender::Boy,
@@ -599,6 +619,12 @@ impl Game {
     /// Tests use this with `ui::patterns::layout` to compute click targets.
     pub fn active_pattern(&self) -> Option<&ActivePattern> {
         self.active_pattern.as_ref()
+    }
+
+    /// True once the kid has solved the gate guardian with this id. Lets tests
+    /// (and any future UI) check a gate's open state without exposing the set.
+    pub fn gate_is_solved(&self, gate_id: &str) -> bool {
+        self.satisfied_gates.contains(gate_id)
     }
 
     /// Read-only view of the active balance session (None if none is on screen).
@@ -1419,8 +1445,8 @@ impl Game {
             } else if let Some(target) = npc::get_interact_target_with_companion(
                 self.player.tile_x, self.player.tile_y, self.player.dir,
                 &self.npcs, self.companion.as_ref(),
-            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n)) {
-                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, target_ref) = target;
+            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n.gate, n.gate_id, n)) {
+                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, is_gate, gate_id, target_ref) = target;
                 let target_id = target_kind.as_str().to_string();
                 let target_name = target_kind.display_name().to_string();
 
@@ -1429,6 +1455,23 @@ impl Game {
                 // reset a flag, or fire a fresh puzzle.
                 if target_kind.is_dev_control() {
                     self.apply_dev_control(target_kind);
+                    return;
+                }
+
+                // A closed gate guardian short-circuits too: it always poses a
+                // puzzle (no menu, no random roll). Solve it and it steps aside.
+                // Reuses the chest's pending_challenge path; `opening_gate`
+                // remembers which gate to open when the puzzle resolves.
+                if is_gate {
+                    self.menu_target_id = target_id;
+                    self.menu_target_name = target_name.clone();
+                    self.opening_gate = gate_id.map(|s| s.to_string());
+                    self.start_dialogue(vec![DialogueLine {
+                        speaker: target_name,
+                        text: "*yaaawn* Oh, hello! I'm napping right across the path. Solve a little number puzzle for me and I'll scooch aside, deal?".into(),
+                    }]);
+                    self.pending_challenge = true;
+                    self.set_state(GameState::Dialogue);
                     return;
                 }
 
@@ -1525,7 +1568,12 @@ impl Game {
             // them shoves them aside. Stationary "rooted" NPCs (Mommy, Sage,
             // shopkeeper, dev knobs) stay solid; pushing them around would feel
             // off-character.
-            let solidity = if n.wanders {
+            let solidity = if n.gate {
+                // A closed gate guardian fully blocks the chokepoint.
+                Solidity::Solid
+            } else if n.wanders || n.gate_id.is_some() {
+                // Loose wanderers — and guardians who've already stepped aside —
+                // yield when leaned on.
                 Solidity::PushableAfter(0.18)
             } else {
                 Solidity::Solid
@@ -1660,6 +1708,21 @@ impl Game {
                 self.events.push(GameEvent::ChallengeResolved {
                     correct: was_correct, response_ms,
                 });
+
+                // Was this a gate guardian's puzzle? On success the gate opens
+                // for good (persisted); on a miss it stays closed and the kid
+                // can simply try again — no progress lost.
+                if let Some(gid) = self.opening_gate.take() {
+                    if was_correct {
+                        self.satisfied_gates.insert(gid.clone());
+                        if let Some(n) = self.npcs.iter_mut()
+                            .find(|n| n.gate_id.map_or(false, |s| s == gid))
+                        {
+                            n.gate = false;
+                        }
+                        self.events.push(GameEvent::GateOpened { gate_id: gid });
+                    }
+                }
             }
             self.set_state(GameState::Playing);
 
@@ -2336,7 +2399,7 @@ impl Game {
 
     fn step_shop(&mut self, input: &FrameInput, screen: (f32, f32)) {
         let Some(ash) = self.active_shop.as_ref() else { return };
-        let view = shop_view(ash);
+        let view = shop_view(ash, &self.color_choice);
         let layout = ui::shop::layout(&ash.catalog, &view, screen);
 
         let intent = if input.mouse_clicked {
@@ -2349,6 +2412,14 @@ impl Game {
 
         match intent {
             ui::shop::ShopInput::Close => {
+                // "Done" dismisses the nearest thing: the color picker if it's
+                // up, otherwise the whole shop.
+                let ash = self.active_shop.as_mut().unwrap();
+                if ash.picking_color {
+                    ash.picking_color = false;
+                    ash.message = None;
+                    return;
+                }
                 if let Some(ash) = self.active_shop.take() {
                     self.shop_owned = ash.owned;
                 }
@@ -2356,10 +2427,17 @@ impl Game {
             }
             ui::shop::ShopInput::SelectItem(i) => {
                 let ash = self.active_shop.as_mut().unwrap();
-                if ash.selected.is_some() {
-                    return; // already solving a purchase
+                if ash.selected.is_some() || ash.picking_color {
+                    return; // already solving a purchase or picking a color
                 }
                 let item = ash.catalog[i].clone();
+                // An owned Color Change re-opens the picker — buying it once
+                // means you get to change colors whenever you like.
+                if item.id == "color_change" && ash.owned.contains(&item.id) {
+                    ash.picking_color = true;
+                    ash.message = None;
+                    return;
+                }
                 match shop::process_purchase(self.dum_dums, &item.id, &ash.owned) {
                     shop::PurchaseOutcome::Bought { result } => {
                         ash.selected = Some(i);
@@ -2390,7 +2468,14 @@ impl Game {
                         ash.owned.insert(item.id.clone());
                         ash.selected = None;
                         ash.choices.clear();
-                        ash.message = Some(format!("Sparky LOVES the {}!", item.name));
+                        if item.id == "color_change" {
+                            // The fun part of Color Change is choosing — go
+                            // straight to the swatches.
+                            ash.picking_color = true;
+                            ash.message = Some("You got it! Pick your color!".into());
+                        } else {
+                            ash.message = Some(format!("Sparky LOVES the {}!", item.name));
+                        }
                         Some((item.id, ash.cost, ash.answer))
                     } else {
                         // Natural consequence, not punishment — recount and retry.
@@ -2411,6 +2496,18 @@ impl Game {
                         let save_data = self.gather_save_data();
                         self.save_backend.save_to(self.active_slot, &save_data);
                     }
+                }
+            }
+            ui::shop::ShopInput::PickColor(i) => {
+                let Some((id, _)) = sprites::player::OUTFIT_COLORS.get(i) else { return };
+                self.color_choice = id.to_string();
+                let ash = self.active_shop.as_mut().unwrap();
+                ash.message = Some("Looking good!".into());
+                // Persist right away, same as a purchase — the new outfit
+                // should survive a reload even if the kid quits now.
+                if self.map.id != "dev" {
+                    let save_data = self.gather_save_data();
+                    self.save_backend.save_to(self.active_slot, &save_data);
                 }
             }
         }
@@ -2497,6 +2594,7 @@ impl Game {
                         balance_before: 0,
                         message: None,
                         source_npc: source,
+                        picking_color: false,
                     });
                     self.set_state(GameState::Shop);
                 }
@@ -2665,6 +2763,15 @@ impl Game {
         if let Some(c) = self.companion.as_ref() {
             let companion_kind = c.kind;
             roster.retain(|n| n.kind != companion_kind);
+        }
+        // A gate the kid already solved stays open: clear the guardian's `gate`
+        // flag so it's pushable and won't re-pose its puzzle.
+        for n in roster.iter_mut() {
+            if let Some(id) = n.gate_id {
+                if self.satisfied_gates.contains(id) {
+                    n.gate = false;
+                }
+            }
         }
         roster
     }
@@ -2969,7 +3076,35 @@ impl Game {
         let mut dest_map = portal.to_map;
         let dest_x = portal.to_x;
         let dest_y = portal.to_y;
+        let cost = portal.cost;
         let from_map = self.map.id.to_string();
+
+        // One-time toll gate (reusable): a priced portal charges once per
+        // destination, then it's unlocked for good. Falling short is never a
+        // punishment — Sparky just cheers them on to go collect more, and no
+        // transfer happens (they stay put). Keyed by destination map id.
+        let toll_id = dest_map.to_string();
+        let toll_due = cost > 0 && !self.paid_tolls.contains(&toll_id);
+        if toll_due && self.dum_dums < cost {
+            let need = cost - self.dum_dums;
+            self.start_dialogue(vec![DialogueLine {
+                speaker: "Sparky".into(),
+                text: format!(
+                    "Ooh, a dive spot! The first splash in costs {cost} Dum Dums. We need {need} more — let's go find some, boss!"
+                ),
+            }]);
+            self.set_state(GameState::Dialogue);
+            return;
+        }
+        if toll_due {
+            self.dum_dums -= cost;
+            self.paid_tolls.insert(toll_id);
+            self.dum_dum_hud.flash();
+            self.events.push(GameEvent::DumDumsSpent {
+                amount: cost,
+                item: format!("dive:{dest_map}"),
+            });
+        }
 
         if dest_map == "dream" {
             self.dreaming = true;
@@ -3105,7 +3240,7 @@ impl Game {
                             Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
                         }
                         // Cosmetics bought from Bolt's shop ride on the kid.
-                        sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.frame, &self.shop_owned);
+                        sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.frame, &self.shop_owned, &self.color_choice);
                     }
                     SpriteKind::Sparky => {
                         sprites::robot::draw_robot(self.sparky.entity.x, self.sparky.entity.y, self.sparky.entity.dir, self.sparky.entity.frame, self.game_time);
@@ -3206,7 +3341,7 @@ impl Game {
 
         // Shop overlay
         if let Some(ref ash) = self.active_shop {
-            let view = shop_view(ash);
+            let view = shop_view(ash, &self.color_choice);
             let layout = ui::shop::layout(&ash.catalog, &view, screen);
             ui::shop::draw_shop(&ash.catalog, &ash.owned, self.dum_dums, &view, &layout, ash.message.as_deref());
         }
@@ -3258,6 +3393,9 @@ impl Game {
                 tile_y: c.entity.tile_y,
             }),
             shop_owned: self.shop_owned.iter().cloned().collect(),
+            color_choice: self.color_choice.clone(),
+            satisfied_gates: self.satisfied_gates.iter().cloned().collect(),
+            paid_tolls: self.paid_tolls.iter().cloned().collect(),
         }
     }
 
@@ -3269,6 +3407,9 @@ impl Game {
         self.play_time = save_data.play_time;
         self.gifts_given = save_data.gifts_given.clone();
         self.shop_owned = save_data.shop_owned.iter().cloned().collect();
+        self.color_choice = save_data.color_choice.clone();
+        self.satisfied_gates = save_data.satisfied_gates.iter().cloned().collect();
+        self.paid_tolls = save_data.paid_tolls.iter().cloned().collect();
 
         self.map = Map::by_id(&save_data.map_id);
         self.npcs_offstage.clear();
@@ -3384,9 +3525,17 @@ fn quest_answer_choices(answer: i32, rng: &mut SmallRng) -> Vec<i32> {
     out
 }
 
-/// Build the shop's current view (Browsing vs. solving a purchase subtraction)
-/// from the active session. Borrows the session so the layout/draw can read it.
-fn shop_view(ash: &ActiveShop) -> ui::shop::ShopView<'_> {
+/// Build the shop's current view (browsing, solving a purchase subtraction,
+/// or picking an outfit color) from the active session. Borrows the session
+/// so the layout/draw can read it.
+fn shop_view<'a>(ash: &'a ActiveShop, color_choice: &str) -> ui::shop::ShopView<'a> {
+    if ash.picking_color {
+        let current = sprites::player::OUTFIT_COLORS
+            .iter()
+            .position(|(id, _)| *id == color_choice)
+            .unwrap_or(0);
+        return ui::shop::ShopView::PickingColor { colors: sprites::player::OUTFIT_COLORS, current };
+    }
     match ash.selected {
         Some(i) => ui::shop::ShopView::Buying {
             item: &ash.catalog[i],
@@ -3784,6 +3933,33 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
             "I like to wander in circles. It's very fun!",
             "Got any snacks? I'm always a bit hungry, hehe!",
         ],
+        // ReefShark normally reaches the player through the gate-challenge path,
+        // not here — but if you chat after he's stepped aside, he's a sweetie.
+        ReefShark => &[
+            "Thanks for the puzzle, pal! Naps are better after a good brain stretch.",
+            "Toothy grin, gentle heart. That's me!",
+            "Swim on through, the cove's all yours!",
+        ],
+        SeaTurtle => &[
+            "Greetings, little diver. I've ridden these currents a hundred years.",
+            "Slow and steady finds the most pearls, you know.",
+            "The coral grows a tiny bit every day. Just like you!",
+        ],
+        Dolphin => &[
+            "Eee-eee! Wanna race? I'll give you a head start! ...okay maybe two!",
+            "Did you see my flip? I've been practicing!",
+            "Bubbles are the BEST. Watch — bloop bloop bloop!",
+        ],
+        Crab => &[
+            "Snip snap! Mind the claws, I'm just saying hi!",
+            "Sideways is the only way to walk, obviously.",
+            "I keep the sand tidy around here. Very important job.",
+        ],
+        Jelly => &[
+            "...blub... (the jellyfish wobbles a friendly hello)",
+            "Drifting is a perfectly good plan, thank you very much.",
+            "Don't worry, I'm the no-sting kind!",
+        ],
         // Dev-control NPCs go through apply_dev_control, never this path.
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
         | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance
@@ -3934,6 +4110,12 @@ fn secret_entry_dialogue(map_id: &str) -> Vec<DialogueLine> {
             DialogueLine { speaker: "Sparky".into(),
                 text: "This place is SO pretty! And SO secret! The trees are whispering!".into() },
         ],
+        "reef" => vec![
+            DialogueLine { speaker: "Sparky".into(),
+                text: "BLUB BLUB! We're UNDERWATER, boss! And I didn't even rust! Best upgrade EVER!".into() },
+            DialogueLine { speaker: "Sparky".into(),
+                text: "Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!".into() },
+        ],
         _ => vec![],
     }
 }
@@ -4064,5 +4246,106 @@ mod tests {
         g2.load_from_save(&data);
         assert!(g2.shop_owned.contains("hat"), "hat should persist");
         assert!(g2.shop_owned.contains("bow_tie"), "bow tie should persist");
+    }
+
+    // ── Color Change comes with a color picker ──
+
+    const SCREEN: (f32, f32) = (960.0, 720.0);
+
+    /// Open Bolt's shop directly (skipping the walk-and-talk).
+    fn open_shop(g: &mut Game) {
+        g.active_shop = Some(ActiveShop {
+            catalog: shop::shop_catalog(),
+            owned: g.shop_owned.clone(),
+            selected: None,
+            choices: Vec::new(),
+            answer: 0,
+            cost: 0,
+            balance_before: 0,
+            message: None,
+            source_npc: "shopkeeper".into(),
+            picking_color: false,
+        });
+        g.set_state(GameState::Shop);
+    }
+
+    /// Click whatever shop element sits at the center of `rect`.
+    fn click_shop(g: &mut Game, rect: ui::shop::UiRect) {
+        let click = crate::input::FrameInput::empty()
+            .with_mouse_click(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+        g.step(&click, 1.0 / 60.0, SCREEN);
+    }
+
+    fn shop_layout(g: &Game) -> ui::shop::ShopLayout {
+        let ash = g.active_shop.as_ref().expect("shop should be open");
+        ui::shop::layout(&ash.catalog, &shop_view(ash, &g.color_choice), SCREEN)
+    }
+
+    #[test]
+    fn buying_color_change_opens_the_picker_and_picking_sticks() {
+        let mut g = game();
+        g.dum_dums = 20;
+        open_shop(&mut g);
+
+        // Tap the Color Change row, then answer the purchase subtraction.
+        let row = shop_layout(&g).items.iter()
+            .find(|r| g.active_shop.as_ref().unwrap().catalog[r.index].id == "color_change")
+            .expect("color_change in catalog").rect;
+        click_shop(&mut g, row);
+        let answer = g.active_shop.as_ref().unwrap().answer;
+        let tile = shop_layout(&g).answers.iter()
+            .find(|t| t.value == answer).expect("correct answer tile").rect;
+        click_shop(&mut g, tile);
+
+        let ash = g.active_shop.as_ref().unwrap();
+        assert!(ash.owned.contains("color_change"));
+        assert!(ash.picking_color, "buying Color Change should open the picker");
+
+        // Pick the second swatch; the kid's outfit color should change.
+        let swatch = shop_layout(&g).swatches[1].rect;
+        click_shop(&mut g, swatch);
+        assert_eq!(g.color_choice, sprites::player::OUTFIT_COLORS[1].0);
+
+        // Done dismisses the picker but keeps the shop open.
+        let close = shop_layout(&g).close_btn;
+        click_shop(&mut g, close);
+        let ash = g.active_shop.as_ref().unwrap();
+        assert!(!ash.picking_color, "Done should close the picker first");
+        assert!(g.active_shop.is_some(), "the shop itself should stay open");
+    }
+
+    #[test]
+    fn owned_color_change_row_reopens_the_picker() {
+        let mut g = game();
+        g.shop_owned.insert("color_change".to_string());
+        open_shop(&mut g);
+        let row = shop_layout(&g).items.iter()
+            .find(|r| g.active_shop.as_ref().unwrap().catalog[r.index].id == "color_change")
+            .unwrap().rect;
+        click_shop(&mut g, row);
+        assert!(
+            g.active_shop.as_ref().unwrap().picking_color,
+            "tapping an owned Color Change should reopen the picker, not refuse the sale"
+        );
+    }
+
+    #[test]
+    fn color_choice_persists_through_save_load() {
+        let mut g = game();
+        g.color_choice = "teal".to_string();
+        let data = g.gather_save_data();
+
+        let mut g2 = game();
+        g2.load_from_save(&data);
+        assert_eq!(g2.color_choice, "teal");
+    }
+
+    #[test]
+    fn saves_from_before_the_picker_default_to_the_original_tint() {
+        let g = game();
+        let mut json = serde_json::to_value(g.gather_save_data()).unwrap();
+        json.as_object_mut().unwrap().remove("color_choice");
+        let data: crate::save::SaveData = serde_json::from_value(json).unwrap();
+        assert_eq!(data.color_choice, sprites::player::OUTFIT_COLORS[0].0);
     }
 }

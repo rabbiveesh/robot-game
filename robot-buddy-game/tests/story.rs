@@ -1654,3 +1654,124 @@ fn pushing_an_npc_through_a_new_maps_portal_transfers_them() {
         "Pip should now live in the dev roster; got {:?}",
         dev.iter().map(|n| n.kind).collect::<Vec<_>>());
 }
+
+// ─── Coral reef: paid dive portal + gate-guardian shark ──────────────────
+
+/// Helpers shared by the reef tests: park Sparky out of the way and snap the
+/// player to a tile without animating there.
+fn park_sparky(h: &mut Harness) {
+    h.game.sparky.entity.tile_x = 1;
+    h.game.sparky.entity.tile_y = 1;
+    h.game.sparky.entity.x = 48.0;
+    h.game.sparky.entity.y = 48.0;
+    h.game.sparky.entity.target_x = 48.0;
+    h.game.sparky.entity.target_y = 48.0;
+    h.game.sparky.entity.moving = false;
+}
+
+fn snap_player(h: &mut Harness, tx: usize, ty: usize) {
+    h.game.player.tile_x = tx;
+    h.game.player.tile_y = ty;
+    h.game.player.x = tx as f32 * 48.0;
+    h.game.player.y = ty as f32 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+}
+
+#[test]
+fn diving_into_the_reef_costs_dum_dums() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(11);
+    h.start_dev_game(); // 20 dum dums
+    // Warp to the overworld grass just below the reef dive spot (17,15).
+    h.game.map = Map::overworld();
+    h.game.npcs = npc_mod::npcs_for_map("overworld");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+    snap_player(&mut h, 17, 16);
+
+    // Too poor to dive: Sparky gently turns us back, no transfer.
+    h.game.dum_dums = 1;
+    let mark = h.mark();
+    h.hold(KeyCode::Up);     // step onto the dive tile
+    h.advance(24);           // finish the step + portal check
+    assert_eq!(h.game.map.id, "overworld", "can't dive without paying the toll");
+    h.finish_dialogue();     // dismiss Sparky's "we need more Dum Dums"
+
+    // Now we can afford it — first dive charges the toll.
+    snap_player(&mut h, 17, 16);
+    h.game.dum_dums = 10;
+    h.step_through_portal(KeyCode::Up, "reef");
+    assert_eq!(h.game.map.id, "reef", "paying the toll opens the dive");
+    assert_eq!(h.game.dum_dums, 7, "the first dive spends the 3-Dum-Dum toll");
+    assert!(
+        h.events_since(mark).iter().any(|e| matches!(e, GameEvent::DumDumsSpent { .. })),
+        "a paid dive emits DumDumsSpent; got {:?}", h.events_since(mark),
+    );
+    h.finish_dialogue(); // dismiss the "we're underwater!" entry beat
+
+    // The toll is ONE-TIME: warp back to the dive spot and dive again — free now.
+    h.game.map = Map::overworld();
+    h.game.npcs = npc_mod::npcs_for_map("overworld");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+    snap_player(&mut h, 17, 16);
+    let before_second = h.game.dum_dums; // 7
+    h.step_through_portal(KeyCode::Up, "reef");
+    assert_eq!(h.game.map.id, "reef", "the unlocked dive still works");
+    assert_eq!(h.game.dum_dums, before_second, "a second dive is free (one-time toll)");
+}
+
+#[test]
+fn solving_the_reef_shark_opens_the_passage() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(5);
+    h.start_dev_game();
+    // Warp straight into the reef's lower lagoon.
+    h.game.map = Map::reef();
+    h.game.npcs = npc_mod::npcs_for_map("reef");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+    // Freeze ambient critters so they don't wander into the path mid-walk.
+    for n in h.game.npcs.iter_mut() { n.wander_cooldown = 9999.0; }
+    snap_player(&mut h, 8, 9);
+
+    // Chompy starts as a closed gate plugging the only gap in the coral wall.
+    assert!(
+        h.game.npcs.iter().any(|n| n.kind == NpcKind::ReefShark && n.gate),
+        "the shark starts as a closed gate",
+    );
+
+    // Approach the shark from below (the gap's only reachable side) and face up.
+    h.walk_to(8, 6);
+    h.hold(KeyCode::Up);
+    let mark = h.mark();
+    h.interact();                                   // gate dialogue + pending challenge
+    h.finish_dialogue();                            // dialogue → challenge
+    h.wait_until(|g| g.state == GameState::Challenge);
+    h.answer_correctly();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    assert!(
+        h.events_since(mark).iter().any(|e| matches!(e, GameEvent::GateOpened { .. })),
+        "solving the shark emits GateOpened; got {:?}", h.events_since(mark),
+    );
+    assert!(
+        h.game.npcs.iter().any(|n| n.kind == NpcKind::ReefShark && !n.gate),
+        "the shark steps aside once its puzzle is solved",
+    );
+    assert!(
+        h.game.gate_is_solved("reef_gate_1"),
+        "the solved gate is recorded so it stays open across sessions",
+    );
+}

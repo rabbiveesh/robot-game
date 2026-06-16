@@ -36,10 +36,16 @@ pub struct AnswerTile {
     pub value: u32,
 }
 
+pub struct SwatchTile {
+    pub rect: UiRect,
+    pub index: usize,
+}
+
 pub struct ShopLayout {
     pub panel: UiRect,
     pub items: Vec<ItemRow>,
     pub answers: Vec<AnswerTile>,
+    pub swatches: Vec<SwatchTile>,
     pub close_btn: UiRect,
 }
 
@@ -50,6 +56,9 @@ pub enum ShopView<'a> {
     /// Solving the purchase subtraction for `item` (you have `balance`, it costs
     /// `cost`); tap the remainder from `choices`.
     Buying { item: &'a ShopItem, balance: u32, cost: u32, choices: &'a [u32] },
+    /// Picking an outfit color for the Color Change cosmetic; `current` is the
+    /// index of the color worn right now.
+    PickingColor { colors: &'a [(&'static str, Color)], current: usize },
 }
 
 pub fn layout(catalog: &[ShopItem], view: &ShopView, screen: (f32, f32)) -> ShopLayout {
@@ -61,6 +70,7 @@ pub fn layout(catalog: &[ShopItem], view: &ShopView, screen: (f32, f32)) -> Shop
 
     let mut items = Vec::new();
     let mut answers = Vec::new();
+    let mut swatches = Vec::new();
 
     match view {
         ShopView::Browsing => {
@@ -90,17 +100,40 @@ pub fn layout(catalog: &[ShopItem], view: &ShopView, screen: (f32, f32)) -> Shop
                 });
             }
         }
+        ShopView::PickingColor { colors, .. } => {
+            // Big tappable swatches in rows of four.
+            let tile = 90.0;
+            let gap = 18.0;
+            let per_row = 4;
+            let total = tile * per_row as f32 + gap * (per_row as f32 - 1.0);
+            let start_x = panel_x + (panel_w - total) / 2.0;
+            let start_y = panel_y + 150.0;
+            for i in 0..colors.len() {
+                let col = (i % per_row) as f32;
+                let row = (i / per_row) as f32;
+                swatches.push(SwatchTile {
+                    rect: UiRect {
+                        x: start_x + col * (tile + gap),
+                        y: start_y + row * (tile + gap),
+                        w: tile,
+                        h: tile,
+                    },
+                    index: i,
+                });
+            }
+        }
     }
 
     let close_btn = UiRect { x: panel_x + panel_w - 116.0, y: panel_y + panel_h - 52.0, w: 100.0, h: 38.0 };
 
-    ShopLayout { panel: UiRect { x: panel_x, y: panel_y, w: panel_w, h: panel_h }, items, answers, close_btn }
+    ShopLayout { panel: UiRect { x: panel_x, y: panel_y, w: panel_w, h: panel_h }, items, answers, swatches, close_btn }
 }
 
 /// An input outcome the game acts on.
 pub enum ShopInput {
     SelectItem(usize),
     Answer(u32),
+    PickColor(usize),
     Close,
 }
 
@@ -118,6 +151,11 @@ pub fn handle_click(mx: f32, my: f32, layout: &ShopLayout) -> Option<ShopInput> 
             return Some(ShopInput::Answer(tile.value));
         }
     }
+    for swatch in &layout.swatches {
+        if swatch.rect.contains(mx, my) {
+            return Some(ShopInput::PickColor(swatch.index));
+        }
+    }
     None
 }
 
@@ -125,11 +163,20 @@ pub fn handle_key(input: &FrameInput, layout: &ShopLayout) -> Option<ShopInput> 
     if input.pressed(KeyCode::Escape) {
         return Some(ShopInput::Close);
     }
-    // Number keys pick an answer tile while buying.
-    let keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4];
+    // Number keys pick an answer tile while buying, or a swatch while
+    // choosing an outfit color (the two are never on screen together).
+    let keys = [
+        KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4,
+        KeyCode::Key5, KeyCode::Key6, KeyCode::Key7, KeyCode::Key8,
+    ];
     for (i, key) in keys.iter().take(layout.answers.len()).enumerate() {
         if input.pressed(*key) {
             return Some(ShopInput::Answer(layout.answers[i].value));
+        }
+    }
+    for (i, key) in keys.iter().take(layout.swatches.len()).enumerate() {
+        if input.pressed(*key) {
+            return Some(ShopInput::PickColor(layout.swatches[i].index));
         }
     }
     None
@@ -200,6 +247,20 @@ pub fn draw_shop(
                 let size = 36u16;
                 let sw2 = measure_text(&s, None, size, 1.0).width;
                 draw_text(&s, t.x + t.w / 2.0 - sw2 / 2.0, t.y + t.h / 2.0 + 12.0, size as f32, WHITE);
+            }
+        }
+        ShopView::PickingColor { colors, current } => {
+            draw_text("Which color do you want to wear?", p.x + 32.0, p.y + 120.0, 24.0, WHITE);
+            for tile in &layout.swatches {
+                let t = tile.rect;
+                let (_, color) = colors[tile.index];
+                draw_rectangle(t.x, t.y, t.w, t.h, color);
+                if tile.index == *current {
+                    // The color being worn right now gets a thick gold frame.
+                    draw_rectangle_lines(t.x - 3.0, t.y - 3.0, t.w + 6.0, t.h + 6.0, 6.0, GOLD);
+                } else {
+                    draw_rectangle_lines(t.x, t.y, t.w, t.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.4));
+                }
             }
         }
     }

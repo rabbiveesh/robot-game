@@ -17,6 +17,12 @@ pub enum NpcKind {
     GlitchDog,
     GroveSpirit,
     Pip,
+    // Reef creatures
+    ReefShark,
+    SeaTurtle,
+    Dolphin,
+    Crab,
+    Jelly,
     CtrlBand,
     CtrlKenkenLevel,
     CtrlCraReset,
@@ -49,6 +55,11 @@ impl NpcKind {
             NpcKind::GlitchDog => "glitch_dog",
             NpcKind::GroveSpirit => "grove_spirit",
             NpcKind::Pip => "pip",
+            NpcKind::ReefShark => "reef_shark",
+            NpcKind::SeaTurtle => "sea_turtle",
+            NpcKind::Dolphin => "dolphin",
+            NpcKind::Crab => "crab",
+            NpcKind::Jelly => "jelly",
             NpcKind::CtrlBand => "ctrl_band",
             NpcKind::CtrlKenkenLevel => "ctrl_kenken_level",
             NpcKind::CtrlCraReset => "ctrl_cra_reset",
@@ -78,6 +89,11 @@ impl NpcKind {
             NpcKind::GlitchDog => "B0RK.exe",
             NpcKind::GroveSpirit => "Old Oak",
             NpcKind::Pip => "Pip",
+            NpcKind::ReefShark => "Chompy",
+            NpcKind::SeaTurtle => "Shelldon",
+            NpcKind::Dolphin => "Echo",
+            NpcKind::Crab => "Pinchy",
+            NpcKind::Jelly => "Wobble",
             NpcKind::CtrlBand => "Band Knob",
             NpcKind::CtrlKenkenLevel => "KenKen Knob",
             NpcKind::CtrlCraReset => "CRA Reset",
@@ -102,7 +118,9 @@ impl NpcKind {
     pub const ALL: &'static [NpcKind] = &[
         NpcKind::Sage, NpcKind::SageLab, NpcKind::DreamSage, NpcKind::Mommy,
         NpcKind::Kid1, NpcKind::Kid2, NpcKind::Shopkeeper, NpcKind::GlitchDog,
-        NpcKind::GroveSpirit, NpcKind::Pip, NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
+        NpcKind::GroveSpirit, NpcKind::Pip,
+        NpcKind::ReefShark, NpcKind::SeaTurtle, NpcKind::Dolphin, NpcKind::Crab, NpcKind::Jelly,
+        NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
         NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerBalance, NpcKind::CtrlTriggerSudoku,
         NpcKind::CtrlTriggerChallenge, NpcKind::CtrlToggleEncounters, NpcKind::CtrlTriggerEncounter,
@@ -138,6 +156,11 @@ pub enum SpriteType {
     Kid1,
     Kid2,
     OldOak,
+    Shark,
+    SeaTurtle,
+    Dolphin,
+    Crab,
+    Jellyfish,
 }
 
 /// Manhattan radius an NPC may wander away from its home tile. Keeps wanderers
@@ -214,6 +237,13 @@ pub struct Npc {
     /// `Some` while this NPC is the player's companion follower. Wander and
     /// stationary behaviors yield to the path queue when this is set.
     pub pathing: Option<Pathing>,
+    /// True while this NPC is a *closed* gate blocking a passage. Interacting
+    /// forces a challenge; solving it clears `gate` (the guardian steps aside
+    /// and becomes pushable). A reusable hazard any map can drop in a chokepoint.
+    pub gate: bool,
+    /// Stable id for a gate guardian, used to persist "this gate is solved"
+    /// across saves. `Some` only for gate NPCs.
+    pub gate_id: Option<&'static str>,
 }
 
 impl Npc {
@@ -314,6 +344,14 @@ impl Npc {
         self
     }
 
+    /// Builder: mark this NPC as a closed gate guardian with a stable id.
+    /// Blocks its tile until the player solves its puzzle.
+    pub fn gating(mut self, id: &'static str) -> Self {
+        self.gate = true;
+        self.gate_id = Some(id);
+        self
+    }
+
     pub fn draw(&self, time: f32) {
         let x = self.entity.x;
         let y = self.entity.y;
@@ -331,6 +369,13 @@ impl Npc {
                 Color::from_rgba(102, 187, 106, 255),  // green shirt
                 false, time),
             SpriteType::OldOak => sprites::npcs::draw_old_oak(x, y, time),
+            // A gate shark naps (eyes shut) until its puzzle is solved; once
+            // satisfied (`gate` cleared) it wakes up and grins.
+            SpriteType::Shark => sprites::npcs::draw_shark(x, y, time, self.gate),
+            SpriteType::SeaTurtle => sprites::npcs::draw_sea_turtle(x, y, time),
+            SpriteType::Dolphin => sprites::npcs::draw_dolphin(x, y, time),
+            SpriteType::Crab => sprites::npcs::draw_crab(x, y, time),
+            SpriteType::Jellyfish => sprites::npcs::draw_jellyfish(x, y, time),
         }
     }
 }
@@ -354,6 +399,8 @@ fn npc(home_map: &'static str, kind: NpcKind, tx: usize, ty: usize, sprite: Spri
         home_ty: ty,
         wander_cooldown: 0.0,
         pathing: None,
+        gate: false,
+        gate_id: None,
     }
 }
 
@@ -392,6 +439,19 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
         // freshly added map with no special-casing.
         "annex" => vec![
             n(Pip, 4, 3, S::Kid2, true, true, false).wandering(),
+        ],
+        // Coral reef. Chompy the shark naps in the one gap of the coral wall —
+        // a gate guardian; solve his puzzle and he drifts aside. The rest are
+        // friendly ambient sea folk in the lower lagoon and treasure cove.
+        // Every reef critter is a potential buddy — gift any of them a Dum Dum
+        // to recruit them. Chompy only opens up (literally) once his gate puzzle
+        // is solved; after that he's giftable like the rest.
+        "reef" => vec![
+            n(ReefShark, 8, 5, S::Shark,     true, true,  false).gating("reef_gate_1"),
+            n(SeaTurtle, 4, 7, S::SeaTurtle, true, false, false).wandering(),
+            n(Dolphin,  11, 8, S::Dolphin,   true, false, false).wandering(),
+            n(Crab,      3, 9, S::Crab,      true, true,  false).wandering(),
+            n(Jelly,     5, 2, S::Jellyfish, true, true,  false).wandering(),
         ],
         "control" => vec![
             // Dev knob bay -- each NPC is one control. game.rs intercepts dev-control

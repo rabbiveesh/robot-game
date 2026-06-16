@@ -121,14 +121,38 @@ pub fn draw_player_boy(x: f32, y: f32, dir: Dir, frame: u32, _time: f32) {
     }
 }
 
+/// Outfit tints the kid can pick from after buying Color Change in Bolt's
+/// shop. Ids are persisted in saves — don't rename them. First entry is the
+/// default for saves that predate the picker.
+pub const OUTFIT_COLORS: &[(&str, Color)] = &[
+    ("purple", Color::new(0.55, 0.35, 0.95, 1.0)),
+    ("red", Color::new(0.95, 0.25, 0.25, 1.0)),
+    ("blue", Color::new(0.25, 0.45, 0.95, 1.0)),
+    ("green", Color::new(0.20, 0.80, 0.35, 1.0)),
+    ("orange", Color::new(1.00, 0.55, 0.10, 1.0)),
+    ("pink", Color::new(1.00, 0.40, 0.75, 1.0)),
+    ("teal", Color::new(0.10, 0.80, 0.80, 1.0)),
+    ("gold", Color::new(1.00, 0.80, 0.20, 1.0)),
+];
+
+pub fn outfit_color(id: &str) -> Color {
+    OUTFIT_COLORS
+        .iter()
+        .find(|(i, _)| *i == id)
+        .map(|(_, c)| *c)
+        .unwrap_or(OUTFIT_COLORS[0].1)
+}
+
 /// Draw cosmetics the kid has bought (from Bolt's shop) over the player avatar,
-/// for either gender. `owned` holds shop item ids. Aligns to the same center /
+/// for either gender. `owned` holds shop item ids; `color_choice` is the
+/// outfit color id picked for Color Change. Aligns to the same center /
 /// bob as the player sprites, so call it right after drawing the player.
 pub fn draw_player_cosmetics(
     x: f32,
     y: f32,
     frame: u32,
     owned: &std::collections::HashSet<String>,
+    color_choice: &str,
 ) {
     if owned.is_empty() {
         return;
@@ -140,7 +164,9 @@ pub fn draw_player_cosmetics(
 
     // Color change: a translucent tint over the kid's clothes.
     if owned.contains("color_change") {
-        draw_rectangle(cx - 9.0, cy - 2.0 + bob, 18.0, 14.0, Color::new(0.55, 0.35, 0.95, 0.32));
+        let mut tint = outfit_color(color_choice);
+        tint.a = 0.32;
+        draw_rectangle(cx - 9.0, cy - 2.0 + bob, 18.0, 14.0, tint);
     }
     // Jet boots: flames under the feet.
     if owned.contains("jet_boots") {

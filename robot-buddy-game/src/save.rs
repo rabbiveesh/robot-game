@@ -41,6 +41,22 @@ pub struct SaveData {
     /// Cosmetics bought from Bolt's shop (item ids). Older saves load as empty.
     #[serde(default)]
     pub shop_owned: Vec<String>,
+    /// Outfit color picked for the Color Change cosmetic. Older saves load as
+    /// the default (the tint Color Change shipped with before the picker).
+    #[serde(default = "default_color_choice")]
+    pub color_choice: String,
+    /// Gate ids the kid has solved (e.g. the reef shark). A solved guardian
+    /// stays stepped-aside across sessions. Older saves load as empty.
+    #[serde(default)]
+    pub satisfied_gates: Vec<String>,
+    /// Destination maps whose one-time entry toll is already paid (e.g. the
+    /// reef dive). Older saves load as empty. Reusable for any paid portal.
+    #[serde(default)]
+    pub paid_tolls: Vec<String>,
+}
+
+fn default_color_choice() -> String {
+    crate::sprites::player::OUTFIT_COLORS[0].0.to_string()
 }
 
 #[derive(Clone, Serialize, Deserialize)]

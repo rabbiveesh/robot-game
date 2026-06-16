@@ -71,6 +71,14 @@ fn flavor_pool(area: &str) -> &'static [(&'static str, &'static str, &'static st
             ("flavor", "Sparky", "The fish are swimming in circles. I'm getting dizzy!"),
             ("sighting", "Sparky", "That butterfly has 4 spots on each wing! How many spots in all?"),
         ],
+        "reef" => &[
+            ("flavor", "Sparky", "BLUB BLUB! Boss, I'm WATERPROOF! Best day EVER!"),
+            ("sighting", "Sparky", "A school of 6 little fish! It split into 2 equal groups — how many in each?"),
+            ("flavor", "Sparky", "That shark just SMILED at me! I think we're friends now!"),
+            ("sighting", "Sparky", "Three crabs, then 4 more skittered out of the coral! How many crabs?"),
+            ("dum_dum", "Sparky", "Ooh! A Dum Dum, sealed in a shiny bubble! Pop pop pop!"),
+            ("flavor", "Sparky", "A jellyfish drifted by. It wiggled hello! ...I think."),
+        ],
         "lab" => &[
             ("flavor", "Sparky", "BZZT! A blinky light! I love blinky lights!"),
             ("dum_dum", "Sparky", "A Dum Dum rolled under the workbench. Score!"),
@@ -144,7 +152,7 @@ mod tests {
     #[test]
     fn flavor_pools_cover_known_and_unknown_areas() {
         let mut r = SmallRng::seed_from_u64(9);
-        for area in ["home", "pond", "lab", "overworld", "some_new_map"] {
+        for area in ["home", "pond", "reef", "lab", "overworld", "some_new_map"] {
             // Pull several to make sure every entry is constructible and non-empty.
             for _ in 0..50 {
                 match pick_flavor(area, &mut r) {

@@ -83,9 +83,27 @@
             version: 1,
         });
 
-        load("robot-buddy-game.wasm");
-        document.getElementById("glcanvas").focus();
-        document.addEventListener("click", () => document.getElementById("glcanvas").focus());
+        // Preflight: miniquad's init_webgl throws an opaque TypeError when no
+        // WebGL context is available (e.g. Chrome with GPU acceleration
+        // unavailable — its software-WebGL fallback now hides behind
+        // chrome://flags/#enable-unsafe-swiftshader). Show a readable message
+        // instead of a black canvas.
+        var probe = document.createElement("canvas");
+        if (!probe.getContext("webgl") && !probe.getContext("webgl2")) {
+            document.body.innerHTML =
+                '<div style="color:#eee;font-family:sans-serif;max-width:34em;margin:4em auto;line-height:1.5">' +
+                '<h1>Robot Buddy needs WebGL</h1>' +
+                '<p>Your browser could not create a WebGL context, so the game cannot start.</p>' +
+                '<p>Usually this means graphics acceleration is off or unavailable. Try:</p>' +
+                '<ul style="padding-left:1.5em">' +
+                '<li>Chrome: check <code>chrome://gpu</code>, enable "Use graphics acceleration" in settings, or enable <code>chrome://flags/#enable-unsafe-swiftshader</code></li>' +
+                '<li>Or open this page in Firefox</li>' +
+                '</ul></div>';
+        } else {
+            load("robot-buddy-game.wasm");
+            document.getElementById("glcanvas").focus();
+            document.addEventListener("click", () => document.getElementById("glcanvas").focus());
+        }
     </script>
 </body>
 </html>
