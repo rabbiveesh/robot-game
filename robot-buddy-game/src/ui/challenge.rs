@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use crate::text::{draw_text, measure_text}; // bundled-font text (shadows macroquad's)
 use robot_buddy_domain::challenge::challenge_state::{ChallengeState, ChallengeAction};
 use robot_buddy_domain::learning::challenge_generator::Challenge;
 use robot_buddy_domain::types::Phase;

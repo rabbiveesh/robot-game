@@ -2,6 +2,7 @@
 //! and a separate draw step so the game loop can run without a macroquad context.
 
 use macroquad::prelude::*;
+use crate::text::{draw_text, measure_text}; // bundled-font text (shadows macroquad's)
 use crate::input::FrameInput;
 
 pub struct MenuOption {

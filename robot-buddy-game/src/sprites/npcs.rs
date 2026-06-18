@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use crate::text::draw_text; // bundled-font text (shadows macroquad's)
 
 const TS: f32 = 48.0;
 

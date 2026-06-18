@@ -14,6 +14,10 @@ fn window_conf() -> Conf {
 
 #[macroquad::main(window_conf)]
 async fn main() {
+    // Load the bundled glyph font now that the GL context exists, so every
+    // draw_text call (math symbols, ★, emoji) renders instead of tofu.
+    robot_buddy_game::text::init();
+
     let seed = macroquad::rand::rand() as u64;
     let mut g = Game::new(seed);
     g.refresh_save_slots();

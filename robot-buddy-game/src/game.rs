@@ -5,6 +5,7 @@
 //! a macroquad window today because draw calls run unconditionally — Phase 4 will split.)
 
 use macroquad::prelude::*;
+use crate::text::{draw_text, measure_text}; // bundled-font text (shadows macroquad's)
 use ::rand::{Rng, SeedableRng};
 use ::rand::rngs::SmallRng;
 use std::collections::HashMap;

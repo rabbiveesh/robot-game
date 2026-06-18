@@ -10,6 +10,7 @@
 //! a domain `KenKenAction` to dispatch, or a UI-only selection change.
 
 use macroquad::prelude::*;
+use crate::text::{draw_text, measure_text}; // bundled-font text (shadows macroquad's)
 use robot_buddy_domain::logic::kenken::{
     CageOp, KenKenAction, KenKenPhase, KenKenSession, ValidationResult,
 };

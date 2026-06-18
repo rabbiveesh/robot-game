@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use crate::text::{draw_text, measure_text}; // bundled-font text (shadows macroquad's)
 use crate::settings::{self, TextSpeed};
 use crate::input::FrameInput;
 
