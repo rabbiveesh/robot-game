@@ -1,7 +1,7 @@
 //! Interaction menu (Talk / Give / etc.). Split into pure layout + input handling
 //! and a separate draw step so the game loop can run without a macroquad context.
 
-use macroquad::prelude::*;
+use crate::prelude::*;
 use crate::input::FrameInput;
 
 pub struct MenuOption {

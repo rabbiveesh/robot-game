@@ -1,4 +1,4 @@
-use macroquad::prelude::*;
+use crate::prelude::*;
 
 use crate::sprites::Dir;
 

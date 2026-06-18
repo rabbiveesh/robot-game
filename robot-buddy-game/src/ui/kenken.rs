@@ -9,7 +9,7 @@
 //! `KenKenInput` is the only type the game.rs glue cares about — it's either
 //! a domain `KenKenAction` to dispatch, or a UI-only selection change.
 
-use macroquad::prelude::*;
+use crate::prelude::*;
 use robot_buddy_domain::logic::kenken::{
     CageOp, KenKenAction, KenKenPhase, KenKenSession, ValidationResult,
 };

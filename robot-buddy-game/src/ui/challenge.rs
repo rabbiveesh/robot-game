@@ -1,4 +1,4 @@
-use macroquad::prelude::*;
+use crate::prelude::*;
 use robot_buddy_domain::challenge::challenge_state::{ChallengeState, ChallengeAction};
 use robot_buddy_domain::learning::challenge_generator::Challenge;
 use robot_buddy_domain::types::Phase;

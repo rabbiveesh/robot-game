@@ -1,4 +1,4 @@
-use macroquad::prelude::*;
+use crate::prelude::*;
 use ::rand::{Rng, rngs::SmallRng};
 use robot_buddy_domain::world::movement::{Direction, MoveIntent};
 use crate::follower::Pathing;

@@ -1,4 +1,4 @@
-use macroquad::prelude::*;
+use crate::prelude::*;
 
 const TS: f32 = 48.0;
 

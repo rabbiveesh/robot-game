@@ -4,7 +4,7 @@
 //! Tests: build a `FrameInput` synthetically and call `step()` directly. (Tests still need
 //! a macroquad window today because draw calls run unconditionally — Phase 4 will split.)
 
-use macroquad::prelude::*;
+use crate::prelude::*;
 use ::rand::{Rng, SeedableRng};
 use ::rand::rngs::SmallRng;
 use std::collections::HashMap;
