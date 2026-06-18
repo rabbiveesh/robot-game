@@ -8,10 +8,16 @@
 //!
 //! The game calls `should_trigger_encounter` after each tile step and, when it
 //! fires (and the player has stopped moving), `pick_encounter` to choose what
-//! happens. Challenge encounters then run the normal challenge lifecycle.
+//! happens. Challenge encounters then run the normal challenge lifecycle —
+//! framed by the scene via [`frame_sighting`] so the math reads as part of the
+//! world ("A frog hops 3 times, then 2 more — how many hops?") rather than a
+//! bare "What is 3 + 2?". The framing is cosmetic: the underlying challenge,
+//! choices, and adaptive numbers are the real ones the learner would have got.
 
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+
+use crate::types::Operation;
 
 /// Snapshot the game passes in each time it asks about an encounter.
 #[derive(Debug, Clone)]
@@ -32,10 +38,9 @@ pub enum EncounterKind {
     FlavorDialogue { speaker: String, text: String },
     /// A free Dum Dum sitting on the ground — reward for exploring.
     FoundDumDum,
-    /// Run the normal challenge lifecycle (CRA, show-me/tell-me).
+    /// Run the normal challenge lifecycle (CRA, show-me/tell-me). The game
+    /// frames the prompt with the scene via [`frame_sighting`].
     Challenge,
-    /// Contextual math framed by the scene ("4 spots on each wing…").
-    MathSighting { speaker: String, text: String },
 }
 
 /// Base odds an encounter fires on an eligible step (1 in 30, per spec).
@@ -57,8 +62,10 @@ pub fn pick_encounter(config: &EncounterConfig, rng: &mut impl Rng) -> Encounter
     pick_flavor(&config.area, rng)
 }
 
-/// Per-area flavor pool. Each entry is (kind-tag, speaker, text); "dum_dum"
-/// yields a free Dum Dum, "sighting" yields contextual math, else plain flavor.
+/// Per-area flavor pool: pure ambiance, no math. Each entry is (kind-tag,
+/// speaker, text); "dum_dum" yields a free Dum Dum, else plain flavor. The
+/// math moments are no longer in here — they fire as real, scene-framed
+/// challenges (see [`pick_encounter`] + [`frame_sighting`]).
 fn flavor_pool(area: &str) -> &'static [(&'static str, &'static str, &'static str)] {
     match area {
         "home" => &[
@@ -67,23 +74,19 @@ fn flavor_pool(area: &str) -> &'static [(&'static str, &'static str, &'static st
             ("dum_dum", "Sparky", "Hey boss, a shiny Dum Dum was hiding by the couch!"),
         ],
         "pond" | "dream" => &[
-            ("sighting", "Sparky", "A frog! It jumped 3 times, then 2 more! How many jumps total?"),
             ("flavor", "Sparky", "The fish are swimming in circles. I'm getting dizzy!"),
-            ("sighting", "Sparky", "That butterfly has 4 spots on each wing! How many spots in all?"),
+            ("flavor", "Sparky", "A dragonfly buzzed my antenna! Rude. ...Cool, but rude."),
+            ("dum_dum", "Sparky", "A Dum Dum bobbing in the reeds! Don't worry, I got it!"),
         ],
         "reef" => &[
             ("flavor", "Sparky", "BLUB BLUB! Boss, I'm WATERPROOF! Best day EVER!"),
-            ("sighting", "Sparky", "A school of 6 little fish! It split into 2 equal groups — how many in each?"),
             ("flavor", "Sparky", "That shark just SMILED at me! I think we're friends now!"),
-            ("sighting", "Sparky", "Three crabs, then 4 more skittered out of the coral! How many crabs?"),
             ("dum_dum", "Sparky", "Ooh! A Dum Dum, sealed in a shiny bubble! Pop pop pop!"),
             ("flavor", "Sparky", "A jellyfish drifted by. It wiggled hello! ...I think."),
         ],
         "space_hub" | "moon" | "mars" | "asteroid_base" => &[
             ("flavor", "Sparky", "WHEEEE! Zero gravity! My bolts are FLOATING! BEEP BOOP!"),
-            ("sighting", "Sparky", "I counted 4 stars in that cluster, then 3 more blinked on! How many stars?"),
             ("flavor", "Sparky", "A little green alien just waved at us! Hi, friend! *waves back with all arms*"),
-            ("sighting", "Sparky", "That planet has 2 moons and 3 rings. How many space things in all?"),
             ("dum_dum", "Sparky", "A Dum Dum, floating in zero-g! I grabbed it before it drifted off!"),
             ("flavor", "Sparky", "Space is SO quiet out here. ...except for me. BLEEP BLOOP!"),
         ],
@@ -95,7 +98,7 @@ fn flavor_pool(area: &str) -> &'static [(&'static str, &'static str, &'static st
         _ => &[
             ("flavor", "Sparky", "BZZZT! A ladybug landed on my antenna!"),
             ("dum_dum", "Sparky", "I found a shiny Dum Dum on the ground!"),
-            ("sighting", "Sparky", "Two birds, then three more landed on that branch. How many birds?"),
+            ("flavor", "Sparky", "A breeze! My sensors say it smells like... adventure!"),
         ],
     }
 }
@@ -105,9 +108,102 @@ fn pick_flavor(area: &str, rng: &mut impl Rng) -> EncounterKind {
     let (tag, speaker, text) = pool[rng.gen_range(0..pool.len())];
     match tag {
         "dum_dum" => EncounterKind::FoundDumDum,
-        "sighting" => EncounterKind::MathSighting { speaker: speaker.into(), text: text.into() },
         _ => EncounterKind::FlavorDialogue { speaker: speaker.into(), text: text.into() },
     }
+}
+
+// ─── SCENE FRAMING ──────────────────────────────────────
+//
+// A challenge encounter is dressed in scene words that match the operation and
+// numbers the adaptive generator actually produced. The framing is presentation
+// only — the choices and correct answer come from the real challenge.
+
+/// A scene-framed prompt for a challenge encounter, ready to drop onto the
+/// challenge's display/speech text.
+#[derive(Debug, Clone)]
+pub struct SightingFrame {
+    pub speaker: String,
+    pub display_text: String,
+    pub speech_text: String,
+}
+
+/// One scene template. `prompt` uses `{a}`/`{b}` placeholders (never the answer —
+/// that would give it away) and must read as a natural question for `op`.
+struct Scene {
+    op: Operation,
+    prompt: &'static str,
+}
+
+/// Scenes that work anywhere — the guaranteed fallback so every operation can
+/// always be framed (NumberBond is the deliberate exception; see `frame_sighting`).
+const GENERIC_SCENES: &[Scene] = &[
+    Scene { op: Operation::Add,      prompt: "Sparky finds {a} gems, then {b} more! How many gems?" },
+    Scene { op: Operation::Sub,      prompt: "{a} stars are out, {b} fade away. How many stars left?" },
+    Scene { op: Operation::Multiply, prompt: "{a} boxes, {b} gems in each. How many gems?" },
+    Scene { op: Operation::Divide,   prompt: "{a} gems, {b} friends, shared fair. How many each?" },
+];
+
+/// Area-specific scenes, tried before the generic pool for local color.
+fn scene_pool(area: &str) -> &'static [Scene] {
+    match area {
+        "home" => &[
+            Scene { op: Operation::Add,      prompt: "{a} cookies, then {b} more come out! How many?" },
+            Scene { op: Operation::Sub,      prompt: "{a} cookies on the plate, you eat {b}! How many left?" },
+            Scene { op: Operation::Multiply, prompt: "{a} plates, {b} cookies each. How many cookies?" },
+            Scene { op: Operation::Divide,   prompt: "{a} cookies, {b} kids, shared fair. How many each?" },
+        ],
+        "pond" | "dream" => &[
+            Scene { op: Operation::Add,      prompt: "A frog hops {a} times, then {b} more! How many hops?" },
+            Scene { op: Operation::Sub,      prompt: "{a} ducks float by, {b} swim away. How many ducks?" },
+            Scene { op: Operation::Multiply, prompt: "{a} lily pads, {b} frogs each. How many frogs?" },
+            Scene { op: Operation::Divide,   prompt: "{a} frogs, {b} lily pads, shared fair. How many each?" },
+        ],
+        "reef" => &[
+            Scene { op: Operation::Add,      prompt: "{a} fish swim up, then {b} more! How many fish?" },
+            Scene { op: Operation::Sub,      prompt: "{a} crabs on the rock, {b} scuttle off. How many left?" },
+            Scene { op: Operation::Multiply, prompt: "{a} starfish, {b} arms each. How many arms?" },
+            Scene { op: Operation::Divide,   prompt: "{a} fish split into {b} schools. How many each?" },
+        ],
+        "space_hub" | "moon" | "mars" | "asteroid_base" => &[
+            Scene { op: Operation::Add,      prompt: "{a} stars blink on, then {b} more! How many stars?" },
+            Scene { op: Operation::Sub,      prompt: "{a} comets zoom by, {b} fly off. How many comets?" },
+            Scene { op: Operation::Multiply, prompt: "{a} planets, {b} moons each. How many moons?" },
+            Scene { op: Operation::Divide,   prompt: "{a} rocks, {b} aliens, shared fair. How many each?" },
+        ],
+        "lab" => &[
+            Scene { op: Operation::Add,      prompt: "{a} lights blink, then {b} more! How many lights?" },
+            Scene { op: Operation::Sub,      prompt: "{a} gadgets on the shelf, {b} fall. How many left?" },
+            Scene { op: Operation::Multiply, prompt: "{a} shelves, {b} gadgets each. How many gadgets?" },
+            Scene { op: Operation::Divide,   prompt: "{a} bolts, {b} bins, shared fair. How many each?" },
+        ],
+        _ => &[],
+    }
+}
+
+/// Dress a generated challenge's numbers in scene words. `a`/`b` are the
+/// challenge operands as shown (for division, dividend ÷ divisor). Returns
+/// `None` when no scene fits the operation — notably `NumberBond`, whose
+/// "what + b = total?" shape doesn't map to a tidy story; the caller keeps the
+/// plain prompt in that case.
+pub fn frame_sighting(area: &str, op: Operation, a: i32, b: i32, rng: &mut impl Rng) -> Option<SightingFrame> {
+    let candidates: Vec<&Scene> = scene_pool(area)
+        .iter()
+        .chain(GENERIC_SCENES.iter())
+        .filter(|s| s.op == op)
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let scene = candidates[rng.gen_range(0..candidates.len())];
+    let text = scene
+        .prompt
+        .replace("{a}", &a.to_string())
+        .replace("{b}", &b.to_string());
+    Some(SightingFrame {
+        speaker: "Sparky".into(),
+        display_text: text.clone(),
+        speech_text: text,
+    })
 }
 
 #[cfg(test)]
@@ -164,13 +260,34 @@ mod tests {
             // Pull several to make sure every entry is constructible and non-empty.
             for _ in 0..50 {
                 match pick_flavor(area, &mut r) {
-                    EncounterKind::FlavorDialogue { text, .. }
-                    | EncounterKind::MathSighting { text, .. } => assert!(!text.is_empty()),
+                    EncounterKind::FlavorDialogue { text, .. } => assert!(!text.is_empty()),
                     EncounterKind::FoundDumDum => {}
-                    EncounterKind::Challenge => panic!("flavor pool must never yield Challenge"),
+                    EncounterKind::Challenge => panic!("flavor pool is pure ambiance, never a challenge"),
                 }
             }
         }
+    }
+
+    #[test]
+    fn frames_every_operation_in_every_area() {
+        use crate::types::Operation::*;
+        let mut r = SmallRng::seed_from_u64(11);
+        for area in ["home", "pond", "dream", "reef", "moon", "lab", "overworld", "some_new_map"] {
+            for op in [Add, Sub, Multiply, Divide] {
+                let frame = frame_sighting(area, op, 6, 2, &mut r)
+                    .unwrap_or_else(|| panic!("{op:?} should frame in {area}"));
+                // The actual operands appear; the answer never does (no give-away).
+                assert!(frame.display_text.contains('6') && frame.display_text.contains('2'));
+                assert_eq!(frame.display_text, frame.speech_text);
+                assert_eq!(frame.speaker, "Sparky");
+            }
+        }
+    }
+
+    #[test]
+    fn number_bond_has_no_scene_frame() {
+        let mut r = SmallRng::seed_from_u64(13);
+        assert!(frame_sighting("pond", crate::types::Operation::NumberBond, 8, 3, &mut r).is_none());
     }
 
     #[test]

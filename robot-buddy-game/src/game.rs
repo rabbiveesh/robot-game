@@ -1944,12 +1944,10 @@ impl Game {
             EncounterKind::FlavorDialogue { .. } => "flavor",
             EncounterKind::FoundDumDum => "dum_dum",
             EncounterKind::Challenge => "challenge",
-            EncounterKind::MathSighting { .. } => "sighting",
         };
         self.events.push(GameEvent::EncounterTriggered { kind: label.into() });
         match kind {
-            EncounterKind::FlavorDialogue { speaker, text }
-            | EncounterKind::MathSighting { speaker, text } => {
+            EncounterKind::FlavorDialogue { speaker, text } => {
                 self.start_dialogue(vec![DialogueLine { speaker, text }]);
                 self.set_state(GameState::Dialogue);
             }
@@ -1964,7 +1962,21 @@ impl Game {
                 self.set_state(GameState::Dialogue);
             }
             EncounterKind::Challenge => {
-                let ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
+                // A real adaptive challenge, but dressed in scene words so the
+                // math reads as part of the world rather than a pop quiz.
+                let mut ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
+                if let Some(frame) = encounters::frame_sighting(
+                    self.map.id,
+                    ac.challenge.operation,
+                    ac.challenge.numbers.a,
+                    ac.challenge.numbers.b,
+                    &mut self.rng,
+                ) {
+                    ac.challenge.display_text = frame.display_text.clone();
+                    ac.challenge.speech_text = frame.speech_text.clone();
+                    ac.state.question.display = frame.display_text;
+                    ac.state.question.speech = frame.speech_text;
+                }
                 self.events.push(GameEvent::ChallengeStarted {
                     question: ac.challenge.display_text.clone(),
                 });
