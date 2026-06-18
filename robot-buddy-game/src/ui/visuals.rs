@@ -1,5 +1,4 @@
-use macroquad::prelude::*;
-use crate::text::{draw_text, measure_text}; // bundled-font text (shadows macroquad's)
+use crate::prelude::*;
 use robot_buddy_domain::learning::challenge_generator::Challenge;
 
 const BLUE_A: Color = Color::new(0.259, 0.647, 0.961, 1.0);       // #42A5F5

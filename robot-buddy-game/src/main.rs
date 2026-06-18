@@ -1,4 +1,4 @@
-use macroquad::prelude::*;
+use robot_buddy_game::prelude::*;
 
 use robot_buddy_game::input::FrameInput;
 use robot_buddy_game::game::{Game, GAME_W, GAME_H};
