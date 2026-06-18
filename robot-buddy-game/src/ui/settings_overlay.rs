@@ -1,4 +1,4 @@
-use macroquad::prelude::*;
+use crate::prelude::*;
 use crate::settings::{self, TextSpeed};
 use crate::game::FeatureFlags;
 use crate::input::FrameInput;
