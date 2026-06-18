@@ -12,3 +12,9 @@ rand = { version = "0.8", default-features = false, features = ["small_rng"] }
 
 # No wasm-specific deps — macroquad uses sapp-wasm, not wasm-bindgen.
 # localStorage access is via extern "C" functions defined in index.html.
+
+[dev-dependencies]
+# Font-coverage test: parse the bundled font's cmap (ttf-parser) and walk the
+# source for rendered string/char literals (syn).
+ttf-parser = "0.21"
+syn = { version = "2", features = ["full", "visit"] }

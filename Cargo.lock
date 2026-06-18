@@ -292,6 +292,8 @@ dependencies = [
  "robot-buddy-domain",
  "serde",
  "serde_json",
+ "syn",
+ "ttf-parser",
 ]
 
 [[package]]

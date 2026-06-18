@@ -23,7 +23,7 @@ use std::cell::RefCell;
 /// GNU Unifont, merged BMP + upper planes and subset to the ranges we draw.
 /// Built from the system `unifont.otf` + `unifont_upper.otf` (see
 /// `assets/README.md`). glyf outlines so fontdue can rasterize it directly.
-const FONT_BYTES: &[u8] = include_bytes!("../assets/unifont-subset.ttf");
+pub const FONT_BYTES: &[u8] = include_bytes!("../assets/unifont-subset.ttf");
 
 thread_local! {
     static FONT: RefCell<Option<Font>> = const { RefCell::new(None) };

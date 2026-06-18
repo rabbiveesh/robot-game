@@ -5,6 +5,18 @@ use crate::input::FrameInput;
 
 // ─── TITLE SCREEN ───────────────────────────────────────
 
+/// Whether a typed character is accepted into the player's name.
+///
+/// The name is free-text the player types, then rendered with the bundled
+/// font, so we only admit characters that font can draw. Letters/digits are
+/// capped to Latin-1 (U+0000–00FF) — enough for accented names like "José"
+/// while excluding scripts/emoji the subset doesn't cover, which would render
+/// as tofu. `tests/font_coverage.rs` asserts every char this permits has a
+/// glyph in the bundled font.
+pub fn name_char_allowed(ch: char) -> bool {
+    matches!(ch, ' ' | '-') || (ch.is_alphanumeric() && (ch as u32) <= 0x00FF)
+}
+
 pub enum TitleAction {
     NewGame(usize),      // slot index
     LoadGame(usize),     // slot index
@@ -286,7 +298,7 @@ impl NewGameForm {
     pub fn update(&mut self, dt: f32, input: &FrameInput) {
         self.cursor_blink += dt;
         for ch in &input.chars_typed {
-            if self.name.len() < 20 && (ch.is_alphanumeric() || *ch == ' ' || *ch == '-') {
+            if self.name.len() < 20 && name_char_allowed(*ch) {
                 self.name.push(*ch);
             }
         }
