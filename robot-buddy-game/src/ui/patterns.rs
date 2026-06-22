@@ -9,7 +9,7 @@
 //! `PatternInput` is the only type game.rs cares about — it wraps a domain
 //! `PatternAction`.
 
-use macroquad::prelude::*;
+use crate::prelude::*;
 use robot_buddy_domain::logic::patterns::{
     PatternAction, PatternElement, PatternPhase, PatternSession,
 };

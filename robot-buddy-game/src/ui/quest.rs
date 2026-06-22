@@ -7,7 +7,7 @@
 //! `QuestSession` (+ the generated puzzle choices) each frame; this module just
 //! draws it and reports taps.
 
-use macroquad::prelude::*;
+use crate::prelude::*;
 
 use crate::input::FrameInput;
 

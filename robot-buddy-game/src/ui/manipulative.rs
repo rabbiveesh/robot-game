@@ -5,7 +5,7 @@
 //! `Manip` enum so `game.rs` can drive any of them through a single state.
 //! Opt-in (feature-flagged) while the path is being playtested.
 
-use macroquad::prelude::*;
+use crate::prelude::*;
 use robot_buddy_domain::logic::manipulate_concrete::{
     ConcreteAction, ConcreteKind, ConcretePhase, ConcreteSession,
 };

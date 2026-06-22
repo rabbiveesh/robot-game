@@ -6,7 +6,7 @@
 //!   - `handle_click(mx, my, session, layout)` → BalanceInput
 //!   - `handle_key(session, input)` → BalanceInput
 
-use macroquad::prelude::*;
+use crate::prelude::*;
 use robot_buddy_domain::logic::balance::{
     BalanceAction, BalanceItem, BalancePhase, BalanceSession,
 };

@@ -9,7 +9,7 @@
 //! 4×4 boards render in "picture mode" — each symbol is a colored shape, so a
 //! pre-reader can play. 6×6 boards use digits.
 
-use macroquad::prelude::*;
+use crate::prelude::*;
 use robot_buddy_domain::logic::sudoku::{
     SudokuAction, SudokuPhase, SudokuSession, SudokuValidation,
 };

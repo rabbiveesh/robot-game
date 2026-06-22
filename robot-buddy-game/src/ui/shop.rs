@@ -7,7 +7,7 @@
 //! the right remainder completes the purchase; a wrong pick just asks them to
 //! recount (never a wrong-answer buzzer).
 
-use macroquad::prelude::*;
+use crate::prelude::*;
 use robot_buddy_domain::economy::shop::ShopItem;
 
 use crate::input::FrameInput;
