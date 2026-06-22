@@ -3435,6 +3435,18 @@ impl Game {
             let view = shop_view(ash, &self.color_choice);
             let layout = ui::shop::layout(&ash.catalog, &view, screen);
             ui::shop::draw_shop(&ash.catalog, &ash.owned, self.dum_dums, &view, &layout, ash.message.as_deref());
+
+            // While picking an outfit color, show a live preview of the kid in
+            // the panel's top-right so tapping swatches visibly recolors them.
+            if ash.picking_color {
+                let px = layout.panel.x + layout.panel.w - 64.0;
+                let py = layout.panel.y + 14.0;
+                match self.player_gender {
+                    Gender::Boy => sprites::player::draw_player_boy(px, py, Dir::Down, 0, self.game_time),
+                    Gender::Girl => sprites::player::draw_player_girl(px, py, Dir::Down, 0, self.game_time),
+                }
+                sprites::player::draw_player_cosmetics(px, py, 0, &ash.owned, &self.color_choice);
+            }
         }
 
         // CRA manipulative overlay
@@ -4438,6 +4450,36 @@ mod tests {
         let ash = g.active_shop.as_ref().unwrap();
         assert!(!ash.picking_color, "Done should close the picker first");
         assert!(g.active_shop.is_some(), "the shop itself should stay open");
+    }
+
+    #[test]
+    fn changing_color_back_and_forth_sticks_each_time() {
+        let mut g = game();
+        g.shop_owned.insert("color_change".to_string());
+        open_shop(&mut g);
+
+        // Reopen the picker from the owned Color Change row.
+        let row = shop_layout(&g).items.iter()
+            .find(|r| g.active_shop.as_ref().unwrap().catalog[r.index].id == "color_change")
+            .unwrap().rect;
+        click_shop(&mut g, row);
+        assert!(g.active_shop.as_ref().unwrap().picking_color);
+
+        // Pick a sequence with repeats and back-tracking. Each pick must stick,
+        // the picker must stay open, and the highlighted swatch must follow.
+        for &i in &[1usize, 3, 6, 3, 1, 0, 6, 0] {
+            let swatch = shop_layout(&g).swatches[i].rect;
+            click_shop(&mut g, swatch);
+            assert_eq!(g.color_choice, sprites::player::OUTFIT_COLORS[i].0,
+                "picking swatch {i} should set color_choice to {}", sprites::player::OUTFIT_COLORS[i].0);
+            assert!(g.active_shop.as_ref().unwrap().picking_color,
+                "picker should stay open so the kid can keep changing colors");
+            match shop_view(g.active_shop.as_ref().unwrap(), &g.color_choice) {
+                ui::shop::ShopView::PickingColor { current, .. } =>
+                    assert_eq!(current, i, "the highlighted swatch should track the latest pick"),
+                _ => panic!("expected the PickingColor view while picking"),
+            }
+        }
     }
 
     #[test]

@@ -162,11 +162,16 @@ pub fn draw_player_cosmetics(
     let bob = if frame % 2 == 1 { -2.0 } else { 0.0 };
     let time = get_time() as f32;
 
-    // Color change: a translucent tint over the kid's clothes.
+    // Color change: recolor the kid's clothes. A bold tint over the torso plus
+    // a solid sash so even subtle hues read clearly and swapping colors is
+    // unmistakable (the old faint 32% wash was easy to miss).
     if owned.contains("color_change") {
-        let mut tint = outfit_color(color_choice);
-        tint.a = 0.32;
-        draw_rectangle(cx - 9.0, cy - 2.0 + bob, 18.0, 14.0, tint);
+        let base = outfit_color(color_choice);
+        let mut tint = base;
+        tint.a = 0.6;
+        draw_rectangle(cx - 10.0, cy - 3.0 + bob, 20.0, 17.0, tint);
+        // Solid colored sash across the chest — unambiguous at a glance.
+        draw_rectangle(cx - 10.0, cy + 5.0 + bob, 20.0, 4.0, base);
     }
     // Jet boots: flames under the feet.
     if owned.contains("jet_boots") {
