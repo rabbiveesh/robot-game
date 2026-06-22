@@ -17,12 +17,33 @@ pub enum NpcKind {
     GlitchDog,
     GroveSpirit,
     Pip,
+    // Reef creatures
+    ReefShark,
+    SeaTurtle,
+    Dolphin,
+    Crab,
+    Jelly,
+    // Space creatures
+    MoonAlien,
+    FuelBot,
+    MarsGuardian,
+    StarKeeper,
+    StationAlien,
     CtrlBand,
     CtrlKenkenLevel,
     CtrlCraReset,
     CtrlIntroReset,
     CtrlTriggerKenken,
+    CtrlTriggerPattern,
+    CtrlTriggerBalance,
+    CtrlTriggerSudoku,
     CtrlTriggerChallenge,
+    CtrlToggleEncounters,
+    CtrlTriggerEncounter,
+    CtrlToggleManipulatives,
+    CtrlTriggerManipulative,
+    CtrlToggleQuest,
+    CtrlStartQuest,
 }
 
 impl NpcKind {
@@ -40,12 +61,31 @@ impl NpcKind {
             NpcKind::GlitchDog => "glitch_dog",
             NpcKind::GroveSpirit => "grove_spirit",
             NpcKind::Pip => "pip",
+            NpcKind::ReefShark => "reef_shark",
+            NpcKind::SeaTurtle => "sea_turtle",
+            NpcKind::Dolphin => "dolphin",
+            NpcKind::Crab => "crab",
+            NpcKind::Jelly => "jelly",
+            NpcKind::MoonAlien => "moon_alien",
+            NpcKind::FuelBot => "fuel_bot",
+            NpcKind::MarsGuardian => "mars_guardian",
+            NpcKind::StarKeeper => "star_keeper",
+            NpcKind::StationAlien => "station_alien",
             NpcKind::CtrlBand => "ctrl_band",
             NpcKind::CtrlKenkenLevel => "ctrl_kenken_level",
             NpcKind::CtrlCraReset => "ctrl_cra_reset",
             NpcKind::CtrlIntroReset => "ctrl_intro_reset",
             NpcKind::CtrlTriggerKenken => "ctrl_trigger_kenken",
+            NpcKind::CtrlTriggerPattern => "ctrl_trigger_pattern",
+            NpcKind::CtrlTriggerBalance => "ctrl_trigger_balance",
+            NpcKind::CtrlTriggerSudoku => "ctrl_trigger_sudoku",
             NpcKind::CtrlTriggerChallenge => "ctrl_trigger_challenge",
+            NpcKind::CtrlToggleEncounters => "ctrl_toggle_encounters",
+            NpcKind::CtrlTriggerEncounter => "ctrl_trigger_encounter",
+            NpcKind::CtrlToggleManipulatives => "ctrl_toggle_manipulatives",
+            NpcKind::CtrlTriggerManipulative => "ctrl_trigger_manipulative",
+            NpcKind::CtrlToggleQuest => "ctrl_toggle_quest",
+            NpcKind::CtrlStartQuest => "ctrl_start_quest",
         }
     }
 
@@ -60,12 +100,31 @@ impl NpcKind {
             NpcKind::GlitchDog => "B0RK.exe",
             NpcKind::GroveSpirit => "Old Oak",
             NpcKind::Pip => "Pip",
+            NpcKind::ReefShark => "Chompy",
+            NpcKind::SeaTurtle => "Shelldon",
+            NpcKind::Dolphin => "Echo",
+            NpcKind::Crab => "Pinchy",
+            NpcKind::Jelly => "Wobble",
+            NpcKind::MoonAlien => "Zorp",
+            NpcKind::FuelBot => "Tank",
+            NpcKind::MarsGuardian => "Rok",
+            NpcKind::StarKeeper => "Cassi",
+            NpcKind::StationAlien => "Bleep",
             NpcKind::CtrlBand => "Band Knob",
             NpcKind::CtrlKenkenLevel => "KenKen Knob",
             NpcKind::CtrlCraReset => "CRA Reset",
             NpcKind::CtrlIntroReset => "Intro Reset",
             NpcKind::CtrlTriggerKenken => "Trigger KenKen",
+            NpcKind::CtrlTriggerPattern => "Trigger Pattern",
+            NpcKind::CtrlTriggerBalance => "Trigger Balance",
+            NpcKind::CtrlTriggerSudoku => "Trigger Sudoku",
             NpcKind::CtrlTriggerChallenge => "Trigger Challenge",
+            NpcKind::CtrlToggleEncounters => "Encounters Flag",
+            NpcKind::CtrlTriggerEncounter => "Trigger Encounter",
+            NpcKind::CtrlToggleManipulatives => "Manipulatives Flag",
+            NpcKind::CtrlTriggerManipulative => "Trigger Manipulative",
+            NpcKind::CtrlToggleQuest => "Quest Flag",
+            NpcKind::CtrlStartQuest => "Start Quest",
         }
     }
 
@@ -75,9 +134,15 @@ impl NpcKind {
     pub const ALL: &'static [NpcKind] = &[
         NpcKind::Sage, NpcKind::SageLab, NpcKind::DreamSage, NpcKind::Mommy,
         NpcKind::Kid1, NpcKind::Kid2, NpcKind::Shopkeeper, NpcKind::GlitchDog,
-        NpcKind::GroveSpirit, NpcKind::Pip, NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
+        NpcKind::GroveSpirit, NpcKind::Pip,
+        NpcKind::ReefShark, NpcKind::SeaTurtle, NpcKind::Dolphin, NpcKind::Crab, NpcKind::Jelly,
+        NpcKind::MoonAlien, NpcKind::FuelBot, NpcKind::MarsGuardian, NpcKind::StarKeeper, NpcKind::StationAlien,
+        NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
-        NpcKind::CtrlTriggerChallenge,
+        NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerBalance, NpcKind::CtrlTriggerSudoku,
+        NpcKind::CtrlTriggerChallenge, NpcKind::CtrlToggleEncounters, NpcKind::CtrlTriggerEncounter,
+        NpcKind::CtrlToggleManipulatives, NpcKind::CtrlTriggerManipulative,
+        NpcKind::CtrlToggleQuest, NpcKind::CtrlStartQuest,
     ];
 
     /// Inverse of `as_str`. Resolves a stable id token back to its kind without
@@ -91,7 +156,11 @@ impl NpcKind {
         matches!(self,
             NpcKind::CtrlBand | NpcKind::CtrlKenkenLevel | NpcKind::CtrlCraReset
             | NpcKind::CtrlIntroReset | NpcKind::CtrlTriggerKenken
-            | NpcKind::CtrlTriggerChallenge)
+            | NpcKind::CtrlTriggerPattern | NpcKind::CtrlTriggerBalance
+            | NpcKind::CtrlTriggerSudoku | NpcKind::CtrlTriggerChallenge
+            | NpcKind::CtrlToggleEncounters | NpcKind::CtrlTriggerEncounter
+            | NpcKind::CtrlToggleManipulatives | NpcKind::CtrlTriggerManipulative
+            | NpcKind::CtrlToggleQuest | NpcKind::CtrlStartQuest)
     }
 }
 
@@ -104,6 +173,15 @@ pub enum SpriteType {
     Kid1,
     Kid2,
     OldOak,
+    Shark,
+    SeaTurtle,
+    Dolphin,
+    Crab,
+    Jellyfish,
+    AlienGreen,
+    AlienRed,
+    FuelDepot,
+    StarTerminal,
 }
 
 /// Manhattan radius an NPC may wander away from its home tile. Keeps wanderers
@@ -180,6 +258,17 @@ pub struct Npc {
     /// `Some` while this NPC is the player's companion follower. Wander and
     /// stationary behaviors yield to the path queue when this is set.
     pub pathing: Option<Pathing>,
+    /// True while this NPC is a *closed* gate blocking a passage. Interacting
+    /// forces a challenge; solving it clears `gate` (the guardian steps aside
+    /// and becomes pushable). A reusable hazard any map can drop in a chokepoint.
+    pub gate: bool,
+    /// Stable id for a gate guardian, used to persist "this gate is solved"
+    /// across saves. `Some` only for gate NPCs.
+    pub gate_id: Option<&'static str>,
+    /// True for a fuel depot: interacting always poses a puzzle that, when
+    /// solved, refills the rocket's fuel. Like `gate`, it short-circuits the
+    /// normal interaction menu.
+    pub refuel: bool,
 }
 
 impl Npc {
@@ -280,6 +369,21 @@ impl Npc {
         self
     }
 
+    /// Builder: mark this NPC as a closed gate guardian with a stable id.
+    /// Blocks its tile until the player solves its puzzle.
+    pub fn gating(mut self, id: &'static str) -> Self {
+        self.gate = true;
+        self.gate_id = Some(id);
+        self
+    }
+
+    /// Builder: mark this NPC as a fuel depot — interacting refuels the rocket
+    /// after a puzzle.
+    pub fn refueling(mut self) -> Self {
+        self.refuel = true;
+        self
+    }
+
     pub fn draw(&self, time: f32) {
         let x = self.entity.x;
         let y = self.entity.y;
@@ -297,6 +401,19 @@ impl Npc {
                 Color::from_rgba(102, 187, 106, 255),  // green shirt
                 false, time),
             SpriteType::OldOak => sprites::npcs::draw_old_oak(x, y, time),
+            // A gate shark naps (eyes shut) until its puzzle is solved; once
+            // satisfied (`gate` cleared) it wakes up and grins.
+            SpriteType::Shark => sprites::npcs::draw_shark(x, y, time, self.gate),
+            SpriteType::SeaTurtle => sprites::npcs::draw_sea_turtle(x, y, time),
+            SpriteType::Dolphin => sprites::npcs::draw_dolphin(x, y, time),
+            SpriteType::Crab => sprites::npcs::draw_crab(x, y, time),
+            SpriteType::Jellyfish => sprites::npcs::draw_jellyfish(x, y, time),
+            SpriteType::AlienGreen => sprites::npcs::draw_alien(x, y, time,
+                Color::from_rgba(124, 207, 120, 255)),
+            SpriteType::AlienRed => sprites::npcs::draw_alien(x, y, time,
+                Color::from_rgba(229, 130, 110, 255)),
+            SpriteType::FuelDepot => sprites::npcs::draw_fuel_depot(x, y, time),
+            SpriteType::StarTerminal => sprites::npcs::draw_star_terminal(x, y, time),
         }
     }
 }
@@ -320,6 +437,9 @@ fn npc(home_map: &'static str, kind: NpcKind, tx: usize, ty: usize, sprite: Spri
         home_ty: ty,
         wander_cooldown: 0.0,
         pathing: None,
+        gate: false,
+        gate_id: None,
+        refuel: false,
     }
 }
 
@@ -359,6 +479,38 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
         "annex" => vec![
             n(Pip, 4, 3, S::Kid2, true, true, false).wandering(),
         ],
+        // Coral reef. Chompy the shark naps in the one gap of the coral wall —
+        // a gate guardian; solve his puzzle and he drifts aside. The rest are
+        // friendly ambient sea folk in the lower lagoon and treasure cove.
+        // Every reef critter is a potential buddy — gift any of them a Dum Dum
+        // to recruit them. Chompy only opens up (literally) once his gate puzzle
+        // is solved; after that he's giftable like the rest.
+        "reef" => vec![
+            n(ReefShark, 8, 5, S::Shark,     true, true,  false).gating("reef_gate_1"),
+            n(SeaTurtle, 4, 7, S::SeaTurtle, true, false, false).wandering(),
+            n(Dolphin,  11, 8, S::Dolphin,   true, false, false).wandering(),
+            n(Crab,      3, 9, S::Crab,      true, true,  false).wandering(),
+            n(Jelly,     5, 2, S::Jellyfish, true, true,  false).wandering(),
+        ],
+        // Orbital hub — Tank the fuel droid tops up the rocket (solve to refuel).
+        "space_hub" => vec![
+            n(FuelBot, 12, 9, S::FuelDepot, false, true, false).refueling(),
+        ],
+        // The Moon — Zorp, a giftable green pal who bounces around the craters.
+        "moon" => vec![
+            n(MoonAlien, 3, 4, S::AlienGreen, true, false, false).wandering(),
+        ],
+        // Red Planet — Rok guards the only gap in the rock wall; solving his
+        // navigation puzzle waves the rocket-kid through to the treasure.
+        "mars" => vec![
+            n(MarsGuardian, 5, 4, S::AlienRed, true, true, false).gating("mars_gate_1"),
+        ],
+        // Asteroid Base — Cassi runs the star-chart (pattern) console; Bleep is
+        // a giftable station buddy.
+        "asteroid_base" => vec![
+            n(StarKeeper,   6, 4, S::StarTerminal, true, false, true),
+            n(StationAlien, 9, 5, S::AlienGreen,   true, true,  false).wandering(),
+        ],
         "control" => vec![
             // Dev knob bay -- each NPC is one control. game.rs intercepts dev-control
             // kinds before the normal interaction flow and applies the effect.
@@ -367,6 +519,15 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(CtrlCraReset,         8,  2, S::OldOak,     false, true, false),
             n(CtrlIntroReset,      10,  2, S::Dog,        false, true, false),
             n(CtrlTriggerKenken,    3,  5, S::Kid1,       false, true, false),
+            n(CtrlTriggerPattern,   5,  5, S::Sage,       false, true, false),
+            n(CtrlTriggerBalance,   6,  5, S::OldOak,     false, true, false),
+            n(CtrlTriggerSudoku,    7,  5, S::Kid1,       false, true, false),
+            n(CtrlToggleEncounters, 2,  7, S::Dog,        false, true, false),
+            n(CtrlTriggerEncounter, 4,  7, S::Sage,       false, true, false),
+            n(CtrlToggleManipulatives, 6, 3, S::Kid2,    false, true, false),
+            n(CtrlTriggerManipulative, 8, 7, S::Mommy,    false, true, false),
+            n(CtrlToggleQuest,      10, 5, S::OldOak,     false, true, false),
+            n(CtrlStartQuest,       10, 7, S::Sage,       false, true, false),
             n(CtrlTriggerChallenge, 8,  5, S::Kid2,       false, true, false),
         ],
         "dev" => vec![

@@ -29,10 +29,12 @@ pub struct Button {
 
 pub fn layout(options: &[MenuOption], screen: (f32, f32)) -> Layout {
     let (sw, sh) = screen;
-    let btn_w = 200.0;
     let btn_h = 56.0;
     let gap = 12.0;
     let count = options.len() as f32;
+    // Shrink buttons to fit the screen width once a puzzler stacks several
+    // options (Talk + four puzzle types), so the strip never runs off-screen.
+    let btn_w = (((sw - 40.0) - (count - 1.0).max(0.0) * gap) / count).min(200.0).max(110.0);
     let total_w = count * btn_w + (count - 1.0).max(0.0) * gap;
     let start_x = sw / 2.0 - total_w / 2.0;
     let y = sh - 220.0;
@@ -61,6 +63,8 @@ pub fn handle_input(layout: &Layout, input: &FrameInput) -> Option<MenuAction> {
             1 => Some(KeyCode::Key1),
             2 => Some(KeyCode::Key2),
             3 => Some(KeyCode::Key3),
+            4 => Some(KeyCode::Key4),
+            5 => Some(KeyCode::Key5),
             _ => None,
         };
         if let Some(kc) = kc {

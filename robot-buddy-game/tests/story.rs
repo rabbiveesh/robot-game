@@ -158,6 +158,392 @@ fn sage_offers_kenken_and_solving_it_completes_the_session() {
 }
 
 #[test]
+fn sage_offers_pattern_and_solving_it_rewards() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Sage);
+
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu,
+        "puzzler NPC should open the menu with a pattern option");
+
+    let mark = h.mark();
+    let start_dums = h.game.dum_dums;
+    h.select_option("pattern");
+    h.wait_until(|g| g.state == GameState::Pattern);
+
+    h.solve_pattern_correctly();
+
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::PatternStarted { .. })),
+        "expected PatternStarted; got: {:?}", events,
+    );
+    let resolved = events.iter().find_map(|e| match e {
+        GameEvent::PatternResolved { correct, attempts, .. } => Some((*correct, *attempts)),
+        _ => None,
+    }).expect(&format!("expected PatternResolved; got: {:?}", events));
+    assert_eq!(resolved.0, true, "solving with the correct first pick is correct");
+    assert_eq!(resolved.1, 1, "one clean pick = one attempt");
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::DumDumsAwarded { .. })),
+        "solving a pattern should award dum_dums; got: {:?}", events,
+    );
+    assert_eq!(h.game.dum_dums, start_dums + 1);
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
+fn pattern_wrong_pick_bounces_back_then_solves() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Sage);
+    h.interact();
+
+    let mark = h.mark();
+    h.select_option("pattern");
+    h.wait_until(|g| g.state == GameState::Pattern);
+
+    // A wrong pick must NOT end the puzzle — it bounces back for another try
+    // (fail gracefully, never punish).
+    h.select_wrong_pattern_choice();
+    assert_eq!(h.game.state, GameState::Pattern, "wrong pick should keep the puzzle open");
+    {
+        let ap = h.game.active_pattern().expect("pattern still active after a wrong pick");
+        assert!(ap.session.last_wrong.is_some(), "wrong pick recorded for bounce-back");
+    }
+
+    h.solve_pattern_correctly();
+    let events = h.events_since(mark);
+    let attempts = events.iter().find_map(|e| match e {
+        GameEvent::PatternResolved { attempts, .. } => Some(*attempts),
+        _ => None,
+    }).expect("expected PatternResolved");
+    assert!(attempts >= 2, "a wrong pick then a right one is at least two attempts, got {attempts}");
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
+fn sage_offers_balance_and_solving_it_rewards() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Sage);
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu);
+
+    let mark = h.mark();
+    let start_dums = h.game.dum_dums;
+    h.select_option("balance");
+    h.wait_until(|g| g.state == GameState::Balance);
+
+    h.solve_balance_correctly();
+
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::BalanceStarted { .. })),
+        "expected BalanceStarted; got: {:?}", events,
+    );
+    let resolved = events.iter().find_map(|e| match e {
+        GameEvent::BalanceResolved { correct, attempts, .. } => Some((*correct, *attempts)),
+        _ => None,
+    }).expect(&format!("expected BalanceResolved; got: {:?}", events));
+    assert_eq!(resolved, (true, 1), "one clean guess solves it");
+    assert_eq!(h.game.dum_dums, start_dums + 1, "solving a balance awards a dum dum");
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
+fn balance_wrong_guess_tips_then_solves() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Sage);
+    h.interact();
+
+    let mark = h.mark();
+    h.select_option("balance");
+    h.wait_until(|g| g.state == GameState::Balance);
+
+    h.select_wrong_balance_value();
+    assert_eq!(h.game.state, GameState::Balance, "a wrong guess keeps the scale open");
+    {
+        let ab = h.game.active_balance().expect("balance still active after a wrong guess");
+        assert!(ab.session.last_wrong.is_some(), "wrong guess recorded for the tip animation");
+    }
+
+    h.solve_balance_correctly();
+    let events = h.events_since(mark);
+    let attempts = events.iter().find_map(|e| match e {
+        GameEvent::BalanceResolved { attempts, .. } => Some(*attempts),
+        _ => None,
+    }).expect("expected BalanceResolved");
+    assert!(attempts >= 2, "wrong then right is at least two attempts, got {attempts}");
+}
+
+#[test]
+fn sage_offers_sudoku_and_solving_it_rewards() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Sage);
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu);
+
+    let mark = h.mark();
+    let start_dums = h.game.dum_dums;
+    h.select_option("sudoku");
+    h.wait_until(|g| g.state == GameState::Sudoku);
+
+    let grid = h.game.active_sudoku().expect("active Sudoku after picking 'sudoku'")
+        .session.puzzle.grid_size;
+    assert!(grid == 4 || grid == 6, "sudoku grid should be 4 or 6, got {grid}");
+
+    h.solve_sudoku_correctly();
+
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::SudokuStarted { .. })),
+        "expected SudokuStarted; got: {:?}", events,
+    );
+    let resolved = events.iter().find_map(|e| match e {
+        GameEvent::SudokuResolved { correct, grid_size, constraint_violations, .. } =>
+            Some((*correct, *grid_size, *constraint_violations)),
+        _ => None,
+    }).expect(&format!("expected SudokuResolved; got: {:?}", events));
+    assert_eq!(resolved, (true, grid, 0),
+        "solving by the known solution resolves correct with no violations");
+    assert_eq!(h.game.dum_dums, start_dums + 1, "solving a sudoku awards a dum dum");
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
+fn shopkeeper_sells_a_cosmetic_via_embedded_subtraction() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to_npc(NpcKind::Shopkeeper);
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu, "shopkeeper should offer a menu");
+
+    let start = h.game.dum_dums; // dev game starts at 20
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+
+    let mark = h.mark();
+    h.buy_shop_item("hat"); // costs 3 → solve 20 - 3 = 17
+
+    assert_eq!(h.game.dum_dums, start - 3, "buying the hat spends its cost");
+    let events = h.events_since(mark);
+    let spent = events.iter().find_map(|e| match e {
+        GameEvent::DumDumsSpent { amount, item } => Some((*amount, item.clone())),
+        _ => None,
+    }).expect(&format!("expected DumDumsSpent; got: {:?}", events));
+    assert_eq!(spent, (3, "hat".to_string()));
+
+    h.close_shop();
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
+fn click_to_walk_routes_the_player_toward_the_tapped_tile() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    let start = (h.game.player.tile_x, h.game.player.tile_y);
+    let (w, ht) = (h.game.map.width, h.game.map.height);
+
+    // Pick the farthest reachable tile within a small radius — a real multi-tile
+    // path that the BFS router can actually solve over the dev map.
+    let mut target = start;
+    let mut best = 0usize;
+    for r in start.1.saturating_sub(4)..=(start.1 + 4).min(ht - 1) {
+        for c in start.0.saturating_sub(4)..=(start.0 + 4).min(w - 1) {
+            let goal = (c, r);
+            if goal == start {
+                continue;
+            }
+            let walkable = |cc: usize, rr: usize| !h.game.map.is_solid(cc, rr);
+            if let Some(p) = robot_buddy_game::pathfinding::find_path(start, goal, w, ht, walkable) {
+                if p.len() > best {
+                    best = p.len();
+                    target = goal;
+                }
+            }
+        }
+    }
+    assert!(best > 0, "expected a reachable tile near the player");
+
+    let manhattan = |a: (usize, usize), b: (usize, usize)| {
+        (a.0 as i32 - b.0 as i32).unsigned_abs() + (a.1 as i32 - b.1 as i32).unsigned_abs()
+    };
+    let before = manhattan(start, target);
+
+    h.click_tile(target.0, target.1);
+    h.advance(300); // ~16 frames/tile; plenty to traverse a few tiles
+
+    let now = (h.game.player.tile_x, h.game.player.tile_y);
+    assert_ne!(now, start, "a tap should set the player walking");
+    assert!(
+        manhattan(now, target) < before,
+        "the player should end up closer to the tapped tile (start {:?}, now {:?}, target {:?})",
+        start, now, target,
+    );
+}
+
+#[test]
+fn tapping_an_npc_walks_over_and_auto_interacts() {
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    // Stand next to Sage first (reliable), then tap Sage — arrival should fire
+    // the interaction automatically (Sage is a puzzler → the menu opens), no
+    // separate Space press.
+    h.walk_to_npc(NpcKind::Sage);
+    let sage = h.game.npcs.iter().find(|n| n.kind == NpcKind::Sage)
+        .map(|n| (n.entity.tile_x, n.entity.tile_y))
+        .expect("Sage on the dev map");
+
+    h.click_tile(sage.0, sage.1);
+    h.wait_until(|g| g.state == GameState::InteractionMenu);
+
+    let p = (h.game.player.tile_x, h.game.player.tile_y);
+    let dist = (p.0 as i32 - sage.0 as i32).abs() + (p.1 as i32 - sage.1 as i32).abs();
+    assert_eq!(dist, 1, "player should be standing next to Sage when it auto-interacts");
+}
+
+#[test]
+fn parent_overlay_toggles_feature_flags_in_game() {
+    use robot_buddy_game::ui::settings_overlay::Feature;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    assert!(!h.game.features.encounters);
+    assert!(!h.game.features.quest);
+
+    // Open settings → reveal the parent section → flip two features on.
+    h.open_settings();
+    h.click_parent_options();
+    h.toggle_feature_in_settings(Feature::Encounters);
+    assert!(h.game.features.encounters, "parent overlay should enable encounters");
+    h.toggle_feature_in_settings(Feature::Quest);
+    assert!(h.game.features.quest, "parent overlay should enable quests");
+
+    // Toggling again turns it back off (it's a real toggle).
+    h.toggle_feature_in_settings(Feature::Encounters);
+    assert!(!h.game.features.encounters, "toggling again disables it");
+}
+
+#[test]
+fn dev_toggle_flips_the_quest_flag() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    assert!(!h.game.features.quest, "quests default OFF");
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlToggleQuest);
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    assert!(h.game.features.quest, "dev knob should enable quests");
+}
+
+#[test]
+fn dev_quest_runs_to_completion_with_embedded_math() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlStartQuest);
+
+    let mark = h.mark();
+    let start = h.game.dum_dums;
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Quest);
+    assert!(h.game.active_quest().is_some(), "a quest should be running");
+
+    h.play_quest();
+    assert_eq!(h.game.state, GameState::Playing, "finishing the quest returns to play");
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::QuestCompleted)),
+        "expected QuestCompleted; got: {:?}", events,
+    );
+    assert_eq!(h.game.dum_dums, start + 3, "the welcome quest pays out 3 Dum Dums");
+}
+
+#[test]
+fn dev_toggle_flips_the_manipulatives_flag() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    assert!(!h.game.features.cra_manipulatives, "manipulatives default OFF");
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlToggleManipulatives);
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    assert!(h.game.features.cra_manipulatives, "dev knob should enable CRA manipulatives");
+}
+
+#[test]
+fn dev_manipulative_is_hands_on_and_rewards_like_a_challenge() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlTriggerManipulative);
+
+    let mark = h.mark();
+    let start = h.game.dum_dums;
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Manipulative);
+    assert!(h.game.active_manipulative().is_some(), "a manipulative should be active");
+
+    h.solve_manipulative();
+    assert_eq!(h.game.state, GameState::Playing);
+    assert_eq!(h.game.dum_dums, start + 1, "solving the manipulative rewards a Dum Dum");
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::ChallengeResolved { correct: true, .. })),
+        "manipulative completion feeds the same resolved signal; got: {:?}", events,
+    );
+}
+
+#[test]
+fn dev_toggle_flips_the_encounters_flag() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    assert!(!h.game.features.encounters, "encounters default OFF (suite + normal play unaffected)");
+
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlToggleEncounters);
+    h.interact();
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    assert!(h.game.features.encounters, "the dev knob should enable encounters for playtesting");
+}
+
+#[test]
+fn dev_trigger_fires_and_routes_an_encounter() {
+    use macroquad::prelude::KeyCode;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.walk_to(2, 9);
+    h.step_through_portal(KeyCode::Left, "control");
+    h.walk_to_npc(NpcKind::CtrlTriggerEncounter);
+
+    let mark = h.mark();
+    h.interact();
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::EncounterTriggered { .. })),
+        "expected an EncounterTriggered event; got: {:?}", events,
+    );
+    // Encounters route to dialogue (flavor / sighting / found-dum-dum) or a challenge.
+    assert!(
+        matches!(h.game.state, GameState::Dialogue | GameState::Challenge),
+        "encounter should open dialogue or a challenge, got {:?}", h.game.state,
+    );
+}
+
+#[test]
 fn kenken_intro_shows_on_first_puzzle_only() {
     let mut h = Harness::new(7);
     h.start_dev_game();
@@ -1267,4 +1653,247 @@ fn pushing_an_npc_through_a_new_maps_portal_transfers_them() {
     assert!(dev.iter().any(|n| n.kind == NpcKind::Pip),
         "Pip should now live in the dev roster; got {:?}",
         dev.iter().map(|n| n.kind).collect::<Vec<_>>());
+}
+
+// ─── Coral reef: paid dive portal + gate-guardian shark ──────────────────
+
+/// Helpers shared by the reef tests: park Sparky out of the way and snap the
+/// player to a tile without animating there.
+fn park_sparky(h: &mut Harness) {
+    h.game.sparky.entity.tile_x = 1;
+    h.game.sparky.entity.tile_y = 1;
+    h.game.sparky.entity.x = 48.0;
+    h.game.sparky.entity.y = 48.0;
+    h.game.sparky.entity.target_x = 48.0;
+    h.game.sparky.entity.target_y = 48.0;
+    h.game.sparky.entity.moving = false;
+}
+
+fn snap_player(h: &mut Harness, tx: usize, ty: usize) {
+    h.game.player.tile_x = tx;
+    h.game.player.tile_y = ty;
+    h.game.player.x = tx as f32 * 48.0;
+    h.game.player.y = ty as f32 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+}
+
+#[test]
+fn diving_into_the_reef_costs_dum_dums() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(11);
+    h.start_dev_game(); // 20 dum dums
+    // Warp to the overworld grass just below the reef dive spot (17,15).
+    h.game.map = Map::overworld();
+    h.game.npcs = npc_mod::npcs_for_map("overworld");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+    snap_player(&mut h, 17, 16);
+
+    // Too poor to dive: Sparky gently turns us back, no transfer.
+    h.game.dum_dums = 1;
+    let mark = h.mark();
+    h.hold(KeyCode::Up);     // step onto the dive tile
+    h.advance(24);           // finish the step + portal check
+    assert_eq!(h.game.map.id, "overworld", "can't dive without paying the toll");
+    h.finish_dialogue();     // dismiss Sparky's "we need more Dum Dums"
+
+    // Now we can afford it — first dive charges the toll.
+    snap_player(&mut h, 17, 16);
+    h.game.dum_dums = 10;
+    h.step_through_portal(KeyCode::Up, "reef");
+    assert_eq!(h.game.map.id, "reef", "paying the toll opens the dive");
+    assert_eq!(h.game.dum_dums, 7, "the first dive spends the 3-Dum-Dum toll");
+    assert!(
+        h.events_since(mark).iter().any(|e| matches!(e, GameEvent::DumDumsSpent { .. })),
+        "a paid dive emits DumDumsSpent; got {:?}", h.events_since(mark),
+    );
+    h.finish_dialogue(); // dismiss the "we're underwater!" entry beat
+
+    // The toll is ONE-TIME: warp back to the dive spot and dive again — free now.
+    h.game.map = Map::overworld();
+    h.game.npcs = npc_mod::npcs_for_map("overworld");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+    snap_player(&mut h, 17, 16);
+    let before_second = h.game.dum_dums; // 7
+    h.step_through_portal(KeyCode::Up, "reef");
+    assert_eq!(h.game.map.id, "reef", "the unlocked dive still works");
+    assert_eq!(h.game.dum_dums, before_second, "a second dive is free (one-time toll)");
+}
+
+#[test]
+fn solving_the_reef_shark_opens_the_passage() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(5);
+    h.start_dev_game();
+    // Warp straight into the reef's lower lagoon.
+    h.game.map = Map::reef();
+    h.game.npcs = npc_mod::npcs_for_map("reef");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+    // Freeze ambient critters so they don't wander into the path mid-walk.
+    for n in h.game.npcs.iter_mut() { n.wander_cooldown = 9999.0; }
+    snap_player(&mut h, 8, 9);
+
+    // Chompy starts as a closed gate plugging the only gap in the coral wall.
+    assert!(
+        h.game.npcs.iter().any(|n| n.kind == NpcKind::ReefShark && n.gate),
+        "the shark starts as a closed gate",
+    );
+
+    // Approach the shark from below (the gap's only reachable side) and face up.
+    h.walk_to(8, 6);
+    h.hold(KeyCode::Up);
+    let mark = h.mark();
+    h.interact();                                   // gate dialogue + pending challenge
+    h.finish_dialogue();                            // dialogue → challenge
+    h.wait_until(|g| g.state == GameState::Challenge);
+    h.answer_correctly();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    assert!(
+        h.events_since(mark).iter().any(|e| matches!(e, GameEvent::GateOpened { .. })),
+        "solving the shark emits GateOpened; got {:?}", h.events_since(mark),
+    );
+    assert!(
+        h.game.npcs.iter().any(|n| n.kind == NpcKind::ReefShark && !n.gate),
+        "the shark steps aside once its puzzle is solved",
+    );
+    assert!(
+        h.game.gate_is_solved("reef_gate_1"),
+        "the solved gate is recorded so it stays open across sessions",
+    );
+}
+
+#[test]
+fn pushing_an_npc_into_an_unvisited_map_keeps_its_regular_residents() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    // Regression: shoving an NPC into a map whose roster was never stashed must
+    // NOT replace that map's residents with just the intruder. Push Pip
+    // annex->dev (dev has no stash yet), then follow her in — dev must still
+    // have its own regulars alongside Pip.
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = Map::annex();
+    h.game.npcs = npc_mod::npcs_for_map("annex");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+
+    let pip_idx = h.game.npcs.iter().position(|n| n.kind == NpcKind::Pip).unwrap();
+    {
+        let n = &mut h.game.npcs[pip_idx];
+        n.entity.tile_x = 4; n.entity.tile_y = 5;
+        n.entity.x = 4.0 * 48.0; n.entity.y = 5.0 * 48.0;
+        n.entity.target_x = n.entity.x; n.entity.target_y = n.entity.y;
+        n.entity.moving = false;
+        n.wander_cooldown = 9999.0;
+    }
+    park_sparky(&mut h);
+    snap_player(&mut h, 4, 4);
+
+    // Shove Pip down through the annex door at (4,6).
+    for _ in 0..12 { h.hold(KeyCode::Down); }
+    h.advance(20);
+    assert!(!h.game.npcs.iter().any(|n| n.kind == NpcKind::Pip),
+        "Pip should have been pushed off the annex");
+
+    // Follow her through the same door into dev.
+    h.step_through_portal(KeyCode::Down, "dev");
+    assert_eq!(h.game.map.id, "dev");
+
+    // Dev's own residents must still spawn (the bug wiped them)...
+    assert!(h.game.npcs.iter().any(|n| n.kind == NpcKind::Sage),
+        "dev's regular residents must still be present; got {:?}",
+        h.game.npcs.iter().map(|n| n.kind).collect::<Vec<_>>());
+    // ...with the pushed-in Pip joining them.
+    assert!(h.game.npcs.iter().any(|n| n.kind == NpcKind::Pip),
+        "the pushed-in Pip should be present on dev too");
+}
+
+// ─── Space: launchpad, rocket fuel, depot refill ─────────────────────────
+
+#[test]
+fn launching_from_the_lab_reaches_the_orbital_hub() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(3);
+    h.start_dev_game();
+    h.game.map = Map::lab();
+    h.game.npcs = npc_mod::npcs_for_map("lab");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+
+    // Stand just below Gizmo's launchpad at (10,2) and blast off.
+    snap_player(&mut h, 10, 3);
+    let fuel_before = h.game.fuel();
+    h.step_through_portal(KeyCode::Up, "space_hub");
+    assert_eq!(h.game.map.id, "space_hub", "the launchpad blasts off to the hub");
+    assert_eq!(h.game.fuel(), fuel_before, "launching to the hub is free");
+
+    // The Moon is a free hop from the hub.
+    h.finish_dialogue(); // "BLAST OFF!" entry beat
+    snap_player(&mut h, 3, 3); // just below the Moon pad at (3,2)
+    h.step_through_portal(KeyCode::Up, "moon");
+    assert_eq!(h.game.map.id, "moon");
+    assert_eq!(h.game.fuel(), fuel_before, "the Moon hop costs no fuel");
+}
+
+#[test]
+fn rocket_jumps_burn_fuel_and_the_depot_refills() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(21);
+    h.start_dev_game();
+    h.game.map = Map::space_hub();
+    h.game.npcs = npc_mod::npcs_for_map("space_hub");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+
+    // Empty tank: the Mars jump (3 fuel) is gently refused — no transfer.
+    h.game.set_fuel(0);
+    snap_player(&mut h, 11, 3); // just below the Mars pad at (11,2)
+    for _ in 0..24 { h.hold(KeyCode::Up); }
+    assert_eq!(h.game.map.id, "space_hub", "an empty tank can't make the Mars jump");
+    h.finish_dialogue();
+
+    // Refuel at Tank the fuel droid by solving its puzzle.
+    snap_player(&mut h, 12, 8); // just above the depot at (12,9)
+    h.hold(KeyCode::Down);      // face the droid
+    let mark = h.mark();
+    h.interact();
+    h.finish_dialogue();        // depot greeting → refill puzzle
+    h.wait_until(|g| g.state == GameState::Challenge);
+    h.answer_correctly();
+    h.wait_until(|g| g.state == GameState::Playing);
+    assert_eq!(h.game.fuel(), 10, "solving the depot tops the tank to full");
+    assert!(
+        h.events_since(mark).iter().any(|e| matches!(e, GameEvent::Refueled { .. })),
+        "refueling emits Refueled; got {:?}", h.events_since(mark),
+    );
+
+    // Now the Mars jump goes through and burns 3 fuel.
+    snap_player(&mut h, 11, 3);
+    h.step_through_portal(KeyCode::Up, "mars");
+    assert_eq!(h.game.map.id, "mars");
+    assert_eq!(h.game.fuel(), 7, "the Mars jump burns 3 fuel");
 }

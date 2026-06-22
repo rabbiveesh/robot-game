@@ -156,10 +156,21 @@ impl Harness {
         // Advance Sparky's intro dialogue.
         self.finish_dialogue();
 
-        // Five questions; each ends with Phase::Complete which gets dismissed,
-        // then either a Transition phase or the Complete branch (final dialogue).
-        for _ in 0..5 {
-            self.wait_until(|g| g.correct_choice_index().is_some());
+        // Intake length is adaptive, so answer questions until it ends (the
+        // game leaves Intake for the "all done!" dialogue) rather than a fixed
+        // count. Safety-bounded so a stuck intake fails loudly.
+        for _ in 0..8 {
+            if self.game.state != GameState::Intake {
+                break;
+            }
+            // Either a question is on screen, or we're between questions.
+            self.run_until(
+                |g| g.correct_choice_index().is_some() || g.state != GameState::Intake,
+                DEFAULT_BUDGET,
+            );
+            if self.game.state != GameState::Intake {
+                break;
+            }
             self.answer_challenge_correctly();
         }
 
@@ -269,6 +280,8 @@ impl Harness {
             1 => KeyCode::Key1,
             2 => KeyCode::Key2,
             3 => KeyCode::Key3,
+            4 => KeyCode::Key4,
+            5 => KeyCode::Key5,
             n => panic!("unsupported option key {}", n),
         };
         self.press(key);
@@ -371,6 +384,296 @@ impl Harness {
         }
         // Dismiss completion screen.
         self.press(KeyCode::Space);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
+    // ─── Pattern helpers ─────────────────────────────────
+
+    /// Click the choice at `index` in the active pattern puzzle.
+    pub fn select_pattern_choice(&mut self, index: usize) {
+        let (x, y) = {
+            let ap = self.game.active_pattern().expect("select_pattern_choice: no active pattern");
+            let layout = ui::patterns::layout(&ap.session, SCREEN);
+            let rect = layout.choices.iter().find(|c| c.index == index)
+                .expect("select_pattern_choice: choice index out of range").rect;
+            (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Pick a deliberately wrong choice (no-op if the puzzle has only the
+    /// answer, which never happens). Lets tests exercise the bounce-back path.
+    pub fn select_wrong_pattern_choice(&mut self) {
+        let wrong = {
+            let ap = self.game.active_pattern().expect("select_wrong_pattern_choice: no active pattern");
+            let correct = ap.session.puzzle.correct_choice();
+            (0..ap.session.puzzle.choices.len()).find(|&i| i != correct)
+                .expect("pattern must have at least one wrong choice")
+        };
+        self.select_pattern_choice(wrong);
+    }
+
+    /// Solve the active pattern by clicking the correct choice, then dismiss the
+    /// celebration and land back in Playing.
+    pub fn solve_pattern_correctly(&mut self) {
+        let correct = {
+            let ap = self.game.active_pattern().expect("solve_pattern_correctly: no active pattern");
+            ap.session.puzzle.correct_choice()
+        };
+        self.select_pattern_choice(correct);
+        self.press(KeyCode::Space);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
+    // ─── Balance helpers ─────────────────────────────────
+
+    /// Click the choice whose value equals `value` in the active balance puzzle.
+    pub fn select_balance_value(&mut self, value: i32) {
+        let (x, y) = {
+            let ab = self.game.active_balance().expect("select_balance_value: no active balance");
+            let layout = ui::balance::layout(&ab.session, SCREEN);
+            let rect = layout.choices.iter().find(|c| c.value == value)
+                .unwrap_or_else(|| panic!("select_balance_value: no choice {value}")).rect;
+            (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Pick a deliberately wrong value to exercise the tip-and-retry path.
+    pub fn select_wrong_balance_value(&mut self) {
+        let wrong = {
+            let ab = self.game.active_balance().expect("select_wrong_balance_value: no active balance");
+            let answer = ab.session.puzzle.correct_answer;
+            ab.session.puzzle.choices.iter().copied().find(|&v| v != answer)
+                .expect("balance must have a wrong choice")
+        };
+        self.select_balance_value(wrong);
+    }
+
+    /// Solve the active balance by guessing the correct answer, then dismiss the
+    /// celebration and land back in Playing.
+    pub fn solve_balance_correctly(&mut self) {
+        let answer = {
+            let ab = self.game.active_balance().expect("solve_balance_correctly: no active balance");
+            ab.session.puzzle.correct_answer
+        };
+        self.select_balance_value(answer);
+        self.press(KeyCode::Space);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
+    // ─── Sudoku helpers ──────────────────────────────────
+
+    /// Place `value` at (row, col) in the active Sudoku by clicking the cell
+    /// then the matching picker — same cell-select → value-pick flow as KenKen.
+    pub fn place_sudoku_cell(&mut self, row: u8, col: u8, value: u8) {
+        let (cell_x, cell_y, picker_x, picker_y) = {
+            let asd = self.game.active_sudoku().expect("place_sudoku_cell: no active Sudoku");
+            let layout = ui::sudoku::layout(&asd.session, SCREEN);
+            let cell = layout.cells[row as usize][col as usize];
+            let picker = &layout.pickers[(value - 1) as usize].rect;
+            (cell.x + cell.w / 2.0, cell.y + cell.h / 2.0,
+             picker.x + picker.w / 2.0, picker.y + picker.h / 2.0)
+        };
+        self.click(cell_x, cell_y);
+        self.click(picker_x, picker_y);
+    }
+
+    /// Fill every blank cell with the known solution, then dismiss the
+    /// celebration and land back in Playing.
+    pub fn solve_sudoku_correctly(&mut self) {
+        let fills = {
+            let asd = self.game.active_sudoku().expect("solve_sudoku_correctly: no active Sudoku");
+            let n = asd.session.puzzle.grid_size as usize;
+            let mut fills: Vec<(u8, u8, u8)> = Vec::new();
+            for r in 0..n {
+                for c in 0..n {
+                    if asd.session.grid[r][c].is_none() {
+                        fills.push((r as u8, c as u8, asd.session.puzzle.solution[r][c]));
+                    }
+                }
+            }
+            fills
+        };
+        for (r, c, v) in fills {
+            self.place_sudoku_cell(r, c, v);
+        }
+        self.press(KeyCode::Space);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
+    // ─── Shop helpers ────────────────────────────────────
+
+    /// Click the catalog row for the item with `item_id` in the open shop.
+    pub fn select_shop_item(&mut self, item_id: &str) {
+        let (x, y) = {
+            let ash = self.game.active_shop().expect("select_shop_item: shop not open");
+            // Browsing view (no item selected yet).
+            let view = ui::shop::ShopView::Browsing;
+            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
+            let idx = ash.catalog.iter().position(|i| i.id == item_id)
+                .unwrap_or_else(|| panic!("no shop item {item_id}"));
+            let row = layout.items.iter().find(|r| r.index == idx)
+                .expect("item row not visible (already buying?)").rect;
+            (row.x + row.w / 2.0, row.y + row.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Tap the answer tile with value `value` during a purchase subtraction.
+    pub fn answer_shop_math(&mut self, value: u32) {
+        let (x, y) = {
+            let ash = self.game.active_shop().expect("answer_shop_math: shop not open");
+            let i = ash.selected.expect("answer_shop_math: not currently buying");
+            let view = ui::shop::ShopView::Buying {
+                item: &ash.catalog[i],
+                balance: ash.balance_before,
+                cost: ash.cost,
+                choices: &ash.choices,
+            };
+            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
+            let tile = layout.answers.iter().find(|t| t.value == value)
+                .unwrap_or_else(|| panic!("no answer tile {value}")).rect;
+            (tile.x + tile.w / 2.0, tile.y + tile.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Buy `item_id` end-to-end: select it, then tap the correct remainder.
+    pub fn buy_shop_item(&mut self, item_id: &str) {
+        self.select_shop_item(item_id);
+        let answer = {
+            let ash = self.game.active_shop().expect("buy_shop_item: shop not open");
+            ash.answer
+        };
+        self.answer_shop_math(answer);
+    }
+
+    /// Click the shop's "Done" button to leave and return to Playing.
+    pub fn close_shop(&mut self) {
+        let (x, y) = {
+            let ash = self.game.active_shop().expect("close_shop: shop not open");
+            let view = match ash.selected {
+                Some(i) => ui::shop::ShopView::Buying {
+                    item: &ash.catalog[i], balance: ash.balance_before, cost: ash.cost, choices: &ash.choices,
+                },
+                None => ui::shop::ShopView::Browsing,
+            };
+            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
+            (layout.close_btn.x + layout.close_btn.w / 2.0, layout.close_btn.y + layout.close_btn.h / 2.0)
+        };
+        self.click(x, y);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
+    // ─── CRA manipulative helpers ────────────────────────
+
+    fn click_manip_button(&mut self, label: &str) {
+        let (x, y) = {
+            let am = self.game.active_manipulative().expect("click_manip_button: no manipulative");
+            let layout = ui::manipulative::layout(&am.manip, SCREEN);
+            let b = layout.buttons.iter().find(|b| b.label == label)
+                .unwrap_or_else(|| panic!("no manip button '{label}'"));
+            (b.rect.x + b.rect.w / 2.0, b.rect.y + b.rect.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Drive the active CRA manipulative to completion with the correct moves,
+    /// then dismiss and land back in Playing.
+    pub fn solve_manipulative(&mut self) {
+        use robot_buddy_game::ui::manipulative::Manip;
+        use robot_buddy_domain::logic::manipulate_concrete::ConcreteKind;
+        let labels: Vec<&'static str> = {
+            let am = self.game.active_manipulative().expect("solve_manipulative: no manipulative");
+            match &am.manip {
+                Manip::Concrete(s) => match s.puzzle.kind {
+                    ConcreteKind::AddGroups => {
+                        let mut v = vec!["+ Red"; s.puzzle.a as usize];
+                        v.extend(std::iter::repeat("+ Blue").take(s.puzzle.b as usize));
+                        v
+                    }
+                    ConcreteKind::Count | ConcreteKind::BuildTower => {
+                        vec!["Add one"; s.puzzle.target as usize]
+                    }
+                    ConcreteKind::TakeAway => vec!["Take one"; s.puzzle.b as usize],
+                },
+                Manip::NumberLine(s) => {
+                    if s.puzzle.target >= s.puzzle.start {
+                        vec!["Forward ▶"; (s.puzzle.target - s.puzzle.start) as usize]
+                    } else {
+                        vec!["◀ Back"; (s.puzzle.start - s.puzzle.target) as usize]
+                    }
+                }
+            }
+        };
+        for label in labels {
+            self.click_manip_button(label);
+        }
+        self.press(KeyCode::Space);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
+    // ─── Settings / parent overlay helpers ──────────────
+
+    /// Open the settings overlay (the in-game gear; T key).
+    pub fn open_settings(&mut self) {
+        self.press(KeyCode::T);
+    }
+
+    /// Click the center of map tile `(col, row)` — inverts the camera transform
+    /// (`screen = world - camera`) so it lands on that tile for click-to-walk.
+    pub fn click_tile(&mut self, col: usize, row: usize) {
+        const TILE: f32 = 48.0;
+        let sx = (col as f32 + 0.5) * TILE - self.game.camera.x;
+        let sy = (row as f32 + 0.5) * TILE - self.game.camera.y;
+        self.click(sx, sy);
+    }
+
+    /// Click the "Parent options" reveal row in the open settings overlay.
+    pub fn click_parent_options(&mut self) {
+        let (x, y) = robot_buddy_game::ui::settings_overlay::parent_toggle_center(SCREEN);
+        self.click(x, y);
+    }
+
+    /// Click a feature toggle in the (revealed) parent section.
+    pub fn toggle_feature_in_settings(&mut self, feature: robot_buddy_game::ui::settings_overlay::Feature) {
+        let (x, y) = robot_buddy_game::ui::settings_overlay::feature_toggle_center(SCREEN, feature);
+        self.click(x, y);
+    }
+
+    // ─── Quest helpers ───────────────────────────────────
+
+    /// Play the active quest to completion: tap Continue through narrative /
+    /// travel / reward beats, and answer each embedded MathPuzzle correctly
+    /// (picking the answer's tile by number key). Lands back in Playing.
+    pub fn play_quest(&mut self) {
+        use robot_buddy_domain::quest::QuestStep;
+        for _ in 0..80 {
+            // Number-key index to press: the answer tile for a MathPuzzle, or
+            // the first option for a Choice. `None` = a Continue beat (Space).
+            let key_idx = {
+                let Some(aq) = self.game.active_quest() else { break };
+                match aq.session.current_step() {
+                    Some(QuestStep::MathPuzzle { .. }) => {
+                        let p = aq.puzzle.as_ref().expect("puzzle step must have generated choices");
+                        Some(p.choices.iter().position(|&c| c == p.answer)
+                            .expect("answer must be among the choices"))
+                    }
+                    Some(QuestStep::Choice { .. }) => Some(0), // pick the first option
+                    Some(_) => None,                            // narrative / travel / reward
+                    None => break,
+                }
+            };
+            match key_idx {
+                Some(0) => self.press(KeyCode::Key1),
+                Some(1) => self.press(KeyCode::Key2),
+                Some(2) => self.press(KeyCode::Key3),
+                Some(3) => self.press(KeyCode::Key4),
+                Some(_) => panic!("unexpected tile index"),
+                None => self.press(KeyCode::Space),
+            }
+        }
         self.wait_until(|g| g.state == GameState::Playing);
     }
 

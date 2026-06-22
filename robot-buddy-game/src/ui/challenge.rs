@@ -101,6 +101,46 @@ fn sanitize_math_text(text: &str) -> String {
         .replace('\u{00f7}', "/")  // division sign → slash
 }
 
+/// Draw the question prompt centered at `cy`, fitting it into `max_w`. Short
+/// prompts ("7 x 3") draw at `max_size`; long scene-framed word problems
+/// ("A frog hops 7 times, then 3 more! How many hops?") shrink toward a floor,
+/// then wrap to two lines if even that won't fit. Returns the vertical space the
+/// prompt consumed below `cy`, so callers can flow content beneath a tall prompt.
+fn draw_question(text: &str, cx: f32, cy: f32, max_w: f32, max_size: f32) -> f32 {
+    const FLOOR: f32 = 24.0;
+    let fits = |size: f32| measure_text(text, None, size as u16, 1.0).width <= max_w;
+
+    // Largest size in [FLOOR, max_size] that fits on one line.
+    let mut size = max_size;
+    while size > FLOOR && !fits(size) {
+        size -= 2.0;
+    }
+    if fits(size) {
+        let w = measure_text(text, None, size as u16, 1.0).width;
+        draw_text(text, cx - w / 2.0, cy, size, WHITE);
+        return 0.0;
+    }
+
+    // Still too wide at the floor — wrap to two lines on word boundaries.
+    let words: Vec<&str> = text.split(' ').collect();
+    let mut split = words.len() / 2;
+    for i in 1..words.len() {
+        let head = words[..i].join(" ");
+        if measure_text(&head, None, FLOOR as u16, 1.0).width > max_w / 2.0 {
+            split = i.max(1);
+            break;
+        }
+    }
+    let line1 = words[..split].join(" ");
+    let line2 = words[split..].join(" ");
+    let line_h = FLOOR + 6.0;
+    for (i, line) in [line1, line2].iter().enumerate() {
+        let w = measure_text(line, None, FLOOR as u16, 1.0).width;
+        draw_text(line, cx - w / 2.0, cy + i as f32 * line_h, FLOOR, WHITE);
+    }
+    line_h
+}
+
 fn round_rect(x: f32, y: f32, w: f32, h: f32, r: f32, color: Color) {
     // Center rect + corner circles for rounded appearance
     draw_rectangle(x + r, y, w - 2.0 * r, h, color);
@@ -136,18 +176,16 @@ pub fn draw_challenge(cs: &ChallengeState, challenge: &Challenge, time: f32) -> 
     round_rect(panel_x, panel_y, panel_w, panel_h, 16.0, DARK_BG);
     round_rect_lines(panel_x, panel_y, panel_w, panel_h, 16.0, 4.0, GOLD);
 
-    // Question (replace Unicode math symbols that may not be in default font)
+    // Question (Unicode math symbols sanitized; long word problems shrink/wrap)
     let q_text = sanitize_math_text(&cs.question.display);
-    let q_size = 42.0;
-    let q_w = measure_text(&q_text, None, q_size as u16, 1.0).width;
-    draw_text(&q_text, panel_x + panel_w / 2.0 - q_w / 2.0, panel_y + 72.0, q_size, WHITE);
+    let q_extra = draw_question(&q_text, panel_x + panel_w / 2.0, panel_y + 72.0, panel_w - 48.0, 42.0);
 
     // CRA visual hint (if show-me was used)
-    let mut hint_offset = 0.0;
+    let mut hint_offset = q_extra;
     if cs.hint_used {
-        hint_offset = 80.0;
+        hint_offset = q_extra + 80.0;
         let viz_cx = panel_x + panel_w / 2.0;
-        let viz_cy = panel_y + 110.0;
+        let viz_cy = panel_y + 110.0 + q_extra;
         visuals::draw_visual(challenge, viz_cx, viz_cy, time);
     }
 
@@ -266,14 +304,13 @@ fn draw_teaching_phase(cs: &ChallengeState, challenge: &Challenge, time: f32, sw
     let hw = measure_text(header, None, 28, 1.0).width;
     draw_text(header, panel_x + panel_w / 2.0 - hw / 2.0, panel_y + 42.0, 28.0, ORANGE);
 
-    // Question
+    // Question (long word problems shrink/wrap to fit the panel)
     let q_text = sanitize_math_text(&cs.question.display);
-    let qw = measure_text(&q_text, None, 34, 1.0).width;
-    draw_text(&q_text, panel_x + panel_w / 2.0 - qw / 2.0, panel_y + 86.0, 34.0, WHITE);
+    let q_extra = draw_question(&q_text, panel_x + panel_w / 2.0, panel_y + 86.0, panel_w - 48.0, 34.0);
 
     // Visual walkthrough (always concrete in teaching)
     let viz_cx = panel_x + panel_w / 2.0;
-    let viz_cy = panel_y + 120.0;
+    let viz_cy = panel_y + 120.0 + q_extra;
     visuals::draw_visual(challenge, viz_cx, viz_cy, time);
 
     // Answer

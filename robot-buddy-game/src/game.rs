@@ -7,6 +7,7 @@
 use crate::prelude::*;
 use ::rand::{Rng, SeedableRng};
 use ::rand::rngs::SmallRng;
+use ::rand::seq::SliceRandom;
 use std::collections::HashMap;
 
 use robot_buddy_domain::challenge::challenge_state::{
@@ -23,14 +24,28 @@ use robot_buddy_domain::learning::frustration_detector::{
     BehaviorSignal, detect_frustration,
 };
 use robot_buddy_domain::learning::intake_assessor::{
-    IntakeAnswer, generate_intake_question, process_intake_results, next_intake_band,
+    IntakeAnswer, generate_intake_question, process_intake_results, next_intake_band, intake_complete,
 };
 use robot_buddy_domain::economy::give;
 use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
 use robot_buddy_domain::logic::kenken::{
     self, KenKenAction, KenKenPhase, KenKenSession, cage_ops_for_band, generate_kenken,
 };
-use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel};
+use robot_buddy_domain::logic::patterns::{
+    self, PatternPhase, PatternSession, generate_for_level,
+};
+use robot_buddy_domain::logic::balance::{
+    self, BalancePhase, BalanceSession, generate_for_band as generate_balance_for_band,
+};
+use robot_buddy_domain::logic::sudoku::{
+    self, SudokuPhase, SudokuSession, generate_for_level as generate_sudoku_for_level,
+};
+use robot_buddy_domain::economy::shop::{self, ShopItem};
+use robot_buddy_domain::world::encounters::{self, EncounterConfig, EncounterKind};
+use robot_buddy_domain::logic::manipulate_concrete::{self, ConcreteKind, generate_concrete};
+use robot_buddy_domain::logic::number_line::{self, generate_number_line};
+use robot_buddy_domain::quest::{self, Quest, QuestAction, QuestSession, QuestStatus, QuestStep};
+use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel, Operation};
 use robot_buddy_domain::world::movement::{
     Direction, EntityId, EntityState, GridDims, MoveIntent, MoveResolution,
     Solidity, resolve_moves,
@@ -54,7 +69,8 @@ use crate::input::FrameInput;
 pub const GAME_W: f32 = 960.0;
 pub const GAME_H: f32 = 720.0;
 const MOVE_SPEED: f32 = 200.0;
-const INTAKE_QUESTION_COUNT: usize = 5;
+/// A full fuel tank. Refilling at a depot tops the rocket back up to this.
+const FUEL_MAX: u32 = 10;
 
 /// Where Sparky waits when an NPC has taken over the buddy slot — next to
 /// Professor Gizmo on the overworld so the kid always knows where to find him.
@@ -74,6 +90,27 @@ pub enum GameState {
     Dialogue,
     Challenge,
     KenKen,
+    Pattern,
+    Balance,
+    Sudoku,
+    Shop,
+    Manipulative,
+    Quest,
+}
+
+/// Opt-in toggles for in-development paths that aren't ready for default play.
+/// All default OFF so the test suite and normal play are unaffected; flip them
+/// on in the dev control room (or in production wiring) to playtest. A drop of
+/// tech debt traded for being able to try these before they're fully baked.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FeatureFlags {
+    /// Random encounters fire as the kid explores.
+    pub encounters: bool,
+    /// Add/sub challenges route to a hands-on CRA manipulative instead of the
+    /// multiple-choice quiz when the learner's CRA stage for the op warrants it.
+    pub cra_manipulatives: bool,
+    /// Quests are offered and executable.
+    pub quest: bool,
 }
 
 #[derive(PartialEq, Debug)]
@@ -127,6 +164,69 @@ pub struct ActiveKenKen {
     /// `None` once the kid has tapped past the last step (or already saw the
     /// intro previously). Domain reducer never sees this — it's UI-only state.
     pub intro_step: Option<u8>,
+}
+
+pub struct ActivePattern {
+    pub session: PatternSession,
+    pub complete_timer: f32,
+    pub start_time: f32,
+    pub source_npc: String,
+}
+
+pub struct ActiveBalance {
+    pub session: BalanceSession,
+    pub complete_timer: f32,
+    pub start_time: f32,
+    pub source_npc: String,
+}
+
+pub struct ActiveSudoku {
+    pub session: SudokuSession,
+    pub selected: Option<(u8, u8)>,
+    pub complete_timer: f32,
+    pub start_time: f32,
+    pub source_npc: String,
+}
+
+/// Inline multiple-choice for a quest's MathPuzzle step (kept self-contained so
+/// quests never hand control to the challenge state and back).
+#[derive(Clone)]
+pub struct QuestPuzzle {
+    pub choices: Vec<i32>,
+    pub answer: i32,
+}
+
+pub struct ActiveQuest {
+    pub session: QuestSession,
+    /// Present while the current step is a MathPuzzle.
+    pub puzzle: Option<QuestPuzzle>,
+    pub message: Option<String>,
+}
+
+pub struct ActiveManipulative {
+    pub manip: ui::manipulative::Manip,
+    /// The challenge this manipulative stands in for — drives the learner event
+    /// + prompt so the adaptive system gets the same signal as the quiz path.
+    pub challenge: Challenge,
+    pub complete_timer: f32,
+    pub start_time: f32,
+}
+
+pub struct ActiveShop {
+    pub catalog: Vec<ShopItem>,
+    pub owned: std::collections::HashSet<String>,
+    /// `Some(index)` while solving the purchase subtraction for that catalog
+    /// item; `None` while browsing.
+    pub selected: Option<usize>,
+    pub choices: Vec<u32>,
+    pub answer: u32,
+    pub cost: u32,
+    pub balance_before: u32,
+    pub message: Option<String>,
+    pub source_npc: String,
+    /// True while the outfit-color swatches are up (after buying Color
+    /// Change, or re-opened from its catalog row).
+    pub picking_color: bool,
 }
 
 // ─── Sprites/movement ───────────────────────────────────
@@ -220,6 +320,12 @@ pub enum GameEvent {
     DialogueAdvanced,
     ChallengeStarted { question: String },
     ChallengeResolved { correct: bool, response_ms: f64 },
+    /// A gate guardian's puzzle was solved; the passage is now open.
+    GateOpened { gate_id: String },
+    /// The rocket spent fuel taking a space jump.
+    FuelSpent { amount: u32, remaining: u32 },
+    /// A fuel depot refilled the rocket after its puzzle was solved.
+    Refueled { to: u32 },
     GiftGiven { recipient_id: String, total: u32 },
     /// Emitted when the player's follower NPC changes. `joined` is the NPC who
     /// just became the companion (`None` if the slot was cleared); `left` is
@@ -236,6 +342,33 @@ pub enum GameEvent {
         constraint_violations: u8,
         response_ms: f64,
     },
+    PatternStarted { level: u8, source: String },
+    PatternResolved {
+        correct: bool,
+        level: u8,
+        attempts: u8,
+        response_ms: f64,
+    },
+    BalanceStarted { level: u8, source: String },
+    BalanceResolved {
+        correct: bool,
+        level: u8,
+        attempts: u8,
+        response_ms: f64,
+    },
+    /// A shop purchase succeeded: the kid solved the cost subtraction.
+    DumDumsSpent { amount: u32, item: String },
+    /// A random encounter fired ("flavor" | "dum_dum" | "challenge" | "sighting").
+    EncounterTriggered { kind: String },
+    /// A quest run reached its final step.
+    QuestCompleted,
+    SudokuStarted { grid_size: u8, source: String },
+    SudokuResolved {
+        correct: bool,
+        grid_size: u8,
+        constraint_violations: u8,
+        response_ms: f64,
+    },
 }
 
 // ─── The Game ───────────────────────────────────────────
@@ -245,8 +378,7 @@ pub struct Game {
     pub map: Map,
     pub player: Entity,
     pub sparky: Follower,
-    pub camera: GameCamera,
-    pub npcs: Vec<npc::Npc>,
+    pub camera: GameCamera,    pub npcs: Vec<npc::Npc>,
     /// NPCs that belong to maps the player isn't on right now. Wandering NPCs
     /// who stepped through a portal accumulate here under the destination map
     /// id; on map change we swap the current `npcs` vec with whatever's stashed
@@ -270,6 +402,19 @@ pub struct Game {
     /// park so he doesn't twitch on the same frame he's swapped out.
     sparky_wander_cooldown: f32,
     pub dreaming: bool,
+    /// Remaining tiles of a click-to-walk path the player auto-follows. Empty
+    /// when walking by keyboard. Cleared by keyboard input, interaction, and
+    /// map changes.
+    player_path: Vec<(usize, usize)>,
+    /// When a tap targeted an interactable (NPC / Sparky / chest), the tile to
+    /// auto-interact with on arrival. Taken (one-shot) when the player lands
+    /// adjacent.
+    pending_interact: Option<(usize, usize)>,
+    /// Set for one frame when an arrival should fire the interaction, as if the
+    /// kid pressed Space facing the target.
+    auto_interact: bool,
+    /// The tapped destination tile, shown as a walk marker until arrival.
+    click_target: Option<(usize, usize)>,
 
     // Time
     pub game_time: f32,
@@ -280,7 +425,39 @@ pub struct Game {
     intake: Option<IntakeState>,
     active_challenge: Option<ActiveChallenge>,
     active_kenken: Option<ActiveKenKen>,
+    active_pattern: Option<ActivePattern>,
+    active_balance: Option<ActiveBalance>,
+    active_sudoku: Option<ActiveSudoku>,
+    active_shop: Option<ActiveShop>,
+    active_manipulative: Option<ActiveManipulative>,
+    active_quest: Option<ActiveQuest>,
+    /// Cosmetics bought from Bolt (persisted in the save).
+    shop_owned: std::collections::HashSet<String>,
+    /// Outfit color id for the Color Change cosmetic (persisted in the save).
+    color_choice: String,
+    /// Opt-in in-development feature toggles (default all off).
+    pub features: FeatureFlags,
+    /// Tiles walked since the last random encounter (for encounter pacing).
+    steps_since_encounter: u32,
     pending_challenge: bool,
+    /// Gate id whose challenge is currently on screen (set when the kid takes
+    /// on a gate guardian; cleared when that challenge resolves).
+    opening_gate: Option<String>,
+    /// Gate ids the kid has already solved. Persisted so a guardian stays
+    /// stepped-aside across sessions. Reusable for any map's gates.
+    satisfied_gates: std::collections::HashSet<String>,
+    /// Destination map ids whose one-time entry toll has been paid. After the
+    /// first paid trip, that portal is free forever. Persisted. Reusable.
+    paid_tolls: std::collections::HashSet<String>,
+    /// Rocket fuel for space jumps. Spent per fuel-costed portal, refilled by
+    /// solving Tank the fuel droid's puzzle. Persisted.
+    fuel: u32,
+    /// True while a fuel-depot's refill puzzle is on screen (set on interact,
+    /// consumed when the challenge resolves).
+    pending_refuel: bool,
+    /// Counts down after fuel is spent or refilled so the gauge pulses — makes
+    /// the otherwise-silent fuel change register.
+    fuel_flash: f32,
     new_game_form: Option<NewGameForm>,
 
     // Save / persistence
@@ -306,6 +483,8 @@ pub struct Game {
     dum_dum_hud: DumDumHud,
     debug_overlay: DebugOverlay,
     settings_open: bool,
+    /// Whether the settings overlay's parent-only experimental section is shown.
+    parent_panel_open: bool,
 
     // Soft-block pressure per entity (driver of `Solidity::SoftAfter`).
     // Sparky and the companion are soft-blockers — pressure accumulates while
@@ -339,6 +518,10 @@ impl Game {
             player: Entity::new(14, 12),
             sparky: Follower::new(14, 13),
             camera: GameCamera { x: 0.0, y: 0.0 },
+            player_path: Vec::new(),
+            pending_interact: None,
+            auto_interact: false,
+            click_target: None,
             npcs,
             npcs_offstage: HashMap::new(),
             companion: None,
@@ -351,7 +534,23 @@ impl Game {
             intake: None,
             active_challenge: None,
             active_kenken: None,
+            active_pattern: None,
+            active_balance: None,
+            active_sudoku: None,
+            active_shop: None,
+            active_manipulative: None,
+            active_quest: None,
+            shop_owned: std::collections::HashSet::new(),
+            color_choice: sprites::player::OUTFIT_COLORS[0].0.to_string(),
+            features: FeatureFlags::default(),
+            steps_since_encounter: 0,
             pending_challenge: false,
+            opening_gate: None,
+            satisfied_gates: std::collections::HashSet::new(),
+            paid_tolls: std::collections::HashSet::new(),
+            fuel: FUEL_MAX,
+            pending_refuel: false,
+            fuel_flash: 0.0,
             new_game_form: None,
             player_name: String::new(),
             player_gender: Gender::Boy,
@@ -371,6 +570,7 @@ impl Game {
             dum_dum_hud: DumDumHud::new(),
             debug_overlay: DebugOverlay::new(),
             settings_open: false,
+            parent_panel_open: false,
             pressure: HashMap::new(),
             rng: SmallRng::seed_from_u64(seed),
             events: Vec::new(),
@@ -433,6 +633,51 @@ impl Game {
         self.active_kenken.as_ref()
     }
 
+    /// Read-only view of the active pattern session (None if none is on screen).
+    /// Tests use this with `ui::patterns::layout` to compute click targets.
+    pub fn active_pattern(&self) -> Option<&ActivePattern> {
+        self.active_pattern.as_ref()
+    }
+
+    /// True once the kid has solved the gate guardian with this id. Lets tests
+    /// (and any future UI) check a gate's open state without exposing the set.
+    pub fn gate_is_solved(&self, gate_id: &str) -> bool {
+        self.satisfied_gates.contains(gate_id)
+    }
+
+    /// Current rocket fuel. Exposed for tests / future HUD reads.
+    pub fn fuel(&self) -> u32 { self.fuel }
+
+    /// Set rocket fuel (tests use this to set up jump scenarios).
+    pub fn set_fuel(&mut self, fuel: u32) { self.fuel = fuel; }
+
+    /// Read-only view of the active balance session (None if none is on screen).
+    /// Tests use this with `ui::balance::layout` to compute click targets.
+    pub fn active_balance(&self) -> Option<&ActiveBalance> {
+        self.active_balance.as_ref()
+    }
+
+    /// Read-only view of the active Sudoku session (None if none is on screen).
+    /// Tests use this with `ui::sudoku::layout` to compute click targets.
+    pub fn active_sudoku(&self) -> Option<&ActiveSudoku> {
+        self.active_sudoku.as_ref()
+    }
+
+    /// Read-only view of the active shop session (None if the shop is closed).
+    pub fn active_shop(&self) -> Option<&ActiveShop> {
+        self.active_shop.as_ref()
+    }
+
+    /// Read-only view of the active CRA manipulative (None if not in one).
+    pub fn active_manipulative(&self) -> Option<&ActiveManipulative> {
+        self.active_manipulative.as_ref()
+    }
+
+    /// Read-only view of the active quest run (None if not on a quest).
+    pub fn active_quest(&self) -> Option<&ActiveQuest> {
+        self.active_quest.as_ref()
+    }
+
     /// Snapshot of the event log length. Pair with `events_since(mark)` to
     /// read events emitted by a specific action — the basic assertion pattern
     /// for tests that care about *what just happened*, not just end-state.
@@ -448,6 +693,12 @@ impl Game {
 
     fn set_state(&mut self, new_state: GameState) {
         if self.state != new_state {
+            // Leaving active play cancels any click-to-walk in progress, so the
+            // player never auto-resumes a stale path — or auto-interacts with a
+            // since-moved tile — after a dialogue / challenge / encounter.
+            if self.state == GameState::Playing && new_state != GameState::Playing {
+                self.clear_walk();
+            }
             self.events.push(GameEvent::StateChanged { from: self.state, to: new_state });
             self.state = new_state;
         }
@@ -468,6 +719,18 @@ impl Game {
     pub fn step(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         self.game_time += dt;
 
+        // Tap the on-screen gear to open settings (so it works without a
+        // keyboard). Handle it before dispatch so the same tap can't also start
+        // a click-to-walk; consume the frame.
+        if !self.settings_open && self.state == GameState::Playing && input.mouse_clicked {
+            let (gx, gy, gw, gh) = settings_gear_rect(screen);
+            let (mx, my) = input.mouse_pos;
+            if mx >= gx && mx <= gx + gw && my >= gy && my <= gy + gh {
+                self.settings_open = true;
+                return;
+            }
+        }
+
         let early_exit = if self.settings_open {
             false
         } else {
@@ -475,8 +738,17 @@ impl Game {
         };
         if early_exit { return; }
 
-        // P key: toggle debug overlay (any gameplay state)
+        // P opens the parent overlay (settings, with the parent section already
+        // expanded so the feature flags are right there).
         if !self.settings_open && input.pressed(KeyCode::P)
+            && self.state != GameState::Title && self.state != GameState::NewGame
+        {
+            self.settings_open = true;
+            self.parent_panel_open = true;
+        }
+
+        // Backtick toggles the dev debug overlay (moved off P).
+        if !self.settings_open && input.pressed(KeyCode::GraveAccent)
             && self.state != GameState::Title && self.state != GameState::NewGame
         {
             self.debug_overlay.toggle();
@@ -490,9 +762,16 @@ impl Game {
             self.dialogue.active = false;
             self.active_challenge = None;
             self.active_kenken = None;
+            self.active_pattern = None;
+            self.active_balance = None;
+            self.active_sudoku = None;
+            self.active_shop = None;
+            self.active_manipulative = None;
+            self.active_quest = None;
             self.pending_challenge = false;
         }
         self.dum_dum_hud.update(dt);
+        if self.fuel_flash > 0.0 { self.fuel_flash -= dt; }
 
         // Time tracking + auto-save
         if !self.settings_open && self.state != GameState::Title && self.state != GameState::NewGame {
@@ -535,11 +814,30 @@ impl Game {
             // portal trigger.
             if self.map.id != prev_map {
                 arrived_npcs.clear();
+                // A queued walk path is tile-indexed for the old map — drop it.
+                self.clear_walk();
             }
         }
 
         if self.state == GameState::Playing && !arrived_npcs.is_empty() {
             self.handle_npc_portals(&arrived_npcs);
+        }
+
+        // Random encounters (opt-in): after a completed tile step, the world
+        // may spring something. Off by default — flip the dev flag to playtest.
+        if self.features.encounters && arrived && self.state == GameState::Playing && !self.player.moving {
+            self.steps_since_encounter = self.steps_since_encounter.saturating_add(1);
+            let cfg = EncounterConfig {
+                steps_since_last_encounter: self.steps_since_encounter,
+                min_steps_between: 15,
+                challenge_freq: self.profile.challenge_freq,
+                area: self.map.id.to_string(),
+            };
+            if encounters::should_trigger_encounter(&cfg, &mut self.rng) {
+                let kind = encounters::pick_encounter(&cfg, &mut self.rng);
+                self.steps_since_encounter = 0;
+                self.fire_encounter(kind);
+            }
         }
 
         self.camera.follow(self.player.x, self.player.y, &self.map, GAME_W, GAME_H);
@@ -570,11 +868,17 @@ impl Game {
             GameState::Title => { self.step_title(input, screen); true }
             GameState::NewGame => { self.step_new_game(input, dt, screen); true }
             GameState::Intake => { self.step_intake(input, dt, screen); false }
-            GameState::Playing => { self.step_playing(input, dt); false }
+            GameState::Playing => { self.step_playing(input, dt, screen); false }
             GameState::InteractionMenu => false,
             GameState::Dialogue => { self.step_dialogue(input); false }
             GameState::Challenge => { self.step_challenge(input, dt, screen); false }
             GameState::KenKen => { self.step_kenken(input, dt, screen); false }
+            GameState::Pattern => { self.step_pattern(input, dt, screen); false }
+            GameState::Balance => { self.step_balance(input, dt, screen); false }
+            GameState::Sudoku => { self.step_sudoku(input, dt, screen); false }
+            GameState::Shop => { self.step_shop(input, screen); false }
+            GameState::Manipulative => { self.step_manipulative(input, dt, screen); false }
+            GameState::Quest => { self.step_quest(input, screen); false }
         }
     }
 
@@ -802,7 +1106,11 @@ impl Game {
                     self.save_backend.save_to(self.active_slot, &save_data);
                     self.auto_save_timer = 0.0;
 
-                    if iq.question_index >= INTAKE_QUESTION_COUNT {
+                    // Adaptive length: stop as soon as placement has converged
+                    // (bracketed / floored / ceilinged) so low-level intake
+                    // isn't a string of identical band-1 questions.
+                    let ceiling = (iq.configured_band as u16 + 2).min(10) as u8;
+                    if intake_complete(&iq.answers, ceiling) {
                         iq.phase = IntakePhase::Complete;
                     } else {
                         iq.phase = IntakePhase::Transition;
@@ -854,9 +1162,160 @@ impl Game {
         self.intake = Some(iq);
     }
 
-    fn step_playing(&mut self, input: &FrameInput, dt: f32) {
+    /// Translate a screen-space tap into a walk path. The renderer centres the
+    /// world on `camera + GAME_W/2` and draws 1:1, so a world point maps to
+    /// `screen = world - camera + (sw - GAME_W)/2`; inverting gives the formula
+    /// below (exact at any window size, not just 960×720). Walks onto the tapped
+    /// tile, or up to a tile adjacent to it when the target is solid (a wall, an
+    /// NPC, the chest).
+    fn set_path_from_click(&mut self, mx: f32, my: f32, screen: (f32, f32)) {
+        let (sw, sh) = screen;
+        let wx = mx + self.camera.x + (GAME_W - sw) / 2.0;
+        let wy = my + self.camera.y + (GAME_H - sh) / 2.0;
+        if wx < 0.0 || wy < 0.0 {
+            return;
+        }
+        let goal = ((wx / TILE_SIZE) as usize, (wy / TILE_SIZE) as usize);
+        let (w, h) = (self.map.width, self.map.height);
+        if goal.0 >= w || goal.1 >= h {
+            return;
+        }
+        let start = (self.player.tile_x, self.player.tile_y);
+        let interactable = self.interactable_at(goal);
+        // Tiles occupied by another entity are impassable to the router, so a
+        // tap never wedges the player walking-in-place against a standing NPC.
+        // The player's own tile (start) is never excluded, and the goal of an
+        // interactable tap is reached via `find_path_adjacent` anyway.
+        let occupied = self.occupied_tiles();
+        let path_opt = {
+            let map = &self.map;
+            let walkable = |c: usize, r: usize| {
+                !map.is_solid(c, r) && ((c, r) == start || !occupied.contains(&(c, r)))
+            };
+            // Walk onto a free tile; walk *up to* a solid or an interactable
+            // (NPC / Sparky / chest) you can't stand on.
+            if interactable || map.is_solid(goal.0, goal.1) {
+                crate::pathfinding::find_path_adjacent(start, goal, w, h, walkable)
+            } else {
+                crate::pathfinding::find_path(start, goal, w, h, walkable)
+            }
+        };
+        if let Some(path) = path_opt {
+            self.player_path = path;
+            self.click_target = Some(goal);
+            // Remember to auto-interact on arrival when the tap was on something
+            // you talk to / open.
+            self.pending_interact = if interactable { Some(goal) } else { None };
+        }
+    }
+
+    /// Cancel any in-progress click-to-walk: drop the path, the pending
+    /// interaction, and the on-screen marker.
+    fn clear_walk(&mut self) {
+        self.player_path.clear();
+        self.pending_interact = None;
+        self.click_target = None;
+    }
+
+    /// Tiles currently occupied by a blocking entity (roster NPCs + on-map
+    /// Sparky). The companion is excluded — it trails the player and steps out
+    /// of the way rather than blocking a route.
+    fn occupied_tiles(&self) -> Vec<(usize, usize)> {
+        let mut out: Vec<(usize, usize)> =
+            self.npcs.iter().map(|n| (n.entity.tile_x, n.entity.tile_y)).collect();
+        if self.sparky_is_here() {
+            out.push((self.sparky.entity.tile_x, self.sparky.entity.tile_y));
+        }
+        out
+    }
+
+    /// Whether `tile` holds something the player interacts with (NPC, Sparky,
+    /// or a treasure chest) on the current map.
+    fn interactable_at(&self, tile: (usize, usize)) -> bool {
+        let (c, r) = tile;
+        if r < self.map.height && c < self.map.width && self.map.tiles[r][c] == tilemap::Tile::Chest {
+            return true;
+        }
+        if self.sparky_is_here()
+            && (self.sparky.entity.tile_x, self.sparky.entity.tile_y) == tile
+        {
+            return true;
+        }
+        self.npcs.iter().any(|n| (n.entity.tile_x, n.entity.tile_y) == tile)
+    }
+
+    /// Derive a one-tile move toward the next tile on the queued walk path.
+    /// Consumed tiles are dropped as the player arrives; a stale (non-adjacent)
+    /// path is abandoned. Returns `Stay` when there's nothing to follow.
+    fn next_path_intent(&mut self) -> MoveIntent {
+        if self.player.moving || self.player_path.is_empty() {
+            return MoveIntent::Stay;
+        }
+        // Drop any leading tiles the player already stands on (e.g. just arrived).
+        while self.player_path.first() == Some(&(self.player.tile_x, self.player.tile_y)) {
+            self.player_path.remove(0);
+        }
+        let Some(&(nx, ny)) = self.player_path.first() else {
+            return MoveIntent::Stay;
+        };
+        let dx = nx as i32 - self.player.tile_x as i32;
+        let dy = ny as i32 - self.player.tile_y as i32;
+        let dir = match (dx, dy) {
+            (1, 0) => Direction::Right,
+            (-1, 0) => Direction::Left,
+            (0, 1) => Direction::Down,
+            (0, -1) => Direction::Up,
+            // Path desynced from the player's tile — abandon it.
+            _ => {
+                self.player_path.clear();
+                return MoveIntent::Stay;
+            }
+        };
+        self.player.dir = match dir {
+            Direction::Up => Dir::Up,
+            Direction::Down => Dir::Down,
+            Direction::Left => Dir::Left,
+            Direction::Right => Dir::Right,
+        };
+        MoveIntent::Move(dir)
+    }
+
+    fn step_playing(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         // ── Movement: collect intents, resolve, apply ───────────────────
-        let player_intent = read_player_intent(input, &mut self.player);
+        // A tap on the map sets a walk path (click-to-walk); keyboard input
+        // overrides it. The debug overlay owns clicks when it's up.
+        if input.mouse_clicked && !self.debug_overlay.visible {
+            let (mx, my) = input.mouse_pos;
+            self.set_path_from_click(mx, my, screen);
+        }
+        let player_intent = match read_player_intent(input, &mut self.player) {
+            MoveIntent::Move(d) => {
+                self.clear_walk(); // keyboard takes over from auto-walk
+                MoveIntent::Move(d)
+            }
+            MoveIntent::Stay => self.next_path_intent(),
+        };
+
+        // Arrival: once the walk path is spent and the player is standing still,
+        // either fire the queued auto-interact (face the NPC/chest and act as if
+        // Space was pressed) or just drop the walk marker.
+        if !self.player.moving && self.player_path.is_empty() {
+            if let Some(tgt) = self.pending_interact.take() {
+                let dx = tgt.0 as i32 - self.player.tile_x as i32;
+                let dy = tgt.1 as i32 - self.player.tile_y as i32;
+                if dx.unsigned_abs() + dy.unsigned_abs() == 1 {
+                    self.player.dir = match (dx, dy) {
+                        (1, 0) => Dir::Right,
+                        (-1, 0) => Dir::Left,
+                        (0, 1) => Dir::Down,
+                        _ => Dir::Up,
+                    };
+                    self.auto_interact = true;
+                }
+            }
+            self.click_target = None;
+        }
+
         let player_at = (self.player.tile_x, self.player.tile_y);
         let sparky_here = self.sparky_is_here();
         // Active Sparky follows the player's path; parked Sparky idles near
@@ -990,8 +1449,11 @@ impl Game {
             }
         }
 
-        // Space: interact
-        if input.pressed(KeyCode::Space) && !self.player.moving {
+        // Space (or an arrival auto-interact): interact with what's in front.
+        if (input.pressed(KeyCode::Space) || std::mem::take(&mut self.auto_interact))
+            && !self.player.moving
+        {
+            self.clear_walk(); // stop auto-walking when the kid interacts
             let facing = facing_tile(self.player.tile_x, self.player.tile_y, self.player.dir);
             let facing_chest = facing.0 < self.map.width && facing.1 < self.map.height
                 && self.map.tiles[facing.1][facing.0] == tilemap::Tile::Chest;
@@ -1008,8 +1470,8 @@ impl Game {
             } else if let Some(target) = npc::get_interact_target_with_companion(
                 self.player.tile_x, self.player.tile_y, self.player.dir,
                 &self.npcs, self.companion.as_ref(),
-            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n)) {
-                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, target_ref) = target;
+            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n.gate, n.gate_id, n.refuel, n)) {
+                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, is_gate, gate_id, is_refuel, target_ref) = target;
                 let target_id = target_kind.as_str().to_string();
                 let target_name = target_kind.display_name().to_string();
 
@@ -1021,10 +1483,42 @@ impl Game {
                     return;
                 }
 
+                // A closed gate guardian short-circuits too: it always poses a
+                // puzzle (no menu, no random roll). Solve it and it steps aside.
+                // Reuses the chest's pending_challenge path; `opening_gate`
+                // remembers which gate to open when the puzzle resolves.
+                if is_gate {
+                    self.menu_target_id = target_id;
+                    self.menu_target_name = target_name.clone();
+                    self.opening_gate = gate_id.map(|s| s.to_string());
+                    self.start_dialogue(vec![DialogueLine {
+                        speaker: target_name,
+                        text: "*yaaawn* Oh, hello! I'm napping right across the path. Solve a little number puzzle for me and I'll scooch aside, deal?".into(),
+                    }]);
+                    self.pending_challenge = true;
+                    self.set_state(GameState::Dialogue);
+                    return;
+                }
+
+                // A fuel depot always poses a puzzle; solving it tops up the
+                // tank. Like the gate, it short-circuits the normal menu.
+                if is_refuel {
+                    self.menu_target_id = target_id;
+                    self.menu_target_name = target_name.clone();
+                    self.pending_refuel = true;
+                    self.pending_challenge = true;
+                    self.start_dialogue(vec![DialogueLine {
+                        speaker: target_name,
+                        text: "BEEP BOOP! Solve a number puzzle and I'll fill the rocket right up to the top!".into(),
+                    }]);
+                    self.set_state(GameState::Dialogue);
+                    return;
+                }
+
                 let npc_info = NpcInfo {
                     id: target_id.clone(),
                     can_receive_gifts: Some(can_receive_gifts),
-                    has_shop: None,
+                    has_shop: Some(target_kind == npc::NpcKind::Shopkeeper),
                     is_puzzler: Some(is_puzzler),
                 };
                 let player_st = PlayerState { dum_dums: self.dum_dums };
@@ -1114,7 +1608,12 @@ impl Game {
             // them shoves them aside. Stationary "rooted" NPCs (Mommy, Sage,
             // shopkeeper, dev knobs) stay solid; pushing them around would feel
             // off-character.
-            let solidity = if n.wanders {
+            let solidity = if n.gate {
+                // A closed gate guardian fully blocks the chokepoint.
+                Solidity::Solid
+            } else if n.wanders || n.gate_id.is_some() {
+                // Loose wanderers — and guardians who've already stepped aside —
+                // yield when leaned on.
                 Solidity::PushableAfter(0.18)
             } else {
                 Solidity::Solid
@@ -1141,12 +1640,7 @@ impl Game {
                 if self.pending_challenge {
                     self.pending_challenge = false;
                     let ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
-                    self.events.push(GameEvent::ChallengeStarted {
-                        question: ac.challenge.display_text.clone(),
-                    });
-                    audio::tts::speak("Sparky", &ac.challenge.speech_text);
-                    self.active_challenge = Some(ac);
-                    self.set_state(GameState::Challenge);
+                    self.begin_challenge(ac);
                 } else {
                     self.set_state(GameState::Playing);
                 }
@@ -1254,6 +1748,29 @@ impl Game {
                 self.events.push(GameEvent::ChallengeResolved {
                     correct: was_correct, response_ms,
                 });
+
+                // Was this a gate guardian's puzzle? On success the gate opens
+                // for good (persisted); on a miss it stays closed and the kid
+                // can simply try again — no progress lost.
+                if let Some(gid) = self.opening_gate.take() {
+                    if was_correct {
+                        self.satisfied_gates.insert(gid.clone());
+                        if let Some(n) = self.npcs.iter_mut()
+                            .find(|n| n.gate_id.map_or(false, |s| s == gid))
+                        {
+                            n.gate = false;
+                        }
+                        self.events.push(GameEvent::GateOpened { gate_id: gid });
+                    }
+                }
+
+                // Was this a fuel-depot refill? On success, top off the tank.
+                // A miss just means try again — never a setback.
+                if std::mem::take(&mut self.pending_refuel) && was_correct {
+                    self.fuel = FUEL_MAX;
+                    self.fuel_flash = 0.5;
+                    self.events.push(GameEvent::Refueled { to: self.fuel });
+                }
             }
             self.set_state(GameState::Playing);
 
@@ -1315,6 +1832,36 @@ impl Game {
                 self.active_kenken = Some(ak);
                 self.set_state(GameState::KenKen);
             }
+            CtrlTriggerPattern => {
+                let source = kind.as_str().to_string();
+                let ap = start_pattern(&mut self.rng, &self.profile, self.game_time, source.clone());
+                self.events.push(GameEvent::PatternStarted {
+                    level: self.profile.pattern_level,
+                    source,
+                });
+                self.active_pattern = Some(ap);
+                self.set_state(GameState::Pattern);
+            }
+            CtrlTriggerBalance => {
+                let source = kind.as_str().to_string();
+                let ab = start_balance(&mut self.rng, &self.profile, self.game_time, source.clone());
+                self.events.push(GameEvent::BalanceStarted {
+                    level: balance::balance_level_for_band(self.profile.math_band),
+                    source,
+                });
+                self.active_balance = Some(ab);
+                self.set_state(GameState::Balance);
+            }
+            CtrlTriggerSudoku => {
+                let source = kind.as_str().to_string();
+                let asd = start_sudoku(&mut self.rng, &self.profile, self.game_time, source.clone());
+                self.events.push(GameEvent::SudokuStarted {
+                    grid_size: asd.session.puzzle.grid_size,
+                    source,
+                });
+                self.active_sudoku = Some(asd);
+                self.set_state(GameState::Sudoku);
+            }
             CtrlTriggerChallenge => {
                 let ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
                 self.events.push(GameEvent::ChallengeStarted {
@@ -1324,10 +1871,300 @@ impl Game {
                 self.active_challenge = Some(ac);
                 self.set_state(GameState::Challenge);
             }
+            CtrlToggleEncounters => {
+                self.features.encounters = !self.features.encounters;
+                let on = if self.features.encounters { "ON" } else { "OFF" };
+                self.start_dialogue(vec![line(&format!("BEEP. Random encounters are now {on}."))]);
+                self.set_state(GameState::Dialogue);
+            }
+            CtrlTriggerEncounter => {
+                // Fire one encounter right now for testing (ignores the flag and
+                // the step pacing). Routes through the same handler as live play.
+                let cfg = EncounterConfig {
+                    steps_since_last_encounter: 999,
+                    min_steps_between: 0,
+                    challenge_freq: self.profile.challenge_freq,
+                    area: self.map.id.to_string(),
+                };
+                let kind = encounters::pick_encounter(&cfg, &mut self.rng);
+                self.fire_encounter(kind);
+            }
+            CtrlToggleManipulatives => {
+                self.features.cra_manipulatives = !self.features.cra_manipulatives;
+                let on = if self.features.cra_manipulatives { "ON" } else { "OFF" };
+                self.start_dialogue(vec![line(&format!("BEEP. CRA manipulatives are now {on}."))]);
+                self.set_state(GameState::Dialogue);
+            }
+            CtrlTriggerManipulative => {
+                // Roll challenges until one maps to a manipulative (add/sub at a
+                // concrete/representational CRA stage), then enter it directly.
+                // Use a low band so a small, manipulative-friendly add/sub turns
+                // up reliably (the dev profile's band 5 is mostly multiplication).
+                let mut low = self.profile.clone();
+                low.math_band = 1;
+                let mut entered = false;
+                for _ in 0..64 {
+                    let ac = start_challenge(&mut self.rng, &low, self.game_time);
+                    if let Some(manip) = try_make_manipulative(&self.profile, &ac.challenge) {
+                        self.events.push(GameEvent::ChallengeStarted {
+                            question: ac.challenge.display_text.clone(),
+                        });
+                        self.active_manipulative = Some(ActiveManipulative {
+                            manip,
+                            challenge: ac.challenge,
+                            complete_timer: 0.0,
+                            start_time: self.game_time,
+                        });
+                        self.set_state(GameState::Manipulative);
+                        entered = true;
+                        break;
+                    }
+                }
+                if !entered {
+                    self.start_dialogue(vec![line("No manipulative-friendly challenge rolled. Try again.")]);
+                    self.set_state(GameState::Dialogue);
+                }
+            }
+            CtrlToggleQuest => {
+                self.features.quest = !self.features.quest;
+                let on = if self.features.quest { "ON" } else { "OFF" };
+                self.start_dialogue(vec![line(&format!("BEEP. Quests are now {on}."))]);
+                self.set_state(GameState::Dialogue);
+            }
+            CtrlStartQuest => {
+                self.start_quest(quest::welcome_quest());
+            }
             // Non-dev kinds shouldn't reach here -- caller gates on is_dev_control.
             other => {
                 self.start_dialogue(vec![line(&format!("Unknown control: {}", other.as_str()))]);
                 self.set_state(GameState::Dialogue);
+            }
+        }
+    }
+
+    /// Route a rolled encounter to the right presentation: flavor/sighting →
+    /// dialogue, found Dum Dum → reward + dialogue, challenge → the normal
+    /// challenge lifecycle. Caller has already confirmed we're in Playing.
+    fn fire_encounter(&mut self, kind: EncounterKind) {
+        let label = match &kind {
+            EncounterKind::FlavorDialogue { .. } => "flavor",
+            EncounterKind::FoundDumDum => "dum_dum",
+            EncounterKind::Challenge => "challenge",
+        };
+        self.events.push(GameEvent::EncounterTriggered { kind: label.into() });
+        match kind {
+            EncounterKind::FlavorDialogue { speaker, text } => {
+                self.start_dialogue(vec![DialogueLine { speaker, text }]);
+                self.set_state(GameState::Dialogue);
+            }
+            EncounterKind::FoundDumDum => {
+                self.dum_dums += 1;
+                self.dum_dum_hud.flash();
+                self.events.push(GameEvent::DumDumsAwarded { amount: 1 });
+                self.start_dialogue(vec![DialogueLine {
+                    speaker: "Sparky".into(),
+                    text: "Ooh! A shiny Dum Dum, just sitting here!".into(),
+                }]);
+                self.set_state(GameState::Dialogue);
+            }
+            EncounterKind::Challenge => {
+                // A real adaptive challenge, but dressed in scene words so the
+                // math reads as part of the world rather than a pop quiz.
+                let mut ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
+                if let Some(frame) = encounters::frame_sighting(
+                    self.map.id,
+                    ac.challenge.operation,
+                    ac.challenge.numbers.a,
+                    ac.challenge.numbers.b,
+                    &mut self.rng,
+                ) {
+                    ac.challenge.display_text = frame.display_text.clone();
+                    ac.challenge.speech_text = frame.speech_text.clone();
+                    ac.state.question.display = frame.display_text;
+                    ac.state.question.speech = frame.speech_text;
+                }
+                self.events.push(GameEvent::ChallengeStarted {
+                    question: ac.challenge.display_text.clone(),
+                });
+                audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                self.active_challenge = Some(ac);
+                self.set_state(GameState::Challenge);
+            }
+        }
+    }
+
+    /// Enter a challenge — as a hands-on CRA manipulative when the feature flag
+    /// is on and the learner's CRA stage for this operation warrants it,
+    /// otherwise the standard multiple-choice challenge. Either way the same
+    /// `ChallengeStarted` event fires and the learner gets the same signal.
+    fn begin_challenge(&mut self, ac: ActiveChallenge) {
+        self.events.push(GameEvent::ChallengeStarted {
+            question: ac.challenge.display_text.clone(),
+        });
+        if self.features.cra_manipulatives {
+            if let Some(manip) = try_make_manipulative(&self.profile, &ac.challenge) {
+                // Speak the prompt too, so a TTS-on parent hears it whether the
+                // kid gets the quiz or the hands-on version.
+                audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                self.active_manipulative = Some(ActiveManipulative {
+                    manip,
+                    challenge: ac.challenge,
+                    complete_timer: 0.0,
+                    start_time: self.game_time,
+                });
+                self.set_state(GameState::Manipulative);
+                return;
+            }
+        }
+        audio::tts::speak("Sparky", &ac.challenge.speech_text);
+        self.active_challenge = Some(ac);
+        self.set_state(GameState::Challenge);
+    }
+
+    fn step_manipulative(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        let mut resolve = false;
+        if let Some(ref mut am) = self.active_manipulative {
+            if am.manip.is_complete() {
+                am.complete_timer += dt;
+                if am.complete_timer >= 2.0
+                    || input.pressed(KeyCode::Space)
+                    || input.pressed(KeyCode::Enter)
+                    || input.mouse_clicked
+                {
+                    resolve = true;
+                }
+            } else {
+                let layout = ui::manipulative::layout(&am.manip, screen);
+                let intent = if input.mouse_clicked {
+                    let (mx, my) = input.mouse_pos;
+                    ui::manipulative::handle_click(mx, my, &am.manip, &layout)
+                } else {
+                    ui::manipulative::handle_key(&am.manip, input, &layout)
+                };
+                if let Some(intent) = intent {
+                    apply_manip_intent(&mut am.manip, intent);
+                }
+            }
+        }
+
+        if resolve {
+            if let Some(am) = self.active_manipulative.take() {
+                let response_ms = ((self.game_time - am.start_time) as f64 * 1000.0).min(120000.0);
+                // Manipulatives complete only when correct — same learner signal
+                // as solving the quiz, tagged with the CRA stage actually shown.
+                let cra = self.profile.cra_stages.get(&am.challenge.operation).copied();
+                let event = LearnerEvent::PuzzleAttempted {
+                    correct: true,
+                    operation: am.challenge.operation,
+                    sub_skill: am.challenge.sub_skill,
+                    band: am.challenge.sampled_band,
+                    center_band: Some(am.challenge.center_band),
+                    response_time_ms: Some(response_ms),
+                    hint_used: false,
+                    told_me: false,
+                    cra_level_shown: cra,
+                    timestamp: Some(self.game_time as f64 * 1000.0),
+                };
+                self.profile = learner_reducer(self.profile.clone(), event);
+
+                let award = 1u32;
+                self.dum_dums += award;
+                self.dum_dum_hud.flash();
+                self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                self.events.push(GameEvent::ChallengeResolved { correct: true, response_ms });
+            }
+            self.set_state(GameState::Playing);
+        }
+    }
+
+    fn start_quest(&mut self, quest: Quest) {
+        let session = quest::quest_reducer(QuestSession::new(quest), QuestAction::Start);
+        let puzzle = build_quest_puzzle(&session, &mut self.rng);
+        self.active_quest = Some(ActiveQuest { session, puzzle, message: None });
+        self.set_state(GameState::Quest);
+    }
+
+    fn step_quest(&mut self, input: &FrameInput, screen: (f32, f32)) {
+        // Pull the current step (clone) so we can mutate the session afterward.
+        let step = match self.active_quest.as_ref().and_then(|aq| aq.session.current_step().cloned()) {
+            Some(s) => s,
+            None => {
+                self.active_quest = None;
+                self.set_state(GameState::Playing);
+                return;
+            }
+        };
+
+        let intent = {
+            let aq = self.active_quest.as_ref().unwrap();
+            let Some(view) = quest_view(aq) else { return };
+            let layout = ui::quest::layout(&view, screen);
+            if input.mouse_clicked {
+                let (mx, my) = input.mouse_pos;
+                ui::quest::handle_click(mx, my, &layout)
+            } else {
+                ui::quest::handle_key(input, &layout)
+            }
+        };
+        let Some(intent) = intent else { return };
+
+        use ui::quest::QuestClick;
+        let mut act: Option<QuestAction> = None;
+        match intent {
+            QuestClick::Continue => match &step {
+                QuestStep::Dialogue { .. } => act = Some(QuestAction::AdvanceStep),
+                QuestStep::Travel { map, x, y } => {
+                    act = Some(QuestAction::ArriveAt { map: map.clone(), x: *x, y: *y })
+                }
+                QuestStep::Reward { dum_dums } => {
+                    self.dum_dums += *dum_dums;
+                    self.dum_dum_hud.flash();
+                    self.events.push(GameEvent::DumDumsAwarded { amount: *dum_dums });
+                    act = Some(QuestAction::AdvanceStep);
+                }
+                // A normal Choice is made via Choose; an empty (degenerate)
+                // Choice falls back to Continue so it can't soft-lock.
+                QuestStep::Choice { options, .. } if options.is_empty() => {
+                    act = Some(QuestAction::AdvanceStep)
+                }
+                QuestStep::Choice { .. } => {} // chosen via Choose, not Continue
+                QuestStep::MathPuzzle { .. } => {}
+            },
+            QuestClick::Answer(v) => {
+                if let QuestStep::MathPuzzle { .. } = &step {
+                    let answer = self.active_quest.as_ref().unwrap().puzzle.as_ref().map(|p| p.answer);
+                    if Some(v) == answer {
+                        act = Some(QuestAction::CompletePuzzle { correct: true });
+                    } else {
+                        self.active_quest.as_mut().unwrap().message =
+                            Some("Hmm, not quite — try again!".into());
+                    }
+                }
+            }
+            QuestClick::Choose(index) => {
+                if let QuestStep::Choice { .. } = &step {
+                    act = Some(QuestAction::ChooseOption { index });
+                }
+            }
+        }
+
+        if let Some(action) = act {
+            // Apply on a detached session so self.rng is free for the next
+            // puzzle without overlapping the active_quest borrow.
+            let mut session = self.active_quest.as_ref().unwrap().session.clone();
+            session = quest::quest_reducer(session, action);
+            let new_puzzle = build_quest_puzzle(&session, &mut self.rng);
+            let complete = session.status == QuestStatus::Complete;
+            {
+                let aq = self.active_quest.as_mut().unwrap();
+                aq.session = session;
+                aq.puzzle = new_puzzle;
+                aq.message = None;
+            }
+            if complete {
+                self.events.push(GameEvent::QuestCompleted);
+                self.active_quest = None;
+                self.set_state(GameState::Playing);
             }
         }
     }
@@ -1437,6 +2274,305 @@ impl Game {
         }
     }
 
+    fn step_pattern(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        let mut dismiss = false;
+        if let Some(ref mut ap) = self.active_pattern {
+            if ap.session.phase == PatternPhase::Complete {
+                // Celebrate, then auto-dismiss — or let any input move on.
+                ap.complete_timer += dt;
+                if ap.complete_timer >= 2.0 {
+                    dismiss = true;
+                }
+                if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) || input.mouse_clicked {
+                    dismiss = true;
+                }
+            } else {
+                let layout = ui::patterns::layout(&ap.session, screen);
+                if let Some(ui::patterns::PatternInput::Action(action)) =
+                    ui::patterns::handle_key(&ap.session, input)
+                {
+                    ap.session = patterns::pattern_reducer(ap.session.clone(), action);
+                } else if input.mouse_clicked {
+                    let (mx, my) = input.mouse_pos;
+                    if let Some(ui::patterns::PatternInput::Action(action)) =
+                        ui::patterns::handle_click(mx, my, &ap.session, &layout)
+                    {
+                        ap.session = patterns::pattern_reducer(ap.session.clone(), action);
+                    }
+                }
+            }
+        }
+
+        if dismiss {
+            if let Some(ap) = self.active_pattern.take() {
+                let was_correct = ap.session.phase == PatternPhase::Complete;
+                let response_ms = ((self.game_time - ap.start_time) as f64 * 1000.0).min(120000.0);
+                let level = self.profile.pattern_level;
+                let attempts = ap.session.attempts;
+
+                self.profile = learner_reducer(self.profile.clone(), LearnerEvent::PatternAttempted {
+                    correct: was_correct,
+                    level,
+                    attempts,
+                    response_time_ms: Some(response_ms),
+                });
+
+                if was_correct {
+                    // Same reward shape as a correct challenge or kenken: 1 Dum Dum.
+                    let award = 1u32;
+                    self.dum_dums += award;
+                    self.dum_dum_hud.flash();
+                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                }
+
+                self.events.push(GameEvent::PatternResolved {
+                    correct: was_correct,
+                    level,
+                    attempts,
+                    response_ms,
+                });
+            }
+            self.set_state(GameState::Playing);
+
+            if self.map.id != "dev" {
+                let save_data = self.gather_save_data();
+                self.save_backend.save_to(self.active_slot, &save_data);
+                self.auto_save_timer = 0.0;
+            }
+        }
+    }
+
+    fn step_balance(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        let mut dismiss = false;
+        if let Some(ref mut ab) = self.active_balance {
+            if ab.session.phase == BalancePhase::Complete {
+                ab.complete_timer += dt;
+                if ab.complete_timer >= 2.0 {
+                    dismiss = true;
+                }
+                if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) || input.mouse_clicked {
+                    dismiss = true;
+                }
+            } else {
+                let layout = ui::balance::layout(&ab.session, screen);
+                if let Some(ui::balance::BalanceInput::Action(action)) =
+                    ui::balance::handle_key(&ab.session, input)
+                {
+                    ab.session = balance::balance_reducer(ab.session.clone(), action);
+                } else if input.mouse_clicked {
+                    let (mx, my) = input.mouse_pos;
+                    if let Some(ui::balance::BalanceInput::Action(action)) =
+                        ui::balance::handle_click(mx, my, &ab.session, &layout)
+                    {
+                        ab.session = balance::balance_reducer(ab.session.clone(), action);
+                    }
+                }
+            }
+        }
+
+        if dismiss {
+            if let Some(ab) = self.active_balance.take() {
+                let was_correct = ab.session.phase == BalancePhase::Complete;
+                let response_ms = ((self.game_time - ab.start_time) as f64 * 1000.0).min(120000.0);
+                let level = balance::balance_level_for_band(self.profile.math_band);
+                let attempts = ab.session.attempts;
+
+                if was_correct {
+                    let award = 1u32;
+                    self.dum_dums += award;
+                    self.dum_dum_hud.flash();
+                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                }
+
+                self.events.push(GameEvent::BalanceResolved {
+                    correct: was_correct,
+                    level,
+                    attempts,
+                    response_ms,
+                });
+            }
+            self.set_state(GameState::Playing);
+
+            if self.map.id != "dev" {
+                let save_data = self.gather_save_data();
+                self.save_backend.save_to(self.active_slot, &save_data);
+                self.auto_save_timer = 0.0;
+            }
+        }
+    }
+
+    fn step_sudoku(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        let mut dismiss = false;
+        if let Some(ref mut asd) = self.active_sudoku {
+            if asd.session.phase == SudokuPhase::Complete {
+                asd.complete_timer += dt;
+                if asd.complete_timer >= 2.5 {
+                    dismiss = true;
+                }
+                if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) || input.mouse_clicked {
+                    dismiss = true;
+                }
+            } else {
+                let layout = ui::sudoku::layout(&asd.session, screen);
+                if let Some(intent) = ui::sudoku::handle_key(&asd.session, input, asd.selected) {
+                    apply_sudoku_intent(asd, intent);
+                }
+                if input.mouse_clicked {
+                    let (mx, my) = input.mouse_pos;
+                    if let Some(intent) = ui::sudoku::handle_click(mx, my, &asd.session, &layout, asd.selected) {
+                        apply_sudoku_intent(asd, intent);
+                    }
+                }
+            }
+        }
+
+        if dismiss {
+            if let Some(asd) = self.active_sudoku.take() {
+                let was_correct = asd.session.phase == SudokuPhase::Complete;
+                let response_ms = ((self.game_time - asd.start_time) as f64 * 1000.0).min(120000.0);
+                let grid_size = asd.session.puzzle.grid_size;
+                let violations = asd.session.constraint_violations;
+
+                if was_correct {
+                    let award = 1u32;
+                    self.dum_dums += award;
+                    self.dum_dum_hud.flash();
+                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                }
+
+                self.events.push(GameEvent::SudokuResolved {
+                    correct: was_correct,
+                    grid_size,
+                    constraint_violations: violations,
+                    response_ms,
+                });
+            }
+            self.set_state(GameState::Playing);
+
+            if self.map.id != "dev" {
+                let save_data = self.gather_save_data();
+                self.save_backend.save_to(self.active_slot, &save_data);
+                self.auto_save_timer = 0.0;
+            }
+        }
+    }
+
+    fn step_shop(&mut self, input: &FrameInput, screen: (f32, f32)) {
+        let Some(ash) = self.active_shop.as_ref() else { return };
+        let view = shop_view(ash, &self.color_choice);
+        let layout = ui::shop::layout(&ash.catalog, &view, screen);
+
+        let intent = if input.mouse_clicked {
+            let (mx, my) = input.mouse_pos;
+            ui::shop::handle_click(mx, my, &layout)
+        } else {
+            ui::shop::handle_key(input, &layout)
+        };
+        let Some(intent) = intent else { return };
+
+        match intent {
+            ui::shop::ShopInput::Close => {
+                // "Done" dismisses the nearest thing: the color picker if it's
+                // up, otherwise the whole shop.
+                let ash = self.active_shop.as_mut().unwrap();
+                if ash.picking_color {
+                    ash.picking_color = false;
+                    ash.message = None;
+                    return;
+                }
+                if let Some(ash) = self.active_shop.take() {
+                    self.shop_owned = ash.owned;
+                }
+                self.set_state(GameState::Playing);
+            }
+            ui::shop::ShopInput::SelectItem(i) => {
+                let ash = self.active_shop.as_mut().unwrap();
+                if ash.selected.is_some() || ash.picking_color {
+                    return; // already solving a purchase or picking a color
+                }
+                let item = ash.catalog[i].clone();
+                // An owned Color Change re-opens the picker — buying it once
+                // means you get to change colors whenever you like.
+                if item.id == "color_change" && ash.owned.contains(&item.id) {
+                    ash.picking_color = true;
+                    ash.message = None;
+                    return;
+                }
+                match shop::process_purchase(self.dum_dums, &item.id, &ash.owned) {
+                    shop::PurchaseOutcome::Bought { result } => {
+                        ash.selected = Some(i);
+                        ash.cost = result.spent;
+                        ash.answer = result.new_balance;
+                        ash.balance_before = self.dum_dums;
+                        ash.message = None;
+                        let choices = subtraction_choices(self.dum_dums, result.spent, &mut self.rng);
+                        ash.choices = choices;
+                    }
+                    shop::PurchaseOutcome::CantAfford { shortfall } => {
+                        ash.message = Some(format!("You need {shortfall} more Dum Dums!"));
+                    }
+                    shop::PurchaseOutcome::AlreadyOwned => {
+                        ash.message = Some("Sparky already has that one!".into());
+                    }
+                    shop::PurchaseOutcome::UnknownItem => {}
+                }
+            }
+            ui::shop::ShopInput::Answer(v) => {
+                // Resolve the guess on the shop session, then drop that borrow
+                // before touching `self` (balance, events, save).
+                let purchase = {
+                    let ash = self.active_shop.as_mut().unwrap();
+                    let Some(i) = ash.selected else { return };
+                    if v == ash.answer {
+                        let item = ash.catalog[i].clone();
+                        ash.owned.insert(item.id.clone());
+                        ash.selected = None;
+                        ash.choices.clear();
+                        if item.id == "color_change" {
+                            // The fun part of Color Change is choosing — go
+                            // straight to the swatches.
+                            ash.picking_color = true;
+                            ash.message = Some("You got it! Pick your color!".into());
+                        } else {
+                            ash.message = Some(format!("Sparky LOVES the {}!", item.name));
+                        }
+                        Some((item.id, ash.cost, ash.answer))
+                    } else {
+                        // Natural consequence, not punishment — recount and retry.
+                        ash.message = Some("Hmm, let me count again...".into());
+                        None
+                    }
+                };
+                if let Some((item_id, cost, new_balance)) = purchase {
+                    self.dum_dums = new_balance;
+                    self.dum_dum_hud.flash();
+                    self.events.push(GameEvent::DumDumsSpent { amount: cost, item: item_id });
+                    // Persist immediately so the cosmetic (and the spent Dum
+                    // Dums) survive a reload even if the kid quits right now.
+                    if let Some(ash) = self.active_shop.as_ref() {
+                        self.shop_owned = ash.owned.clone();
+                    }
+                    if self.map.id != "dev" {
+                        let save_data = self.gather_save_data();
+                        self.save_backend.save_to(self.active_slot, &save_data);
+                    }
+                }
+            }
+            ui::shop::ShopInput::PickColor(i) => {
+                let Some((id, _)) = sprites::player::OUTFIT_COLORS.get(i) else { return };
+                self.color_choice = id.to_string();
+                let ash = self.active_shop.as_mut().unwrap();
+                ash.message = Some("Looking good!".into());
+                // Persist right away, same as a purchase — the new outfit
+                // should survive a reload even if the kid quits now.
+                if self.map.id != "dev" {
+                    let save_data = self.gather_save_data();
+                    self.save_backend.save_to(self.active_slot, &save_data);
+                }
+            }
+        }
+    }
+
     fn handle_interaction_menu(&mut self, input: &FrameInput, screen: (f32, f32)) {
         let layout = ui::interaction_menu::layout(&self.menu_options, screen);
         let action = ui::interaction_menu::handle_input(&layout, input);
@@ -1475,6 +2611,52 @@ impl Game {
                     });
                     self.active_kenken = Some(ak);
                     self.set_state(GameState::KenKen);
+                }
+                "pattern" => {
+                    let source = self.menu_target_id.clone();
+                    let ap = start_pattern(&mut self.rng, &self.profile, self.game_time, source);
+                    self.events.push(GameEvent::PatternStarted {
+                        level: self.profile.pattern_level,
+                        source: ap.source_npc.clone(),
+                    });
+                    self.active_pattern = Some(ap);
+                    self.set_state(GameState::Pattern);
+                }
+                "balance" => {
+                    let source = self.menu_target_id.clone();
+                    let ab = start_balance(&mut self.rng, &self.profile, self.game_time, source);
+                    self.events.push(GameEvent::BalanceStarted {
+                        level: balance::balance_level_for_band(self.profile.math_band),
+                        source: ab.source_npc.clone(),
+                    });
+                    self.active_balance = Some(ab);
+                    self.set_state(GameState::Balance);
+                }
+                "sudoku" => {
+                    let source = self.menu_target_id.clone();
+                    let asd = start_sudoku(&mut self.rng, &self.profile, self.game_time, source);
+                    self.events.push(GameEvent::SudokuStarted {
+                        grid_size: asd.session.puzzle.grid_size,
+                        source: asd.source_npc.clone(),
+                    });
+                    self.active_sudoku = Some(asd);
+                    self.set_state(GameState::Sudoku);
+                }
+                "shop" => {
+                    let source = self.menu_target_id.clone();
+                    self.active_shop = Some(ActiveShop {
+                        catalog: shop::shop_catalog(),
+                        owned: self.shop_owned.clone(),
+                        selected: None,
+                        choices: Vec::new(),
+                        answer: 0,
+                        cost: 0,
+                        balance_before: 0,
+                        message: None,
+                        source_npc: source,
+                        picking_color: false,
+                    });
+                    self.set_state(GameState::Shop);
                 }
                 "give" => {
                     if !give::can_give(self.dum_dums) {
@@ -1531,15 +2713,37 @@ impl Game {
 
     fn handle_settings_input(&mut self, input: &FrameInput, screen: (f32, f32)) {
         if self.settings_open {
-            if let Some(result) = ui::settings_overlay::handle_input(input, screen) {
-                self.settings_open = false;
+            use ui::settings_overlay::{Feature, SettingsResult};
+            if let Some(result) = ui::settings_overlay::handle_input(input, screen, self.parent_panel_open) {
                 match result {
-                    ui::settings_overlay::SettingsResult::Close => {}
-                    ui::settings_overlay::SettingsResult::BackToTitle => {
+                    // These stay in the overlay — just mutate state, don't close.
+                    SettingsResult::ToggleParentPanel => {
+                        self.parent_panel_open = !self.parent_panel_open;
+                    }
+                    SettingsResult::ToggleFeature(f) => match f {
+                        Feature::Encounters => self.features.encounters = !self.features.encounters,
+                        Feature::Manipulatives => {
+                            self.features.cra_manipulatives = !self.features.cra_manipulatives
+                        }
+                        Feature::Quest => self.features.quest = !self.features.quest,
+                    },
+                    SettingsResult::Close => {
+                        self.settings_open = false;
+                        self.parent_panel_open = false;
+                    }
+                    SettingsResult::BackToTitle => {
+                        self.settings_open = false;
+                        self.parent_panel_open = false;
                         audio::tts::cancel();
                         self.dialogue.active = false;
                         self.active_challenge = None;
                         self.active_kenken = None;
+                        self.active_pattern = None;
+                        self.active_balance = None;
+                        self.active_sudoku = None;
+                        self.active_shop = None;
+                        self.active_manipulative = None;
+                        self.active_quest = None;
                         self.pending_challenge = false;
                         self.set_state(GameState::Title);
                     }
@@ -1619,6 +2823,15 @@ impl Game {
         if let Some(c) = self.companion.as_ref() {
             let companion_kind = c.kind;
             roster.retain(|n| n.kind != companion_kind);
+        }
+        // A gate the kid already solved stays open: clear the guardian's `gate`
+        // flag so it's pushable and won't re-pose its puzzle.
+        for n in roster.iter_mut() {
+            if let Some(id) = n.gate_id {
+                if self.satisfied_gates.contains(id) {
+                    n.gate = false;
+                }
+            }
         }
         roster
     }
@@ -1871,9 +3084,14 @@ impl Game {
         if dest_map == self.map.id {
             self.npcs.push(npc_obj);
         } else {
+            // Seed a never-visited destination's stash with its REAL roster
+            // before adding the intruder. Otherwise the stash would hold only
+            // the pushed NPC, and `load_map_roster` (which prefers an existing
+            // stash over `npcs_for_map`) would spawn the map with its regular
+            // residents missing.
             self.npcs_offstage
                 .entry(dest_map.to_string())
-                .or_insert_with(Vec::new)
+                .or_insert_with(|| npc::npcs_for_map(dest_map))
                 .push(npc_obj);
         }
     }
@@ -1923,7 +3141,55 @@ impl Game {
         let mut dest_map = portal.to_map;
         let dest_x = portal.to_x;
         let dest_y = portal.to_y;
+        let cost = portal.cost;
+        let fuel_cost = portal.fuel_cost;
         let from_map = self.map.id.to_string();
+
+        // Rocket fuel: a fuel-costed jump won't fire on an empty tank. Never a
+        // punishment — Sparky points at the fuel droid; no transfer happens.
+        if fuel_cost > 0 && self.fuel < fuel_cost {
+            self.start_dialogue(vec![DialogueLine {
+                speaker: "Sparky".into(),
+                text: format!(
+                    "Not enough fuel for that jump, boss! It needs {fuel_cost} and we've got {}. Let's find Tank the fuel droid and do some math to top up!",
+                    self.fuel
+                ),
+            }]);
+            self.set_state(GameState::Dialogue);
+            return;
+        }
+        if fuel_cost > 0 {
+            self.fuel -= fuel_cost;
+            self.fuel_flash = 0.5;
+            self.events.push(GameEvent::FuelSpent { amount: fuel_cost, remaining: self.fuel });
+        }
+
+        // One-time toll gate (reusable): a priced portal charges once per
+        // destination, then it's unlocked for good. Falling short is never a
+        // punishment — Sparky just cheers them on to go collect more, and no
+        // transfer happens (they stay put). Keyed by destination map id.
+        let toll_id = dest_map.to_string();
+        let toll_due = cost > 0 && !self.paid_tolls.contains(&toll_id);
+        if toll_due && self.dum_dums < cost {
+            let need = cost - self.dum_dums;
+            self.start_dialogue(vec![DialogueLine {
+                speaker: "Sparky".into(),
+                text: format!(
+                    "Ooh, a dive spot! The first splash in costs {cost} Dum Dums. We need {need} more — let's go find some, boss!"
+                ),
+            }]);
+            self.set_state(GameState::Dialogue);
+            return;
+        }
+        if toll_due {
+            self.dum_dums -= cost;
+            self.paid_tolls.insert(toll_id);
+            self.dum_dum_hud.flash();
+            self.events.push(GameEvent::DumDumsSpent {
+                amount: cost,
+                item: format!("dive:{dest_map}"),
+            });
+        }
 
         if dest_map == "dream" {
             self.dreaming = true;
@@ -1993,7 +3259,8 @@ impl Game {
 
             if let Some(ref iq) = self.intake {
                 if iq.phase == IntakePhase::Question || iq.phase == IntakePhase::Transition {
-                    let progress_text = format!("Question {} of {}", iq.question_index + 1, INTAKE_QUESTION_COUNT);
+                    // Length is adaptive, so don't promise a fixed total.
+                    let progress_text = format!("Question {}", iq.question_index + 1);
                     let tw = measure_text(&progress_text, None, 26, 1.0).width;
                     draw_text(&progress_text, sw / 2.0 - tw / 2.0, 134.0,
                         26.0, Color::from_rgba(144, 202, 249, 200));
@@ -2014,6 +3281,18 @@ impl Game {
 
             clear_background(Color::from_rgba(26, 26, 46, 255));
             tilemap::draw_map(&self.map, self.camera.x, self.camera.y, GAME_W, GAME_H, self.game_time);
+
+            // Click-to-walk destination marker: a pulsing ring on the tapped
+            // tile, drawn on the ground (under the sprites) until arrival.
+            if let Some((tc, tr)) = self.click_target {
+                let cx = (tc as f32 + 0.5) * TILE_SIZE;
+                let cy = (tr as f32 + 0.5) * TILE_SIZE;
+                let pulse = (self.game_time * 6.0).sin() * 0.5 + 0.5; // 0..1
+                let r = TILE_SIZE * 0.28 + pulse * TILE_SIZE * 0.10;
+                let gold = Color::new(1.0, 0.84, 0.30, 0.85);
+                draw_circle_lines(cx, cy, r, 3.0, gold);
+                draw_circle(cx, cy, 4.0, gold);
+            }
 
             enum SpriteKind<'a> { Player, Sparky, Npc(&'a npc::Npc) }
             struct Renderable<'a> { y: f32, kind: SpriteKind<'a> }
@@ -2040,22 +3319,117 @@ impl Game {
 
             for r in &renderables {
                 match &r.kind {
-                    SpriteKind::Player => match self.player_gender {
-                        Gender::Boy => sprites::player::draw_player_boy(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
-                        Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
-                    },
-                    SpriteKind::Sparky => sprites::robot::draw_robot(self.sparky.entity.x, self.sparky.entity.y, self.sparky.entity.dir, self.sparky.entity.frame, self.game_time),
+                    SpriteKind::Player => {
+                        if self.map.id == "space_hub" {
+                            // On the hub the kid pilots the rocket — that's the avatar.
+                            sprites::player::draw_rocket(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time);
+                        } else {
+                            match self.player_gender {
+                                Gender::Boy => sprites::player::draw_player_boy(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
+                                Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
+                            }
+                            // Cosmetics bought from Bolt's shop ride on the kid.
+                            sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.frame, &self.shop_owned, &self.color_choice);
+                            // On planet surfaces the kid wears a space helmet.
+                            if self.map.render_mode == tilemap::RenderMode::Cosmic {
+                                sprites::player::draw_spacesuit_overlay(self.player.x, self.player.y, self.player.frame);
+                            }
+                        }
+                    }
+                    SpriteKind::Sparky => {
+                        sprites::robot::draw_robot(self.sparky.entity.x, self.sparky.entity.y, self.sparky.entity.dir, self.sparky.entity.frame, self.game_time);
+                    }
                     SpriteKind::Npc(n) => n.draw(self.game_time),
                 }
+            }
+
+            // Price tags over the hub's planet pads so the jump cost is visible
+            // up front (not a surprise only when a jump is refused).
+            if self.map.id == "space_hub" {
+                self.draw_planet_pad_labels();
             }
 
             set_default_camera();
         }
     }
 
+    /// Draw a floating price tag above each planet pad on the hub: the planet's
+    /// name and what a jump there costs — green "FREE", amber when affordable,
+    /// red when the tank's too low. Reads the live fuel + portal table so it
+    /// always matches what `handle_portal` will actually charge.
+    fn draw_planet_pad_labels(&self) {
+        for p in tilemap::all_portals() {
+            if p.from_map != self.map.id { continue; }
+            let tile = self.map.tiles[p.from_y][p.from_x];
+            if !matches!(tile, tilemap::Tile::MoonPad | tilemap::Tile::MarsPad | tilemap::Tile::AsteroidPad) {
+                continue;
+            }
+            let name = ui::hud::get_area_name(p.to_map, 0, 0);
+            let cx = p.from_x as f32 * TILE_SIZE + TILE_SIZE / 2.0;
+
+            let nw = measure_text(name, None, 18, 1.0).width;
+            let free = p.fuel_cost == 0;
+            let cost_str = if free { "FREE".to_string() } else { format!("{}", p.fuel_cost) };
+            let cw = measure_text(&cost_str, None, 18, 1.0).width;
+            let cost_line_w = if free { cw } else { cw + 16.0 }; // droplet + number
+            let pill_w = nw.max(cost_line_w) + 18.0;
+            let pill_h = 40.0;
+            let px = cx - pill_w / 2.0;
+            let py = p.from_y as f32 * TILE_SIZE - pill_h - 2.0;
+
+            draw_rectangle(px, py, pill_w, pill_h, Color::new(0.04, 0.05, 0.12, 0.88));
+            draw_rectangle_lines(px, py, pill_w, pill_h, 1.5, Color::new(0.45, 0.55, 0.85, 0.7));
+            draw_text(name, cx - nw / 2.0, py + 17.0, 18.0, WHITE);
+
+            let color = if free {
+                Color::from_rgba(102, 220, 120, 255)   // green: free hop
+            } else if self.fuel >= p.fuel_cost {
+                Color::from_rgba(255, 193, 7, 255)      // amber: affordable
+            } else {
+                Color::from_rgba(255, 99, 99, 255)      // red: not enough fuel
+            };
+            if free {
+                draw_text(&cost_str, cx - cw / 2.0, py + 34.0, 18.0, color);
+            } else {
+                // A little fuel droplet, then the number — readable for pre-readers.
+                let group_x = cx - cost_line_w / 2.0;
+                let dx = group_x + 6.0;
+                let dy = py + 28.0;
+                draw_circle(dx, dy + 2.0, 4.0, color);
+                draw_triangle(
+                    vec2(dx - 3.5, dy + 1.0),
+                    vec2(dx + 3.5, dy + 1.0),
+                    vec2(dx, dy - 5.0),
+                    color,
+                );
+                draw_text(&cost_str, group_x + 14.0, py + 34.0, 18.0, color);
+            }
+        }
+    }
+
     fn render_hud(&mut self, screen: (f32, f32)) {
         ui::hud::draw_area_name(self.map.id, self.player.tile_x, self.player.tile_y);
         self.dum_dum_hud.draw(self.dum_dums, screen);
+        // Rocket fuel gauge — only relevant (and only shown) in space.
+        if self.map.render_mode == tilemap::RenderMode::Cosmic {
+            ui::hud::draw_fuel_gauge(self.fuel, FUEL_MAX, self.fuel_flash, screen);
+        }
+        // On-screen settings gear (tap to open settings → parent options),
+        // shown during free play so it's reachable without a keyboard.
+        if self.state == GameState::Playing && !self.settings_open {
+            let (gx, gy, gw, gh) = settings_gear_rect(screen);
+            let (cx, cy) = (gx + gw / 2.0, gy + gh / 2.0);
+            draw_rectangle(gx, gy, gw, gh, Color::new(0.078, 0.078, 0.157, 0.8));
+            draw_rectangle_lines(gx, gy, gw, gh, 2.0, Color::new(1.0, 0.835, 0.310, 0.9));
+            // A simple cog: ring of teeth + body + hub hole.
+            let gold = Color::new(1.0, 0.835, 0.310, 1.0);
+            for i in 0..8 {
+                let a = i as f32 * std::f32::consts::PI / 4.0;
+                draw_circle(cx + a.cos() * 13.0, cy + a.sin() * 13.0, 3.0, gold);
+            }
+            draw_circle(cx, cy, 11.0, gold);
+            draw_circle(cx, cy, 4.5, Color::new(0.078, 0.078, 0.157, 1.0));
+        }
         self.debug_overlay.draw(
             self.map.id, self.player.tile_x, self.player.tile_y,
             self.dum_dums, self.play_time,
@@ -2105,8 +3479,60 @@ impl Game {
             ui::kenken::draw_kenken(&ak.session, &layout, self.game_time, ak.selected, ak.intro_step);
         }
 
+        // Pattern overlay
+        if let Some(ref ap) = self.active_pattern {
+            let layout = ui::patterns::layout(&ap.session, screen);
+            ui::patterns::draw_pattern(&ap.session, &layout, self.game_time);
+        }
+
+        // Balance overlay
+        if let Some(ref ab) = self.active_balance {
+            let layout = ui::balance::layout(&ab.session, screen);
+            ui::balance::draw_balance(&ab.session, &layout, self.game_time);
+        }
+
+        // Sudoku overlay
+        if let Some(ref asd) = self.active_sudoku {
+            let layout = ui::sudoku::layout(&asd.session, screen);
+            ui::sudoku::draw_sudoku(&asd.session, &layout, asd.selected);
+        }
+
+        // Shop overlay
+        if let Some(ref ash) = self.active_shop {
+            let view = shop_view(ash, &self.color_choice);
+            let layout = ui::shop::layout(&ash.catalog, &view, screen);
+            ui::shop::draw_shop(&ash.catalog, &ash.owned, self.dum_dums, &view, &layout, ash.message.as_deref());
+
+            // While picking an outfit color, show a live preview of the kid in
+            // the panel's top-right so tapping swatches visibly recolors them.
+            if ash.picking_color {
+                let px = layout.panel.x + layout.panel.w - 64.0;
+                let py = layout.panel.y + 14.0;
+                match self.player_gender {
+                    Gender::Boy => sprites::player::draw_player_boy(px, py, Dir::Down, 0, self.game_time),
+                    Gender::Girl => sprites::player::draw_player_girl(px, py, Dir::Down, 0, self.game_time),
+                }
+                sprites::player::draw_player_cosmetics(px, py, 0, &ash.owned, &self.color_choice);
+            }
+        }
+
+        // CRA manipulative overlay
+        if let Some(ref am) = self.active_manipulative {
+            let layout = ui::manipulative::layout(&am.manip, screen);
+            ui::manipulative::draw(&am.manip, &am.challenge.display_text, &layout);
+        }
+
+        // Quest overlay
+        if let Some(ref aq) = self.active_quest {
+            if let Some(view) = quest_view(aq) {
+                let layout = ui::quest::layout(&view, screen);
+                let title = aq.session.quest.title.clone();
+                ui::quest::draw(&view, &title, aq.message.as_deref(), &layout);
+            }
+        }
+
         if self.settings_open {
-            ui::settings_overlay::draw(screen);
+            ui::settings_overlay::draw(screen, self.features, self.parent_panel_open);
         }
     }
 
@@ -2136,6 +3562,11 @@ impl Game {
                 tile_x: c.entity.tile_x,
                 tile_y: c.entity.tile_y,
             }),
+            shop_owned: self.shop_owned.iter().cloned().collect(),
+            color_choice: self.color_choice.clone(),
+            satisfied_gates: self.satisfied_gates.iter().cloned().collect(),
+            paid_tolls: self.paid_tolls.iter().cloned().collect(),
+            fuel: self.fuel,
         }
     }
 
@@ -2146,6 +3577,11 @@ impl Game {
         self.dum_dums = save_data.dum_dums;
         self.play_time = save_data.play_time;
         self.gifts_given = save_data.gifts_given.clone();
+        self.shop_owned = save_data.shop_owned.iter().cloned().collect();
+        self.color_choice = save_data.color_choice.clone();
+        self.satisfied_gates = save_data.satisfied_gates.iter().cloned().collect();
+        self.paid_tolls = save_data.paid_tolls.iter().cloned().collect();
+        self.fuel = save_data.fuel;
 
         self.map = Map::by_id(&save_data.map_id);
         self.npcs_offstage.clear();
@@ -2203,6 +3639,113 @@ impl Game {
 }
 
 // ─── Free helpers ──────────────────────────────────────
+
+/// Build the player-facing view of the quest's current step (borrows the step
+/// + generated choices). `None` once the quest is complete/inactive.
+fn quest_view(aq: &ActiveQuest) -> Option<ui::quest::QuestView<'_>> {
+    use ui::quest::QuestView;
+    let step = aq.session.current_step()?;
+    Some(match step {
+        QuestStep::Dialogue { speaker, lines } => QuestView::Narrative { speaker, lines },
+        QuestStep::Travel { map, x, y } => {
+            QuestView::Travel { label: format!("Head to {map} at ({x}, {y})...") }
+        }
+        QuestStep::MathPuzzle { context, .. } => {
+            let choices = aq.puzzle.as_ref().map(|p| p.choices.as_slice()).unwrap_or(&[]);
+            QuestView::Puzzle { prompt: context, choices }
+        }
+        QuestStep::Choice { prompt, options } => QuestView::Choice { prompt, options },
+        QuestStep::Reward { dum_dums } => QuestView::Reward { dum_dums: *dum_dums },
+    })
+}
+
+/// Generate the inline multiple-choice for the current MathPuzzle step (if any)
+/// from its operands + operation. The answer is computed; the distractors are
+/// nearby values.
+fn build_quest_puzzle(session: &QuestSession, rng: &mut SmallRng) -> Option<QuestPuzzle> {
+    match session.current_step()? {
+        QuestStep::MathPuzzle { operation, operands, .. } => {
+            let (a, b) = (*operands)?;
+            let (a, b) = (a as i32, b as i32);
+            let answer = match operation {
+                // Operands may be authored in either order; a quest answer is a
+                // count, so keep it non-negative (the magnitude of the difference).
+                Operation::Sub => (a - b).abs(),
+                Operation::Multiply => a * b,
+                Operation::Divide => if b != 0 { a / b } else { 0 },
+                _ => a + b, // Add / NumberBond
+            };
+            Some(QuestPuzzle { choices: quest_answer_choices(answer, rng), answer })
+        }
+        _ => None,
+    }
+}
+
+/// Answer tiles for a quest puzzle: the correct value plus nearby positive
+/// distractors, shuffled. Always includes the answer.
+fn quest_answer_choices(answer: i32, rng: &mut SmallRng) -> Vec<i32> {
+    let mut out = vec![answer];
+    for d in [answer + 1, answer - 1, answer + 2, answer - 2, answer + 3] {
+        if out.len() >= 4 {
+            break;
+        }
+        if d >= 0 && !out.contains(&d) {
+            out.push(d);
+        }
+    }
+    out.shuffle(rng);
+    out
+}
+
+/// Build the shop's current view (browsing, solving a purchase subtraction,
+/// or picking an outfit color) from the active session. Borrows the session
+/// so the layout/draw can read it.
+fn shop_view<'a>(ash: &'a ActiveShop, color_choice: &str) -> ui::shop::ShopView<'a> {
+    if ash.picking_color {
+        let current = sprites::player::OUTFIT_COLORS
+            .iter()
+            .position(|(id, _)| *id == color_choice)
+            .unwrap_or(0);
+        return ui::shop::ShopView::PickingColor { colors: sprites::player::OUTFIT_COLORS, current };
+    }
+    match ash.selected {
+        Some(i) => ui::shop::ShopView::Buying {
+            item: &ash.catalog[i],
+            balance: ash.balance_before,
+            cost: ash.cost,
+            choices: &ash.choices,
+        },
+        None => ui::shop::ShopView::Browsing,
+    }
+}
+
+/// Answer tiles for "balance − cost = ?": the correct remainder plus plausible
+/// near-miss distractors (forgot to subtract, off-by-one), shuffled, all > 0
+/// where possible. Always includes the right answer.
+fn subtraction_choices(balance: u32, cost: u32, rng: &mut SmallRng) -> Vec<u32> {
+    let answer = balance.saturating_sub(cost);
+    let mut out = vec![answer];
+    // Common slip-ups make the best distractors.
+    for cand in [balance, answer + 1, answer.saturating_sub(1), answer + 2] {
+        if out.len() >= 3 {
+            break;
+        }
+        if !out.contains(&cand) {
+            out.push(cand);
+        }
+    }
+    out.shuffle(rng);
+    out
+}
+
+/// Screen-space rect of the on-screen settings gear (bottom-right, clear of the
+/// top HUD/area-name), so parents can open settings — and the feature flags
+/// inside — without a keyboard.
+fn settings_gear_rect(screen: (f32, f32)) -> (f32, f32, f32, f32) {
+    let (sw, sh) = screen;
+    let size = 44.0;
+    (sw - size - 12.0, sh - size - 12.0, size, size)
+}
 
 fn is_dev_zone_code(name: &str) -> bool {
     let normalized: String = name.chars().filter(|c| !c.is_whitespace()).collect();
@@ -2272,6 +3815,115 @@ fn start_kenken(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, so
         start_time: game_time,
         source_npc: source,
         intro_step,
+    }
+}
+
+fn start_pattern(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, source: String) -> ActivePattern {
+    let level = profile.pattern_level.max(1);
+    let puzzle = generate_for_level(level, rng);
+    ActivePattern {
+        session: PatternSession::new(puzzle),
+        complete_timer: 0.0,
+        start_time: game_time,
+        source_npc: source,
+    }
+}
+
+fn start_balance(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, source: String) -> ActiveBalance {
+    // Balance difficulty rides the arithmetic band — it's the same math in a
+    // different visual, so no separate level dial is needed.
+    let puzzle = generate_balance_for_band(profile.math_band, rng);
+    ActiveBalance {
+        session: BalanceSession::new(puzzle),
+        complete_timer: 0.0,
+        start_time: game_time,
+        source_npc: source,
+    }
+}
+
+fn start_sudoku(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, source: String) -> ActiveSudoku {
+    // Sudoku is pure logic; reuse the kenken level dial as a "logic grid" size
+    // signal: a kid comfortable with bigger kenken grids gets the 6x6 board.
+    let level = if profile.kenken_level >= 4 { 3 } else { 1 };
+    let puzzle = generate_sudoku_for_level(level, rng);
+    ActiveSudoku {
+        session: SudokuSession::new(puzzle),
+        selected: None,
+        complete_timer: 0.0,
+        start_time: game_time,
+        source_npc: source,
+    }
+}
+
+fn apply_sudoku_intent(asd: &mut ActiveSudoku, intent: ui::sudoku::SudokuInput) {
+    use robot_buddy_domain::logic::sudoku::SudokuAction;
+    match intent {
+        ui::sudoku::SudokuInput::Action(action) => {
+            asd.session = sudoku::sudoku_reducer(asd.session.clone(), action);
+            // Drop selection after a clean placement; keep it on a conflict so
+            // the kid can retry the same cell and the violation stays anchored.
+            if let SudokuAction::CellPlaced { .. } = action {
+                if asd.session.last_violation.is_none() {
+                    asd.selected = None;
+                }
+            }
+        }
+        ui::sudoku::SudokuInput::SelectCell(r, c) => {
+            asd.selected = Some((r, c));
+            asd.session.last_violation = None;
+        }
+        ui::sudoku::SudokuInput::Deselect => {
+            asd.selected = None;
+            asd.session.last_violation = None;
+        }
+    }
+}
+
+/// Choose a CRA manipulative for an add/sub challenge based on the learner's
+/// CRA stage for that operation. Concrete → hands-on objects; Representational →
+/// number line. Returns `None` for Abstract, other operations, or operands too
+/// large for a tidy manipulative (those keep the standard challenge).
+fn try_make_manipulative(profile: &LearnerProfile, challenge: &Challenge) -> Option<ui::manipulative::Manip> {
+    use ui::manipulative::Manip;
+    let op = challenge.operation;
+    if !matches!(op, Operation::Add | Operation::Sub) {
+        return None;
+    }
+    let (a, b) = (challenge.numbers.a, challenge.numbers.b);
+    if a < 0 || b < 0 || a > 20 || b > 20 {
+        return None;
+    }
+    let (a, b) = (a as u8, b as u8);
+    match profile.cra_stages.get(&op).copied().unwrap_or(CraStage::Concrete) {
+        CraStage::Concrete => {
+            let kind = if op == Operation::Sub { ConcreteKind::TakeAway } else { ConcreteKind::AddGroups };
+            // Keep concrete object counts manageable.
+            if a.saturating_add(b) > 12 {
+                return None;
+            }
+            let puzzle = generate_concrete(kind, a, b, &mut SmallRng::seed_from_u64(0));
+            Some(Manip::Concrete(manipulate_concrete::ConcreteSession::new(puzzle)))
+        }
+        CraStage::Representational => {
+            let puzzle = generate_number_line(a, b, op, &mut SmallRng::seed_from_u64(0));
+            Some(Manip::NumberLine(number_line::NumberLineSession::new(puzzle)))
+        }
+        CraStage::Abstract => None,
+    }
+}
+
+fn apply_manip_intent(manip: &mut ui::manipulative::Manip, intent: ui::manipulative::ManipInput) {
+    use ui::manipulative::{Manip, ManipInput};
+    match (manip, intent) {
+        (Manip::Concrete(s), ManipInput::Concrete(a)) => {
+            *s = manipulate_concrete::concrete_reducer(s.clone(), a);
+        }
+        (Manip::NumberLine(s), ManipInput::NumberLine(a)) => {
+            *s = number_line::number_line_reducer(s.clone(), a);
+        }
+        // Mismatched pairings can't occur (layout builds inputs from the same
+        // session), so ignore them rather than panic.
+        _ => {}
     }
 }
 
@@ -2453,9 +4105,67 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
             "I like to wander in circles. It's very fun!",
             "Got any snacks? I'm always a bit hungry, hehe!",
         ],
+        // ReefShark normally reaches the player through the gate-challenge path,
+        // not here — but if you chat after he's stepped aside, he's a sweetie.
+        ReefShark => &[
+            "Thanks for the puzzle, pal! Naps are better after a good brain stretch.",
+            "Toothy grin, gentle heart. That's me!",
+            "Swim on through, the cove's all yours!",
+        ],
+        SeaTurtle => &[
+            "Greetings, little diver. I've ridden these currents a hundred years.",
+            "Slow and steady finds the most pearls, you know.",
+            "The coral grows a tiny bit every day. Just like you!",
+        ],
+        Dolphin => &[
+            "Eee-eee! Wanna race? I'll give you a head start! ...okay maybe two!",
+            "Did you see my flip? I've been practicing!",
+            "Bubbles are the BEST. Watch — bloop bloop bloop!",
+        ],
+        Crab => &[
+            "Snip snap! Mind the claws, I'm just saying hi!",
+            "Sideways is the only way to walk, obviously.",
+            "I keep the sand tidy around here. Very important job.",
+        ],
+        Jelly => &[
+            "...blub... (the jellyfish wobbles a friendly hello)",
+            "Drifting is a perfectly good plan, thank you very much.",
+            "Don't worry, I'm the no-sting kind!",
+        ],
+        MoonAlien => &[
+            "Zorp! You bounced all the way to the Moon! Boing boing!",
+            "Low gravity is the BEST. Watch me jump super high! Wheee!",
+            "I collect moon rocks. Wanna see? I have... a LOT.",
+        ],
+        // FuelBot reaches the player through the refuel-challenge path, not here.
+        FuelBot => &[
+            "BEEP. Tank online. Solve my puzzle and I'll top off your rocket!",
+            "Fuel is friendship. ...no wait, that's not right. BEEP.",
+        ],
+        // MarsGuardian normally reaches the player via the gate path; this is
+        // for after he's waved them through.
+        MarsGuardian => &[
+            "Course plotted! Safe travels, little astronaut. Rok approves.",
+            "The cove's all yours now. Mind the red dust!",
+            "Numbers are the best maps. You read them like a pro!",
+        ],
+        StarKeeper => &[
+            "Welcome to the star chart, navigator! Spot the pattern in the stars?",
+            "Every constellation hides a sequence. Can you finish it?",
+            "Cassi has mapped a thousand skies. Today we map one together!",
+        ],
+        StationAlien => &[
+            "Bleep bloop! A visitor! It's been AGES since anyone docked here!",
+            "I keep the station tidy. Floating crumbs are a real problem.",
+            "Did you know space has no up or down? My feet sure don't.",
+        ],
         // Dev-control NPCs go through apply_dev_control, never this path.
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
-        | CtrlTriggerKenken | CtrlTriggerChallenge => &["Hello there!"],
+        | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance
+        | CtrlTriggerSudoku | CtrlTriggerChallenge
+        | CtrlToggleEncounters | CtrlTriggerEncounter
+        | CtrlToggleManipulatives | CtrlTriggerManipulative
+        | CtrlToggleQuest | CtrlStartQuest => &["Hello there!"],
     };
     let idx = rng.gen_range(0..lines.len());
     vec![DialogueLine { speaker: npc.name().into(), text: lines[idx].into() }]
@@ -2599,6 +4309,278 @@ fn secret_entry_dialogue(map_id: &str) -> Vec<DialogueLine> {
             DialogueLine { speaker: "Sparky".into(),
                 text: "This place is SO pretty! And SO secret! The trees are whispering!".into() },
         ],
+        "reef" => vec![
+            DialogueLine { speaker: "Sparky".into(),
+                text: "BLUB BLUB! We're UNDERWATER, boss! And I didn't even rust! Best upgrade EVER!".into() },
+            DialogueLine { speaker: "Sparky".into(),
+                text: "Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!".into() },
+        ],
+        "space_hub" => vec![
+            DialogueLine { speaker: "Sparky".into(),
+                text: "3... 2... 1... BLAST OFF! WHEEEE! Boss, we're in SPACE! Actual outer SPACE!".into() },
+            DialogueLine { speaker: "Sparky".into(),
+                text: "Fly the rocket to a glowing pad to visit a planet! Tank the fuel droid is over there if we run low.".into() },
+        ],
         _ => vec![],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::save::InMemoryBackend;
+    use ::rand::SeedableRng;
+    use ::rand::rngs::SmallRng;
+    use robot_buddy_domain::quest::{Quest, QuestAction, QuestSession, QuestStep};
+
+    fn game() -> Game {
+        Game::with_backend(7, Box::new(InMemoryBackend::default()))
+    }
+
+    // ── Fix #1: leaving Playing cancels an in-progress click-to-walk ──
+    #[test]
+    fn leaving_playing_clears_walk_state() {
+        let mut g = game();
+        g.set_state(GameState::Playing);
+        g.player_path = vec![(1, 1), (2, 1)];
+        g.pending_interact = Some((3, 1));
+        g.click_target = Some((3, 1));
+
+        g.set_state(GameState::Dialogue); // e.g. a random encounter interrupts
+
+        assert!(g.player_path.is_empty(), "walk path must not survive into another state");
+        assert_eq!(g.pending_interact, None, "pending auto-interact must be cancelled");
+        assert_eq!(g.click_target, None, "walk marker must be cleared");
+    }
+
+    // ── Fix #2: tap→tile mapping holds when the window isn't 960×720 ──
+    #[test]
+    fn click_maps_to_tile_at_any_window_size() {
+        const TILE: f32 = TILE_SIZE;
+        for (sw, sh) in [(GAME_W, GAME_H), (480.0, 360.0), (1280.0, 800.0)] {
+            let mut g = game();
+            g.camera = GameCamera { x: 0.0, y: 0.0 };
+            let goal = (g.player.tile_x, g.player.tile_y); // own tile: always reachable
+            // Screen position the renderer would put this tile's centre at.
+            let sx = (goal.0 as f32 + 0.5) * TILE - g.camera.x + (sw - GAME_W) / 2.0;
+            let sy = (goal.1 as f32 + 0.5) * TILE - g.camera.y + (sh - GAME_H) / 2.0;
+            g.set_path_from_click(sx, sy, (sw, sh));
+            assert_eq!(
+                g.click_target,
+                Some(goal),
+                "tap should resolve to the intended tile at window {sw}x{sh}",
+            );
+        }
+    }
+
+    // ── Fix #3: a quest subtraction step never yields a negative answer ──
+    #[test]
+    fn quest_subtraction_answer_is_non_negative_either_operand_order() {
+        for (a, b) in [(2u16, 5u16), (5, 2), (3, 3)] {
+            let quest = Quest {
+                id: "t".into(),
+                title: "t".into(),
+                description: "t".into(),
+                steps: vec![QuestStep::MathPuzzle {
+                    operation: Operation::Sub,
+                    band: 3,
+                    context: "take away".into(),
+                    operands: Some((a, b)),
+                }],
+                math_domain: vec![Operation::Sub],
+                min_band: 1,
+                max_band: 5,
+            };
+            let session = quest::quest_reducer(QuestSession::new(quest), QuestAction::Start);
+            let mut rng = SmallRng::seed_from_u64(1);
+            let p = build_quest_puzzle(&session, &mut rng).expect("math step yields a puzzle");
+            assert_eq!(p.answer, (a as i32 - b as i32).abs());
+            assert!(p.answer >= 0);
+            assert!(p.choices.contains(&p.answer));
+            assert!(p.choices.len() >= 2, "need at least two tiles, got {:?}", p.choices);
+            assert!(p.choices.iter().all(|&c| c >= 0), "no negative tiles: {:?}", p.choices);
+        }
+    }
+
+    #[test]
+    fn quest_answer_choices_are_non_negative_and_distinct() {
+        let mut rng = SmallRng::seed_from_u64(2);
+        for answer in 0..6 {
+            let ch = quest_answer_choices(answer, &mut rng);
+            assert!(ch.contains(&answer));
+            assert!(ch.iter().all(|&c| c >= 0));
+            let mut sorted = ch.clone();
+            sorted.sort();
+            sorted.dedup();
+            assert_eq!(sorted.len(), ch.len(), "choices distinct: {ch:?}");
+        }
+    }
+
+    // ── On-screen settings gear opens the overlay (keyboard-free access) ──
+    #[test]
+    fn tapping_the_gear_opens_settings() {
+        let mut g = game();
+        g.set_state(GameState::Playing);
+        assert!(!g.settings_open);
+        let (gx, gy, gw, gh) = settings_gear_rect((960.0, 720.0));
+        let click = crate::input::FrameInput::empty().with_mouse_click(gx + gw / 2.0, gy + gh / 2.0);
+        g.step(&click, 1.0 / 60.0, (960.0, 720.0));
+        assert!(g.settings_open, "tapping the gear should open settings");
+    }
+
+    #[test]
+    fn tapping_elsewhere_does_not_open_settings() {
+        let mut g = game();
+        g.set_state(GameState::Playing);
+        // A tap in the middle of the screen is gameplay (click-to-walk), not the gear.
+        let click = crate::input::FrameInput::empty().with_mouse_click(480.0, 360.0);
+        g.step(&click, 1.0 / 60.0, (960.0, 720.0));
+        assert!(!g.settings_open, "a non-gear tap must not open settings");
+    }
+
+    // ── Shop cosmetics survive save → load ──
+    #[test]
+    fn shop_cosmetics_persist_through_save_load() {
+        let mut g = game();
+        g.shop_owned.insert("hat".to_string());
+        g.shop_owned.insert("bow_tie".to_string());
+        let data = g.gather_save_data();
+
+        let mut g2 = game();
+        assert!(g2.shop_owned.is_empty());
+        g2.load_from_save(&data);
+        assert!(g2.shop_owned.contains("hat"), "hat should persist");
+        assert!(g2.shop_owned.contains("bow_tie"), "bow tie should persist");
+    }
+
+    // ── Color Change comes with a color picker ──
+
+    const SCREEN: (f32, f32) = (960.0, 720.0);
+
+    /// Open Bolt's shop directly (skipping the walk-and-talk).
+    fn open_shop(g: &mut Game) {
+        g.active_shop = Some(ActiveShop {
+            catalog: shop::shop_catalog(),
+            owned: g.shop_owned.clone(),
+            selected: None,
+            choices: Vec::new(),
+            answer: 0,
+            cost: 0,
+            balance_before: 0,
+            message: None,
+            source_npc: "shopkeeper".into(),
+            picking_color: false,
+        });
+        g.set_state(GameState::Shop);
+    }
+
+    /// Click whatever shop element sits at the center of `rect`.
+    fn click_shop(g: &mut Game, rect: ui::shop::UiRect) {
+        let click = crate::input::FrameInput::empty()
+            .with_mouse_click(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+        g.step(&click, 1.0 / 60.0, SCREEN);
+    }
+
+    fn shop_layout(g: &Game) -> ui::shop::ShopLayout {
+        let ash = g.active_shop.as_ref().expect("shop should be open");
+        ui::shop::layout(&ash.catalog, &shop_view(ash, &g.color_choice), SCREEN)
+    }
+
+    #[test]
+    fn buying_color_change_opens_the_picker_and_picking_sticks() {
+        let mut g = game();
+        g.dum_dums = 20;
+        open_shop(&mut g);
+
+        // Tap the Color Change row, then answer the purchase subtraction.
+        let row = shop_layout(&g).items.iter()
+            .find(|r| g.active_shop.as_ref().unwrap().catalog[r.index].id == "color_change")
+            .expect("color_change in catalog").rect;
+        click_shop(&mut g, row);
+        let answer = g.active_shop.as_ref().unwrap().answer;
+        let tile = shop_layout(&g).answers.iter()
+            .find(|t| t.value == answer).expect("correct answer tile").rect;
+        click_shop(&mut g, tile);
+
+        let ash = g.active_shop.as_ref().unwrap();
+        assert!(ash.owned.contains("color_change"));
+        assert!(ash.picking_color, "buying Color Change should open the picker");
+
+        // Pick the second swatch; the kid's outfit color should change.
+        let swatch = shop_layout(&g).swatches[1].rect;
+        click_shop(&mut g, swatch);
+        assert_eq!(g.color_choice, sprites::player::OUTFIT_COLORS[1].0);
+
+        // Done dismisses the picker but keeps the shop open.
+        let close = shop_layout(&g).close_btn;
+        click_shop(&mut g, close);
+        let ash = g.active_shop.as_ref().unwrap();
+        assert!(!ash.picking_color, "Done should close the picker first");
+        assert!(g.active_shop.is_some(), "the shop itself should stay open");
+    }
+
+    #[test]
+    fn changing_color_back_and_forth_sticks_each_time() {
+        let mut g = game();
+        g.shop_owned.insert("color_change".to_string());
+        open_shop(&mut g);
+
+        // Reopen the picker from the owned Color Change row.
+        let row = shop_layout(&g).items.iter()
+            .find(|r| g.active_shop.as_ref().unwrap().catalog[r.index].id == "color_change")
+            .unwrap().rect;
+        click_shop(&mut g, row);
+        assert!(g.active_shop.as_ref().unwrap().picking_color);
+
+        // Pick a sequence with repeats and back-tracking. Each pick must stick,
+        // the picker must stay open, and the highlighted swatch must follow.
+        for &i in &[1usize, 3, 6, 3, 1, 0, 6, 0] {
+            let swatch = shop_layout(&g).swatches[i].rect;
+            click_shop(&mut g, swatch);
+            assert_eq!(g.color_choice, sprites::player::OUTFIT_COLORS[i].0,
+                "picking swatch {i} should set color_choice to {}", sprites::player::OUTFIT_COLORS[i].0);
+            assert!(g.active_shop.as_ref().unwrap().picking_color,
+                "picker should stay open so the kid can keep changing colors");
+            match shop_view(g.active_shop.as_ref().unwrap(), &g.color_choice) {
+                ui::shop::ShopView::PickingColor { current, .. } =>
+                    assert_eq!(current, i, "the highlighted swatch should track the latest pick"),
+                _ => panic!("expected the PickingColor view while picking"),
+            }
+        }
+    }
+
+    #[test]
+    fn owned_color_change_row_reopens_the_picker() {
+        let mut g = game();
+        g.shop_owned.insert("color_change".to_string());
+        open_shop(&mut g);
+        let row = shop_layout(&g).items.iter()
+            .find(|r| g.active_shop.as_ref().unwrap().catalog[r.index].id == "color_change")
+            .unwrap().rect;
+        click_shop(&mut g, row);
+        assert!(
+            g.active_shop.as_ref().unwrap().picking_color,
+            "tapping an owned Color Change should reopen the picker, not refuse the sale"
+        );
+    }
+
+    #[test]
+    fn color_choice_persists_through_save_load() {
+        let mut g = game();
+        g.color_choice = "teal".to_string();
+        let data = g.gather_save_data();
+
+        let mut g2 = game();
+        g2.load_from_save(&data);
+        assert_eq!(g2.color_choice, "teal");
+    }
+
+    #[test]
+    fn saves_from_before_the_picker_default_to_the_original_tint() {
+        let g = game();
+        let mut json = serde_json::to_value(g.gather_save_data()).unwrap();
+        json.as_object_mut().unwrap().remove("color_choice");
+        let data: crate::save::SaveData = serde_json::from_value(json).unwrap();
+        assert_eq!(data.color_choice, sprites::player::OUTFIT_COLORS[0].0);
     }
 }

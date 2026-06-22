@@ -66,3 +66,4 @@ pub fn draw_robot(x: f32, y: f32, dir: Dir, frame: u32, time: f32) {
     let pulse = (time * 2.0).sin() * 0.3 + 0.7;
     draw_circle(cx, cy + bob, 3.0, Color::from_rgba(0, 230, 118, (pulse * 255.0) as u8));
 }
+
