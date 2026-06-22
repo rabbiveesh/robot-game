@@ -455,6 +455,9 @@ pub struct Game {
     /// True while a fuel-depot's refill puzzle is on screen (set on interact,
     /// consumed when the challenge resolves).
     pending_refuel: bool,
+    /// Counts down after fuel is spent or refilled so the gauge pulses — makes
+    /// the otherwise-silent fuel change register.
+    fuel_flash: f32,
     new_game_form: Option<NewGameForm>,
 
     // Save / persistence
@@ -547,6 +550,7 @@ impl Game {
             paid_tolls: std::collections::HashSet::new(),
             fuel: FUEL_MAX,
             pending_refuel: false,
+            fuel_flash: 0.0,
             new_game_form: None,
             player_name: String::new(),
             player_gender: Gender::Boy,
@@ -767,6 +771,7 @@ impl Game {
             self.pending_challenge = false;
         }
         self.dum_dum_hud.update(dt);
+        if self.fuel_flash > 0.0 { self.fuel_flash -= dt; }
 
         // Time tracking + auto-save
         if !self.settings_open && self.state != GameState::Title && self.state != GameState::NewGame {
@@ -1763,6 +1768,7 @@ impl Game {
                 // A miss just means try again — never a setback.
                 if std::mem::take(&mut self.pending_refuel) && was_correct {
                     self.fuel = FUEL_MAX;
+                    self.fuel_flash = 0.5;
                     self.events.push(GameEvent::Refueled { to: self.fuel });
                 }
             }
@@ -3154,6 +3160,7 @@ impl Game {
         }
         if fuel_cost > 0 {
             self.fuel -= fuel_cost;
+            self.fuel_flash = 0.5;
             self.events.push(GameEvent::FuelSpent { amount: fuel_cost, remaining: self.fuel });
         }
 
@@ -3336,7 +3343,67 @@ impl Game {
                 }
             }
 
+            // Price tags over the hub's planet pads so the jump cost is visible
+            // up front (not a surprise only when a jump is refused).
+            if self.map.id == "space_hub" {
+                self.draw_planet_pad_labels();
+            }
+
             set_default_camera();
+        }
+    }
+
+    /// Draw a floating price tag above each planet pad on the hub: the planet's
+    /// name and what a jump there costs — green "FREE", amber when affordable,
+    /// red when the tank's too low. Reads the live fuel + portal table so it
+    /// always matches what `handle_portal` will actually charge.
+    fn draw_planet_pad_labels(&self) {
+        for p in tilemap::all_portals() {
+            if p.from_map != self.map.id { continue; }
+            let tile = self.map.tiles[p.from_y][p.from_x];
+            if !matches!(tile, tilemap::Tile::MoonPad | tilemap::Tile::MarsPad | tilemap::Tile::AsteroidPad) {
+                continue;
+            }
+            let name = ui::hud::get_area_name(p.to_map, 0, 0);
+            let cx = p.from_x as f32 * TILE_SIZE + TILE_SIZE / 2.0;
+
+            let nw = measure_text(name, None, 18, 1.0).width;
+            let free = p.fuel_cost == 0;
+            let cost_str = if free { "FREE".to_string() } else { format!("{}", p.fuel_cost) };
+            let cw = measure_text(&cost_str, None, 18, 1.0).width;
+            let cost_line_w = if free { cw } else { cw + 16.0 }; // droplet + number
+            let pill_w = nw.max(cost_line_w) + 18.0;
+            let pill_h = 40.0;
+            let px = cx - pill_w / 2.0;
+            let py = p.from_y as f32 * TILE_SIZE - pill_h - 2.0;
+
+            draw_rectangle(px, py, pill_w, pill_h, Color::new(0.04, 0.05, 0.12, 0.88));
+            draw_rectangle_lines(px, py, pill_w, pill_h, 1.5, Color::new(0.45, 0.55, 0.85, 0.7));
+            draw_text(name, cx - nw / 2.0, py + 17.0, 18.0, WHITE);
+
+            let color = if free {
+                Color::from_rgba(102, 220, 120, 255)   // green: free hop
+            } else if self.fuel >= p.fuel_cost {
+                Color::from_rgba(255, 193, 7, 255)      // amber: affordable
+            } else {
+                Color::from_rgba(255, 99, 99, 255)      // red: not enough fuel
+            };
+            if free {
+                draw_text(&cost_str, cx - cw / 2.0, py + 34.0, 18.0, color);
+            } else {
+                // A little fuel droplet, then the number — readable for pre-readers.
+                let group_x = cx - cost_line_w / 2.0;
+                let dx = group_x + 6.0;
+                let dy = py + 28.0;
+                draw_circle(dx, dy + 2.0, 4.0, color);
+                draw_triangle(
+                    vec2(dx - 3.5, dy + 1.0),
+                    vec2(dx + 3.5, dy + 1.0),
+                    vec2(dx, dy - 5.0),
+                    color,
+                );
+                draw_text(&cost_str, group_x + 14.0, py + 34.0, 18.0, color);
+            }
         }
     }
 
@@ -3345,7 +3412,7 @@ impl Game {
         self.dum_dum_hud.draw(self.dum_dums, screen);
         // Rocket fuel gauge — only relevant (and only shown) in space.
         if self.map.render_mode == tilemap::RenderMode::Cosmic {
-            ui::hud::draw_fuel_gauge(self.fuel, FUEL_MAX, screen);
+            ui::hud::draw_fuel_gauge(self.fuel, FUEL_MAX, self.fuel_flash, screen);
         }
         // On-screen settings gear (tap to open settings → parent options),
         // shown during free play so it's reachable without a keyboard.

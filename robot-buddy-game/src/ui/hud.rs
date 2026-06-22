@@ -126,8 +126,10 @@ impl DumDumHud {
 // ─── FUEL GAUGE (space maps) ────────────────────────────
 
 /// Draw the rocket's fuel gauge just under the Dum Dum counter. Shown only on
-/// space maps. Bar turns amber when low so kids know to refuel.
-pub fn draw_fuel_gauge(fuel: u32, max: u32, screen: (f32, f32)) {
+/// space maps. Bar turns amber when low so kids know to refuel. `flash` (0..0.5)
+/// pulses a bright ring right after fuel is spent or refilled so the change
+/// registers.
+pub fn draw_fuel_gauge(fuel: u32, max: u32, flash: f32, screen: (f32, f32)) {
     let sw = screen.0;
     let bg_w = 96.0;
     let bg_h = 30.0;
@@ -135,6 +137,12 @@ pub fn draw_fuel_gauge(fuel: u32, max: u32, screen: (f32, f32)) {
     let y = 62.0; // sits below the 44px-tall Dum Dum HUD at y=10
 
     draw_rectangle(x, y, bg_w, bg_h, Color::new(0.078, 0.078, 0.157, 0.8));
+    // Flash ring on a fuel change.
+    if flash > 0.0 {
+        let a = (flash / 0.5).clamp(0.0, 1.0);
+        draw_rectangle_lines(x - 2.0, y - 2.0, bg_w + 4.0, bg_h + 4.0, 3.0,
+            Color::new(1.0, 0.95, 0.5, a));
+    }
 
     // Little fuel-pump icon.
     let icon_x = x + 14.0;
