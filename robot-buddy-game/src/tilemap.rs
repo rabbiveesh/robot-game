@@ -482,7 +482,7 @@ impl Map {
             tiles: vec![
                 vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
                 vec![SR,RG,RG,RG,RG,RG,RG,RG,RG,RG,RG,SR],
-                vec![SR,RG,RG,RG,RG,Ch,RG,RG,RG,RG,RG,SR],
+                vec![SR,RG,RG,RG,RG,RG,RG,RG,Ch,RG,RG,SR],
                 vec![SR,RG,RG,RG,RG,RG,RG,RG,RG,RG,RG,SR],
                 vec![SR,SR,SR,SR,SR,RG,SR,SR,SR,SR,SR,SR],
                 vec![SR,RG,RG,RG,RG,RG,RG,RG,RG,RG,RG,SR],
