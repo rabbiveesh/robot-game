@@ -17,6 +17,9 @@ pub enum NpcKind {
     GlitchDog,
     GroveSpirit,
     Pip,
+    /// The signpost by the main house. Looks like scenery, but gift it a Dum
+    /// Dum and it cheerfully uproots itself to follow you around. For the lolz.
+    Signpost,
     // Reef creatures
     ReefShark,
     SeaTurtle,
@@ -61,6 +64,7 @@ impl NpcKind {
             NpcKind::GlitchDog => "glitch_dog",
             NpcKind::GroveSpirit => "grove_spirit",
             NpcKind::Pip => "pip",
+            NpcKind::Signpost => "signpost",
             NpcKind::ReefShark => "reef_shark",
             NpcKind::SeaTurtle => "sea_turtle",
             NpcKind::Dolphin => "dolphin",
@@ -100,6 +104,7 @@ impl NpcKind {
             NpcKind::GlitchDog => "B0RK.exe",
             NpcKind::GroveSpirit => "Old Oak",
             NpcKind::Pip => "Pip",
+            NpcKind::Signpost => "Old Signy",
             NpcKind::ReefShark => "Chompy",
             NpcKind::SeaTurtle => "Shelldon",
             NpcKind::Dolphin => "Echo",
@@ -134,7 +139,7 @@ impl NpcKind {
     pub const ALL: &'static [NpcKind] = &[
         NpcKind::Sage, NpcKind::SageLab, NpcKind::DreamSage, NpcKind::Mommy,
         NpcKind::Kid1, NpcKind::Kid2, NpcKind::Shopkeeper, NpcKind::GlitchDog,
-        NpcKind::GroveSpirit, NpcKind::Pip,
+        NpcKind::GroveSpirit, NpcKind::Pip, NpcKind::Signpost,
         NpcKind::ReefShark, NpcKind::SeaTurtle, NpcKind::Dolphin, NpcKind::Crab, NpcKind::Jelly,
         NpcKind::MoonAlien, NpcKind::FuelBot, NpcKind::MarsGuardian, NpcKind::StarKeeper, NpcKind::StationAlien,
         NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
@@ -182,6 +187,7 @@ pub enum SpriteType {
     AlienRed,
     FuelDepot,
     StarTerminal,
+    Signpost,
 }
 
 /// Manhattan radius an NPC may wander away from its home tile. Keeps wanderers
@@ -269,6 +275,16 @@ pub struct Npc {
     /// solved, refills the rocket's fuel. Like `gate`, it short-circuits the
     /// normal interaction menu.
     pub refuel: bool,
+    /// True while this NPC is strolling back to its home tile after being
+    /// swapped out as the player's buddy (on the same map). It walks a
+    /// precomputed route stored in `pathing` via `next_route_intent`; when the
+    /// route runs out it clears this flag and resumes wander/stationary life.
+    pub homing: bool,
+    /// True for a swapped-out buddy whose home is on *another* map: it walks
+    /// (via `homing`) toward the nearest exit portal, and gets whisked offstage
+    /// to its real home the moment it leaves the screen or reaches the doorway —
+    /// so it heads out a door rather than blinking away on the spot.
+    pub leaving_map: bool,
 }
 
 impl Npc {
@@ -287,7 +303,14 @@ impl Npc {
     /// True if the player has chosen this NPC as their travel companion. A
     /// companion ignores wander/stationary behavior and follows the player's
     /// path queue instead — see `next_follower_intent`.
-    pub fn is_following(&self) -> bool { self.pathing.is_some() }
+    pub fn is_following(&self) -> bool { self.pathing.is_some() && !self.homing }
+
+    /// Chompy the reef shark is a mount, not a trailing follower: while he's the
+    /// buddy the kid rides him, so he locks onto the player's tile each frame
+    /// instead of retracing a path queue. See the rideable handling in game.rs.
+    pub fn is_rideable(&self) -> bool {
+        matches!(self.kind, NpcKind::ReefShark)
+    }
 
     /// Mark this NPC as the player's companion. The path queue starts empty —
     /// it fills as the player moves. Idempotent.
@@ -336,6 +359,42 @@ impl Npc {
         if let Some(p) = self.pathing.as_mut() {
             p.on_move_granted();
         }
+    }
+
+    /// Begin strolling back home along a precomputed `route` (tiles from the
+    /// NPC's current position up to and including the home tile). The NPC stays
+    /// exactly where it is and walks the route; an empty route just clears any
+    /// follower state and leaves it put. See `homing`.
+    pub fn start_homing(&mut self, route: Vec<(usize, usize)>) {
+        if route.is_empty() {
+            self.homing = false;
+            self.pathing = None;
+            return;
+        }
+        let mut p = Pathing::new();
+        for tile in route {
+            p.record_player_pos(tile.0, tile.1);
+        }
+        self.pathing = Some(p);
+        self.homing = true;
+    }
+
+    /// One frame of homing movement. When the route is spent, drops the homing
+    /// state (resuming normal wander/stationary behavior) and stays put. Caller
+    /// must only invoke this while `homing` is true.
+    pub fn next_homing_intent(&mut self) -> MoveIntent {
+        let spent = self.pathing.as_ref().map(|p| p.is_empty()).unwrap_or(true);
+        if spent {
+            self.homing = false;
+            self.pathing = None;
+            // Settle before the first wander roll so it doesn't twitch on arrival.
+            self.wander_cooldown = WANDER_COOLDOWN_MIN;
+            return MoveIntent::Stay;
+        }
+        let p = self.pathing.as_mut().expect("next_homing_intent with no route");
+        let d = p.next_route_intent((self.entity.tile_x, self.entity.tile_y), self.entity.moving);
+        if let Some(f) = d.face { self.entity.dir = f; }
+        d.intent
     }
 
     /// Decide what this NPC wants to do this frame.
@@ -403,9 +462,9 @@ impl Npc {
             SpriteType::OldOak => sprites::npcs::draw_old_oak(x, y, time),
             // A gate shark naps (eyes shut) until its puzzle is solved; once
             // satisfied (`gate` cleared) it wakes up and grins.
-            SpriteType::Shark => sprites::npcs::draw_shark(x, y, time, self.gate),
+            SpriteType::Shark => sprites::npcs::draw_shark(x, y, self.entity.dir, time, self.gate),
             SpriteType::SeaTurtle => sprites::npcs::draw_sea_turtle(x, y, time),
-            SpriteType::Dolphin => sprites::npcs::draw_dolphin(x, y, time),
+            SpriteType::Dolphin => sprites::npcs::draw_dolphin(x, y, self.entity.dir, time),
             SpriteType::Crab => sprites::npcs::draw_crab(x, y, time),
             SpriteType::Jellyfish => sprites::npcs::draw_jellyfish(x, y, time),
             SpriteType::AlienGreen => sprites::npcs::draw_alien(x, y, time,
@@ -414,6 +473,7 @@ impl Npc {
                 Color::from_rgba(229, 130, 110, 255)),
             SpriteType::FuelDepot => sprites::npcs::draw_fuel_depot(x, y, time),
             SpriteType::StarTerminal => sprites::npcs::draw_star_terminal(x, y, time),
+            SpriteType::Signpost => sprites::npcs::draw_signpost(x, y, time),
         }
     }
 }
@@ -440,6 +500,8 @@ fn npc(home_map: &'static str, kind: NpcKind, tx: usize, ty: usize, sprite: Spri
         gate: false,
         gate_id: None,
         refuel: false,
+        homing: false,
+        leaving_map: false,
     }
 }
 
@@ -451,6 +513,10 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
     match map_id {
         "overworld" => vec![
             n(Sage, 12, 12, S::Sage, true, false, true),
+            // The signpost by the main house. Stationary scenery until you gift
+            // it a Dum Dum — then it pulls itself out of the ground and tags
+            // along like any other buddy. Never challenges; it's just a sign.
+            n(Signpost, 5, 12, S::Signpost, true, true, false),
         ],
         "home" => vec![
             n(Mommy, 3, 3, S::Mommy, true, false, false),

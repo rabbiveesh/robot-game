@@ -397,6 +397,11 @@ pub struct Game {
     /// rendered, soft-blocked, and interactable when the player is on his
     /// parked map. When the player gifts him a dum dum, he rejoins.
     pub sparky_parked: bool,
+    /// Which map parked Sparky is currently loitering on. Starts at
+    /// `SPARKY_HOME_MAP` when he parks, but — like any wanderer — if he drifts
+    /// or gets pushed onto a portal tile he travels through it, so this tracks
+    /// where he ended up. Only meaningful while `sparky_parked`.
+    sparky_map: &'static str,
     /// Wander cooldown for parked Sparky. Ticks down only while parked AND
     /// the player is on his home map; reset to a small initial delay on
     /// park so he doesn't twitch on the same frame he's swapped out.
@@ -526,6 +531,7 @@ impl Game {
             npcs_offstage: HashMap::new(),
             companion: None,
             sparky_parked: false,
+            sparky_map: SPARKY_HOME_MAP,
             sparky_wander_cooldown: 0.0,
             dreaming: false,
             game_time: 0.0,
@@ -790,11 +796,12 @@ impl Game {
         // portal handler only fires once per arrival, not every frame they
         // sit on a portal tile waiting to wander again.
         let mut arrived_npcs: Vec<usize> = Vec::new();
+        let mut sparky_arrived = false;
         let arrived = if self.settings_open {
             false
         } else {
             let a = self.player.move_toward_target(dt);
-            self.sparky.animate(dt);
+            sparky_arrived = self.sparky.animate(dt);
             if let Some(c) = self.companion.as_mut() { c.animate(dt); }
             for (i, n) in self.npcs.iter_mut().enumerate() {
                 if n.animate(dt) { arrived_npcs.push(i); }
@@ -802,6 +809,33 @@ impl Game {
             self.dialogue.update(dt);
             a
         };
+
+        // A rideable buddy (Chompy the shark) is a mount: lock it to the
+        // player's exact position and facing every frame so the kid rides it
+        // rather than the shark trailing behind. Done after the player has
+        // animated this frame so the mount tracks pixel-for-pixel.
+        if let Some(c) = self.companion.as_mut() {
+            if c.is_rideable() {
+                c.entity.tile_x = self.player.tile_x;
+                c.entity.tile_y = self.player.tile_y;
+                c.entity.x = self.player.x;
+                c.entity.y = self.player.y;
+                c.entity.target_x = self.player.target_x;
+                c.entity.target_y = self.player.target_y;
+                c.entity.moving = self.player.moving;
+                c.entity.dir = self.player.dir;
+            }
+        }
+
+        // Parked Sparky is a loose creature near Gizmo — if he's nudged or
+        // pushed onto a portal tile, he travels through it like any wanderer
+        // would, instead of just standing on the doorway. Only fires while he's
+        // parked and on the player's current map (the only time he can move).
+        if sparky_arrived && self.state == GameState::Playing
+            && self.sparky_parked && self.sparky_is_here()
+        {
+            self.handle_parked_sparky_portal();
+        }
 
         // Portal check after arrival
         if arrived && self.state == GameState::Playing {
@@ -841,6 +875,11 @@ impl Game {
         }
 
         self.camera.follow(self.player.x, self.player.y, &self.map, GAME_W, GAME_H);
+
+        // Buddies heading off-map blink home once they've walked out of view.
+        if self.state == GameState::Playing {
+            self.evict_offscreen_leavers();
+        }
 
         // Interaction menu input (layout from step-side; render() draws separately)
         if self.state == GameState::InteractionMenu {
@@ -1063,7 +1102,8 @@ impl Game {
 
                     if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge, input) {
                         ac.state = challenge_reducer(ac.state.clone(), action);
-                        speak_challenge_feedback(&ac.state);
+                        // Intake runs before any buddy can be recruited — Sparky.
+                        speak_challenge_feedback(&ac.state, "Sparky");
                     } else if ac.state.phase == Phase::Complete
                         && (input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter))
                     {
@@ -1077,7 +1117,7 @@ impl Game {
                             &ac.choice_bounds, &ac.scaffold,
                         ) {
                             ac.state = challenge_reducer(ac.state.clone(), action);
-                            speak_challenge_feedback(&ac.state);
+                            speak_challenge_feedback(&ac.state, "Sparky");
                         } else if ac.state.phase == Phase::Complete {
                             dismiss = true;
                         }
@@ -1341,9 +1381,16 @@ impl Game {
         } else {
             self.sparky.next_intent(player_at)
         };
-        let companion_intent = self.companion.as_mut()
-            .map(|c| c.next_follower_intent(player_at.0, player_at.1))
-            .unwrap_or(MoveIntent::Stay);
+        // A rideable buddy doesn't path-follow — it's pinned to the player —
+        // so it neither generates a follow intent nor enters the resolver.
+        let companion_rideable = self.companion.as_ref().map(|c| c.is_rideable()).unwrap_or(false);
+        let companion_intent = if companion_rideable {
+            MoveIntent::Stay
+        } else {
+            self.companion.as_mut()
+                .map(|c| c.next_follower_intent(player_at.0, player_at.1))
+                .unwrap_or(MoveIntent::Stay)
+        };
 
         // Soft-block / push pressure: figure out which entity (if any) sits on
         // the tile the player is trying to walk into this frame, and accumulate
@@ -1393,7 +1440,7 @@ impl Game {
         if sparky_here {
             intents.push((EntityId::Sparky, sparky_intent));
         }
-        if self.companion.is_some() {
+        if self.companion.is_some() && !companion_rideable {
             intents.push((EntityId::Companion, companion_intent));
         }
         // Snapshot the camera rect once so the wander gate doesn't re-borrow
@@ -1401,7 +1448,11 @@ impl Game {
         // no random direction roll. The kid you can't see isn't burning RNG.
         let cam = (self.camera.x, self.camera.y);
         for (i, n) in self.npcs.iter_mut().enumerate() {
-            let intent = if npc_in_camera(cam, n) {
+            let intent = if n.homing {
+                // A buddy walking back to its spot finishes the trip even if it
+                // strolls off-screen — it's a short, finite route.
+                n.next_homing_intent()
+            } else if npc_in_camera(cam, n) {
                 n.next_intent(dt, &mut self.rng)
             } else {
                 MoveIntent::Stay
@@ -1423,8 +1474,11 @@ impl Game {
                 MoveResolution::Granted { entity: EntityId::Player, to, .. } => {
                     self.sparky.record_player_pos(self.player.tile_x, self.player.tile_y);
                     if let Some(c) = self.companion.as_mut() {
-                        if let Some(p) = c.pathing.as_mut() {
-                            p.record_player_pos(self.player.tile_x, self.player.tile_y);
+                        // A rideable mount isn't retracing a path — skip its queue.
+                        if !c.is_rideable() {
+                            if let Some(p) = c.pathing.as_mut() {
+                                p.record_player_pos(self.player.tile_x, self.player.tile_y);
+                            }
                         }
                     }
                     self.player.start_move(to.0, to.1);
@@ -1442,6 +1496,8 @@ impl Game {
                 }
                 MoveResolution::Granted { entity: EntityId::Npc(i), to, .. } => {
                     if let Some(n) = self.npcs.get_mut(*i as usize) {
+                        // A homing buddy advances its route queue on each grant.
+                        if n.homing { n.on_follower_move_granted(); }
                         n.entity.start_move(to.0, to.1);
                     }
                 }
@@ -1459,10 +1515,11 @@ impl Game {
                 && self.map.tiles[facing.1][facing.0] == tilemap::Tile::Chest;
 
             if facing_chest {
+                let buddy = self.current_buddy_name();
                 self.menu_target_id = "chest".into();
-                self.menu_target_name = "Sparky".into();
+                self.menu_target_name = buddy.clone();
                 self.start_dialogue(vec![DialogueLine {
-                    speaker: "Sparky".into(),
+                    speaker: buddy,
                     text: "OOOOH a treasure chest! But it has a LOCK! We need to solve the puzzle to open it!".into(),
                 }]);
                 self.pending_challenge = true;
@@ -1600,8 +1657,12 @@ impl Game {
             v.push(entity_state(EntityId::Sparky, &self.sparky.entity, sparky_solidity, sparky_phasing));
         }
         if let Some(c) = self.companion.as_ref() {
-            // Companion is a follower — same rules as active Sparky.
-            v.push(entity_state(EntityId::Companion, &c.entity, Solidity::SoftAfter(0.12), true));
+            // A rideable mount shares the player's tile — it never collides as a
+            // separate entity, so keep it out of the resolver snapshot.
+            if !c.is_rideable() {
+                // Companion is a follower — same rules as active Sparky.
+                v.push(entity_state(EntityId::Companion, &c.entity, Solidity::SoftAfter(0.12), true));
+            }
         }
         for (i, n) in self.npcs.iter().enumerate() {
             // Wanderers are loose creatures who shuffle around — leaning into
@@ -1649,6 +1710,9 @@ impl Game {
     }
 
     fn step_challenge(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        // Whoever's tagging along narrates the challenge feedback. Bound up
+        // front so it doesn't clash with the mutable borrow of active_challenge.
+        let buddy = self.current_buddy_name();
         // Populate hit-test bounds from the pure layout fn.
         if let Some(ref mut ac) = self.active_challenge {
             let (bounds, scaffold) = ui::challenge::layout(&ac.state, &ac.challenge, screen);
@@ -1665,7 +1729,7 @@ impl Game {
 
             if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge, input) {
                 ac.state = challenge_reducer(ac.state.clone(), action);
-                speak_challenge_feedback(&ac.state);
+                speak_challenge_feedback(&ac.state, &buddy);
             } else if ac.state.phase == Phase::Complete
                 && (input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter))
             {
@@ -1679,7 +1743,7 @@ impl Game {
                     &ac.choice_bounds, &ac.scaffold,
                 ) {
                     ac.state = challenge_reducer(ac.state.clone(), action);
-                    speak_challenge_feedback(&ac.state);
+                    speak_challenge_feedback(&ac.state, &buddy);
                 } else if ac.state.phase == Phase::Complete {
                     dismiss = true;
                 }
@@ -1867,7 +1931,7 @@ impl Game {
                 self.events.push(GameEvent::ChallengeStarted {
                     question: ac.challenge.display_text.clone(),
                 });
-                audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
                 self.active_challenge = Some(ac);
                 self.set_state(GameState::Challenge);
             }
@@ -1962,7 +2026,7 @@ impl Game {
                 self.dum_dum_hud.flash();
                 self.events.push(GameEvent::DumDumsAwarded { amount: 1 });
                 self.start_dialogue(vec![DialogueLine {
-                    speaker: "Sparky".into(),
+                    speaker: self.current_buddy_name(),
                     text: "Ooh! A shiny Dum Dum, just sitting here!".into(),
                 }]);
                 self.set_state(GameState::Dialogue);
@@ -1986,7 +2050,7 @@ impl Game {
                 self.events.push(GameEvent::ChallengeStarted {
                     question: ac.challenge.display_text.clone(),
                 });
-                audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
                 self.active_challenge = Some(ac);
                 self.set_state(GameState::Challenge);
             }
@@ -2005,7 +2069,7 @@ impl Game {
             if let Some(manip) = try_make_manipulative(&self.profile, &ac.challenge) {
                 // Speak the prompt too, so a TTS-on parent hears it whether the
                 // kid gets the quiz or the hands-on version.
-                audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
                 self.active_manipulative = Some(ActiveManipulative {
                     manip,
                     challenge: ac.challenge,
@@ -2016,7 +2080,7 @@ impl Game {
                 return;
             }
         }
-        audio::tts::speak("Sparky", &ac.challenge.speech_text);
+        audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
         self.active_challenge = Some(ac);
         self.set_state(GameState::Challenge);
     }
@@ -2761,7 +2825,7 @@ impl Game {
     /// parked at his home tile on `SPARKY_HOME_MAP`. While parked elsewhere,
     /// he should not render, soft-block, or be interactable.
     pub fn sparky_is_here(&self) -> bool {
-        !self.sparky_parked || self.map.id == SPARKY_HOME_MAP
+        !self.sparky_parked || self.map.id == self.sparky_map
     }
 
     /// Stable id string for the entity currently following the player. Used
@@ -2774,11 +2838,23 @@ impl Game {
         }
     }
 
+    /// Display name of whoever's currently tagging along — the active NPC
+    /// companion if there is one, else Sparky. This is the voice that narrates
+    /// flavor text (TTS) and side-chatter as the player explores, so it must
+    /// track the real buddy rather than assuming Sparky.
+    pub fn current_buddy_name(&self) -> String {
+        match self.companion.as_ref() {
+            Some(c) => c.name().to_string(),
+            None => "Sparky".to_string(),
+        }
+    }
+
     /// Tile + direction for parked Sparky's resting spot. Sparky faces the
     /// player's typical entry direction (Down — toward the path) so the kid
     /// runs into him head-on when arriving at the overworld.
     fn park_sparky(&mut self) {
         self.sparky_parked = true;
+        self.sparky_map = SPARKY_HOME_MAP;
         self.sparky.entity.tile_x = SPARKY_HOME_TX;
         self.sparky.entity.tile_y = SPARKY_HOME_TY;
         self.sparky.entity.x = SPARKY_HOME_TX as f32 * TILE_SIZE;
@@ -2884,7 +2960,7 @@ impl Game {
 
         let left = self.companion.replace(new_companion).map(|mut old| {
             let kind = old.kind;
-            old.reset_to_home();
+            old.stop_following();
             self.send_npc_home(old);
             kind
         });
@@ -2904,7 +2980,7 @@ impl Game {
         let mut leaving = self.companion.take()
             .expect("swap_sparky_in called with no companion to displace");
         let kind = leaving.kind;
-        leaving.reset_to_home();
+        leaving.stop_following();
         self.send_npc_home(leaving);
         self.unpark_sparky();
         kind
@@ -2918,35 +2994,115 @@ impl Game {
         let (hx, hy) = (npc.home_tx, npc.home_ty);
 
         if home_map == self.map.id {
+            // Same map: the buddy strolls back to its spot from wherever it was
+            // tagging along, rather than blinking out of existence. Route is a
+            // static-terrain BFS; the resolver handles any live entities in the
+            // way (it just waits). If home is somehow unreachable, fall back to
+            // the old snap so the NPC can never get lost.
             let map = &self.map;
-            let player = (self.player.tile_x, self.player.tile_y);
-            let sparky = (self.sparky.entity.tile_x, self.sparky.entity.tile_y);
-            let companion_pos = self.companion.as_ref()
-                .map(|c| (c.entity.tile_x, c.entity.tile_y));
-            let others: Vec<(usize, usize)> = self.npcs.iter()
-                .map(|n| (n.entity.tile_x, n.entity.tile_y))
-                .collect();
-            let (nx, ny) = npc::find_npc_spawn_spot(
-                hx, hy, map.width, map.height,
-                |cx, cy| map.is_solid(cx, cy),
-                |cx, cy| (cx, cy) == player || (cx, cy) == sparky
-                    || companion_pos == Some((cx, cy))
-                    || others.iter().any(|t| *t == (cx, cy)),
+            let cur = (npc.entity.tile_x, npc.entity.tile_y);
+            let route = crate::pathfinding::find_path(
+                cur, (hx, hy), map.width, map.height,
+                |cx, cy| !map.is_solid(cx, cy),
             );
-            npc.entity.tile_x = nx;
-            npc.entity.tile_y = ny;
-            npc.entity.x = nx as f32 * TILE_SIZE;
-            npc.entity.y = ny as f32 * TILE_SIZE;
-            npc.entity.target_x = npc.entity.x;
-            npc.entity.target_y = npc.entity.y;
-            self.npcs.push(npc);
+            match route {
+                Some(path) => {
+                    // start_homing tolerates an empty path (already home).
+                    npc.entity.moving = false;
+                    npc.start_homing(path);
+                    self.npcs.push(npc);
+                }
+                None => {
+                    let player = (self.player.tile_x, self.player.tile_y);
+                    let sparky = (self.sparky.entity.tile_x, self.sparky.entity.tile_y);
+                    let companion_pos = self.companion.as_ref()
+                        .map(|c| (c.entity.tile_x, c.entity.tile_y));
+                    let others: Vec<(usize, usize)> = self.npcs.iter()
+                        .map(|n| (n.entity.tile_x, n.entity.tile_y))
+                        .collect();
+                    let (nx, ny) = npc::find_npc_spawn_spot(
+                        hx, hy, map.width, map.height,
+                        |cx, cy| map.is_solid(cx, cy),
+                        |cx, cy| (cx, cy) == player || (cx, cy) == sparky
+                            || companion_pos == Some((cx, cy))
+                            || others.iter().any(|t| *t == (cx, cy)),
+                    );
+                    npc.reset_to_home();
+                    npc.entity.tile_x = nx;
+                    npc.entity.tile_y = ny;
+                    npc.entity.x = nx as f32 * TILE_SIZE;
+                    npc.entity.y = ny as f32 * TILE_SIZE;
+                    npc.entity.target_x = npc.entity.x;
+                    npc.entity.target_y = npc.entity.y;
+                    self.npcs.push(npc);
+                }
+            }
         } else {
-            // Home is a different map: stash them in the offstage roster so
-            // they pop back when the player next visits that map.
+            // Home is on another map: rather than blinking away on the spot, the
+            // buddy heads for the nearest exit and only teleports home once it's
+            // walked off-screen (or reached the doorway). Pick a door that leads
+            // toward home — its own map first, then the overworld hub, then any
+            // reachable exit — and route there.
+            let cur = (npc.entity.tile_x, npc.entity.tile_y);
+            let route = {
+                let map = &self.map;
+                let mut exits: Vec<&tilemap::Portal> = tilemap::all_portals().iter()
+                    .filter(|p| p.from_map == map.id)
+                    .collect();
+                exits.sort_by_key(|p| {
+                    let rank = if p.to_map == home_map { 0 }
+                        else if p.to_map == "overworld" { 1 }
+                        else { 2 };
+                    let dist = (p.from_x as i32 - cur.0 as i32).abs()
+                        + (p.from_y as i32 - cur.1 as i32).abs();
+                    (rank, dist)
+                });
+                exits.iter().find_map(|p| {
+                    crate::pathfinding::find_path(
+                        cur, (p.from_x, p.from_y), map.width, map.height,
+                        |cx, cy| !map.is_solid(cx, cy),
+                    ).filter(|path| !path.is_empty())
+                })
+            };
+            match route {
+                Some(path) => {
+                    npc.entity.moving = false;
+                    npc.start_homing(path);
+                    npc.leaving_map = true;
+                    self.npcs.push(npc);
+                }
+                None => {
+                    // Already at the door, or no reachable exit — snap straight
+                    // to the offstage roster so the buddy can never get lost.
+                    npc.reset_to_home();
+                    self.npcs_offstage
+                        .entry(home_map.to_string())
+                        .or_insert_with(Vec::new)
+                        .push(npc);
+                }
+            }
+        }
+    }
+
+    /// Whisk any swapped-out buddy that's `leaving_map` off to its real home the
+    /// moment it walks off-screen or reaches the exit doorway. Until then it's a
+    /// normal roster NPC strolling toward the door. Keeps the "walk out, then
+    /// teleport" illusion without ever stranding a buddy on the wrong map.
+    fn evict_offscreen_leavers(&mut self) {
+        let cam = (self.camera.x, self.camera.y);
+        let gone: Vec<usize> = self.npcs.iter().enumerate()
+            .filter(|(_, n)| n.leaving_map && (!npc_in_camera(cam, n) || !n.homing))
+            .map(|(i, _)| i)
+            .collect();
+        for i in gone.into_iter().rev() {
+            let mut n = self.npcs.remove(i);
+            n.leaving_map = false;
+            let home_map = n.home_map;
+            n.reset_to_home();
             self.npcs_offstage
                 .entry(home_map.to_string())
                 .or_insert_with(Vec::new)
-                .push(npc);
+                .push(n);
         }
     }
 
@@ -3010,6 +3166,9 @@ impl Game {
             if i >= self.npcs.len() { continue; }
             // Dev controls don't migrate — they're knobs bolted to the floor.
             if self.npcs[i].kind.is_dev_control() { continue; }
+            // A buddy walking out to leave the map is owned by the leaver-evict
+            // path (it teleports to its real home, not through this door).
+            if self.npcs[i].leaving_map { continue; }
             let (tx, ty) = (self.npcs[i].entity.tile_x, self.npcs[i].entity.tile_y);
             let portal = match tilemap::check_portal(self.map.id, tx, ty) {
                 Some(p) => p,
@@ -3021,6 +3180,50 @@ impl Game {
             // non-secret exit, so a kid that drifts in can drift back out.
             self.transfer_npc_through_portal(i, portal);
         }
+    }
+
+    /// Parked Sparky stepped (or got pushed) onto a portal tile — carry him
+    /// through it just like a roster wanderer. Updates `sparky_map` to wherever
+    /// he lands; he won't move again until the player is on that map (only then
+    /// does his wander roll run). Re-anchoring his wander tether isn't needed:
+    /// off his home map he just waits to be found or re-recruited.
+    fn handle_parked_sparky_portal(&mut self) {
+        let (tx, ty) = (self.sparky.entity.tile_x, self.sparky.entity.tile_y);
+        let portal = match tilemap::check_portal(self.sparky_map, tx, ty) {
+            Some(p) => p,
+            None => return,
+        };
+        let dest_map = portal.to_map;
+        let dest_geometry = Map::by_id(dest_map);
+        let player_on_dest = dest_map == self.map.id;
+        let player = (self.player.tile_x, self.player.tile_y);
+        let empty: Vec<npc::Npc> = Vec::new();
+        let occupants = self.npcs_offstage.get(dest_map).unwrap_or(&empty);
+        let occ_tiles: Vec<(usize, usize)> = occupants.iter()
+            .map(|n| (n.entity.tile_x, n.entity.tile_y))
+            .collect();
+        let roster_tiles: Vec<(usize, usize)> = if player_on_dest {
+            self.npcs.iter().map(|n| (n.entity.tile_x, n.entity.tile_y)).collect()
+        } else {
+            Vec::new()
+        };
+        let (dx, dy) = npc::find_npc_spawn_spot(
+            portal.to_x, portal.to_y, dest_geometry.width, dest_geometry.height,
+            |cx, cy| dest_geometry.is_solid(cx, cy),
+            |cx, cy| (player_on_dest && (cx, cy) == player)
+                || occ_tiles.iter().any(|t| *t == (cx, cy))
+                || roster_tiles.iter().any(|t| *t == (cx, cy)),
+        );
+        self.sparky_map = dest_map;
+        let e = &mut self.sparky.entity;
+        e.tile_x = dx;
+        e.tile_y = dy;
+        e.x = dx as f32 * TILE_SIZE;
+        e.y = dy as f32 * TILE_SIZE;
+        e.target_x = e.x;
+        e.target_y = e.y;
+        e.moving = false;
+        self.sparky_wander_cooldown = npc::WANDER_COOLDOWN_MIN;
     }
 
     /// Move NPC at index `i` of `self.npcs` to the portal's destination map
@@ -3149,7 +3352,7 @@ impl Game {
         // punishment — Sparky points at the fuel droid; no transfer happens.
         if fuel_cost > 0 && self.fuel < fuel_cost {
             self.start_dialogue(vec![DialogueLine {
-                speaker: "Sparky".into(),
+                speaker: self.current_buddy_name(),
                 text: format!(
                     "Not enough fuel for that jump, boss! It needs {fuel_cost} and we've got {}. Let's find Tank the fuel droid and do some math to top up!",
                     self.fuel
@@ -3173,7 +3376,7 @@ impl Game {
         if toll_due && self.dum_dums < cost {
             let need = cost - self.dum_dums;
             self.start_dialogue(vec![DialogueLine {
-                speaker: "Sparky".into(),
+                speaker: self.current_buddy_name(),
                 text: format!(
                     "Ooh, a dive spot! The first splash in costs {cost} Dum Dums. We need {need} more — let's go find some, boss!"
                 ),
@@ -3237,7 +3440,7 @@ impl Game {
         });
 
         if secret {
-            let lines = secret_entry_dialogue(self.map.id);
+            let lines = secret_entry_dialogue(self.map.id, &self.current_buddy_name());
             if !lines.is_empty() {
                 self.start_dialogue(lines);
                 self.set_state(GameState::Dialogue);
@@ -3303,7 +3506,11 @@ impl Game {
                 renderables.push(Renderable { y: self.sparky.entity.y, kind: SpriteKind::Sparky });
             }
             if let Some(c) = self.companion.as_ref() {
-                renderables.push(Renderable { y: c.entity.y, kind: SpriteKind::Npc(c) });
+                // A rideable buddy (Chompy) sits on the player's tile as a
+                // mount — nudge its sort key just behind the player so the kid
+                // always draws on top, looking like they're riding it.
+                let y = if c.is_rideable() { self.player.y - 1.0 } else { c.entity.y };
+                renderables.push(Renderable { y, kind: SpriteKind::Npc(c) });
             }
             // Cull roster NPCs outside the viewport. The map only draws the
             // tiles under the camera (everything else is the void-blue clear
@@ -3329,7 +3536,7 @@ impl Game {
                                 Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
                             }
                             // Cosmetics bought from Bolt's shop ride on the kid.
-                            sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.frame, &self.shop_owned, &self.color_choice);
+                            sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.dir, self.player.frame, &self.shop_owned, &self.color_choice);
                             // On planet surfaces the kid wears a space helmet.
                             if self.map.render_mode == tilemap::RenderMode::Cosmic {
                                 sprites::player::draw_spacesuit_overlay(self.player.x, self.player.y, self.player.frame);
@@ -3512,7 +3719,7 @@ impl Game {
                     Gender::Boy => sprites::player::draw_player_boy(px, py, Dir::Down, 0, self.game_time),
                     Gender::Girl => sprites::player::draw_player_girl(px, py, Dir::Down, 0, self.game_time),
                 }
-                sprites::player::draw_player_cosmetics(px, py, 0, &ash.owned, &self.color_choice);
+                sprites::player::draw_player_cosmetics(px, py, Dir::Down, 0, &ash.owned, &self.color_choice);
             }
         }
 
@@ -3628,6 +3835,9 @@ impl Game {
         self.sparky.entity.moving = false;
         self.sparky.pathing.clear();
         self.sparky_parked = save_data.sparky_parked;
+        // Parked Sparky comes home on reload — we don't persist whichever map
+        // he may have wandered off to, and home is always a safe, valid spot.
+        self.sparky_map = SPARKY_HOME_MAP;
         // Fresh cooldown after load — wander roll won't fire on the first
         // frame, and only ticks if Sparky's parked AND on his home map.
         self.sparky_wander_cooldown = if save_data.sparky_parked {
@@ -4105,6 +4315,11 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
             "I like to wander in circles. It's very fun!",
             "Got any snacks? I'm always a bit hungry, hehe!",
         ],
+        Signpost => &[
+            "Howdy! I've pointed the way for YEARS. Bit lonely, though.",
+            "Psst... give a fella a Dum Dum and I'll come adventuring with you!",
+            "I know ALL the directions. Left, right, up... and the other one!",
+        ],
         // ReefShark normally reaches the player through the gate-challenge path,
         // not here — but if you chat after he's stepped aside, he's a sweetie.
         ReefShark => &[
@@ -4283,43 +4498,37 @@ fn display_name_for_buddy_id(id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-fn speak_challenge_feedback(cs: &ChallengeState) {
+fn speak_challenge_feedback(cs: &ChallengeState, speaker: &str) {
     if let Some(ref fb) = cs.feedback {
-        audio::tts::speak("Sparky", &fb.speech);
+        audio::tts::speak(speaker, &fb.speech);
     }
 }
 
-fn secret_entry_dialogue(map_id: &str) -> Vec<DialogueLine> {
+/// Flavor lines for stepping into a secret/special map, voiced by whoever's
+/// currently tagging along (`speaker`) — not always Sparky, since the player
+/// may be travelling with a recruited buddy.
+fn secret_entry_dialogue(map_id: &str, speaker: &str) -> Vec<DialogueLine> {
+    let line = |text: &str| DialogueLine { speaker: speaker.to_string(), text: text.to_string() };
     match map_id {
         "dream" => vec![
-            DialogueLine { speaker: "Sparky".into(),
-                text: "BZZZT! Boss! My circuits feel all tingly! Everything looks... purple?".into() },
-            DialogueLine { speaker: "Sparky".into(),
-                text: "Are we... dreaming? The flowers are floating! BEEP BOOP this is WEIRD!".into() },
+            line("BZZZT! Boss! My circuits feel all tingly! Everything looks... purple?"),
+            line("Are we... dreaming? The flowers are floating! BEEP BOOP this is WEIRD!"),
         ],
         "doghouse" => vec![
-            DialogueLine { speaker: "Sparky".into(),
-                text: "ERROR ERROR! Visual systems reporting... BORK?! What IS this place?!".into() },
-            DialogueLine { speaker: "Sparky".into(),
-                text: "My display is all glitchy! I see scan lines and... is that a DOG made of CODE?!".into() },
+            line("ERROR ERROR! Visual systems reporting... BORK?! What IS this place?!"),
+            line("My display is all glitchy! I see scan lines and... is that a DOG made of CODE?!"),
         ],
         "grove" => vec![
-            DialogueLine { speaker: "Sparky".into(),
-                text: "Whoa boss! We just walked RIGHT THROUGH those trees! How did we do that?!".into() },
-            DialogueLine { speaker: "Sparky".into(),
-                text: "This place is SO pretty! And SO secret! The trees are whispering!".into() },
+            line("Whoa boss! We just walked RIGHT THROUGH those trees! How did we do that?!"),
+            line("This place is SO pretty! And SO secret! The trees are whispering!"),
         ],
         "reef" => vec![
-            DialogueLine { speaker: "Sparky".into(),
-                text: "BLUB BLUB! We're UNDERWATER, boss! And I didn't even rust! Best upgrade EVER!".into() },
-            DialogueLine { speaker: "Sparky".into(),
-                text: "Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!".into() },
+            line("BLUB BLUB! We're UNDERWATER, boss! And I didn't even rust! Best upgrade EVER!"),
+            line("Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!"),
         ],
         "space_hub" => vec![
-            DialogueLine { speaker: "Sparky".into(),
-                text: "3... 2... 1... BLAST OFF! WHEEEE! Boss, we're in SPACE! Actual outer SPACE!".into() },
-            DialogueLine { speaker: "Sparky".into(),
-                text: "Fly the rocket to a glowing pad to visit a planet! Tank the fuel droid is over there if we run low.".into() },
+            line("3... 2... 1... BLAST OFF! WHEEEE! Boss, we're in SPACE! Actual outer SPACE!"),
+            line("Fly the rocket to a glowing pad to visit a planet! Tank the fuel droid is over there if we run low."),
         ],
         _ => vec![],
     }

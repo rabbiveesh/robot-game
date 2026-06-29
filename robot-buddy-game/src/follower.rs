@@ -98,6 +98,35 @@ impl Pathing {
         FollowDecision { intent: MoveIntent::Move(dir), face: Some(face) }
     }
 
+    /// Walk toward the next queued tile, ignoring the player entirely. The
+    /// queue here is a precomputed route (e.g. a swapped-out buddy strolling
+    /// back to its home tile), not a retrace of the player's steps — so none of
+    /// the follow/adjacency logic in `next_intent` applies. Like `next_intent`,
+    /// it does NOT pop on Move; the apply phase calls `on_move_granted`.
+    pub fn next_route_intent(&mut self, at: (usize, usize), moving: bool) -> FollowDecision {
+        if moving || self.queue.is_empty() {
+            return FollowDecision::stay();
+        }
+        let (nx, ny) = self.queue[0];
+        // Already standing on the next route tile — drop it, continue next frame.
+        if (nx, ny) == at {
+            self.queue.remove(0);
+            return FollowDecision::stay();
+        }
+        let dx = nx as i32 - at.0 as i32;
+        let dy = ny as i32 - at.1 as i32;
+        let (dir, face) = match (dx.signum(), dy.signum()) {
+            (-1, 0) => (Direction::Left,  Dir::Left),
+            ( 1, 0) => (Direction::Right, Dir::Right),
+            (0, -1) => (Direction::Up,    Dir::Up),
+            (0,  1) => (Direction::Down,  Dir::Down),
+            // A BFS route is 4-connected and adjacent, so this is unreachable;
+            // staying is the safe fallback if a bad route ever slips in.
+            _ => return FollowDecision::stay(),
+        };
+        FollowDecision { intent: MoveIntent::Move(dir), face: Some(face) }
+    }
+
     /// Call after the resolver grants a Move for this follower so the queue
     /// advances. Denied moves don't pop, so the follower retries next frame.
     pub fn on_move_granted(&mut self) {

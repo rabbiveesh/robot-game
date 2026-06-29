@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use super::Dir;
 
 const TS: f32 = 48.0;
 
@@ -175,12 +176,17 @@ pub fn draw_dog(x: f32, y: f32, time: f32) {
 
 /// Friendly reef shark — the gate guardian. Big toothy grin, never menacing.
 /// `asleep` droops the eyes into happy arcs (napping across the path).
-pub fn draw_shark(x: f32, y: f32, time: f32, asleep: bool) {
+pub fn draw_shark(x: f32, y: f32, dir: Dir, time: f32, asleep: bool) {
     let cx = x + TS / 2.0;
     let cy = y + TS / 2.0 + 4.0;
     let bob = (time * 1.5).sin() * 1.5;
     let body = Color::from_rgba(96, 125, 139, 255);
     let belly = Color::from_rgba(207, 216, 220, 255);
+    // Sprite is drawn facing right (snout/grin on +x, tail on -x). Mirror it
+    // when swimming left so a follower faces where it's going. `mx` maps a
+    // signed horizontal offset from center through that flip.
+    let f = if dir == Dir::Left { -1.0 } else { 1.0 };
+    let mx = |off: f32| cx + f * off;
 
     // Water shadow
     draw_ellipse(cx, y + TS - 4.0, 14.0, 5.0, 0.0, Color::from_rgba(0, 0, 0, 40));
@@ -188,9 +194,9 @@ pub fn draw_shark(x: f32, y: f32, time: f32, asleep: bool) {
     // Tail (swishing)
     let swish = (time * 3.0).sin() * 4.0;
     draw_triangle(
-        vec2(cx - 14.0, cy + bob),
-        vec2(cx - 22.0, cy - 6.0 + bob + swish),
-        vec2(cx - 22.0, cy + 8.0 + bob - swish),
+        vec2(mx(-14.0), cy + bob),
+        vec2(mx(-22.0), cy - 6.0 + bob + swish),
+        vec2(mx(-22.0), cy + 8.0 + bob - swish),
         body,
     );
 
@@ -200,29 +206,29 @@ pub fn draw_shark(x: f32, y: f32, time: f32, asleep: bool) {
 
     // Dorsal fin
     draw_triangle(
-        vec2(cx - 2.0, cy - 8.0 + bob),
-        vec2(cx + 6.0, cy - 8.0 + bob),
-        vec2(cx + 2.0, cy - 18.0 + bob),
+        vec2(mx(-2.0), cy - 8.0 + bob),
+        vec2(mx(6.0), cy - 8.0 + bob),
+        vec2(mx(2.0), cy - 18.0 + bob),
         body,
     );
 
     // Eye (happy)
     let eye = Color::from_rgba(33, 33, 33, 255);
     if asleep {
-        draw_line(cx + 5.0, cy - 3.0 + bob, cx + 11.0, cy - 3.0 + bob, 1.5, eye);
+        draw_line(mx(5.0), cy - 3.0 + bob, mx(11.0), cy - 3.0 + bob, 1.5, eye);
     } else {
-        draw_circle(cx + 8.0, cy - 3.0 + bob, 2.2, eye);
-        draw_circle(cx + 8.8, cy - 3.8 + bob, 0.8, WHITE);
+        draw_circle(mx(8.0), cy - 3.0 + bob, 2.2, eye);
+        draw_circle(mx(8.8), cy - 3.8 + bob, 0.8, WHITE);
     }
 
     // Big friendly grin with little teeth
-    draw_line(cx + 4.0, cy + 4.0 + bob, cx + 15.0, cy + 2.0 + bob, 1.5, eye);
+    draw_line(mx(4.0), cy + 4.0 + bob, mx(15.0), cy + 2.0 + bob, 1.5, eye);
     for i in 0..3 {
-        let tx = cx + 6.0 + i as f32 * 3.5;
+        let off = 6.0 + i as f32 * 3.5;
         draw_triangle(
-            vec2(tx, cy + 3.5 + bob),
-            vec2(tx + 2.5, cy + 3.5 + bob),
-            vec2(tx + 1.25, cy + 6.0 + bob),
+            vec2(mx(off), cy + 3.5 + bob),
+            vec2(mx(off + 2.5), cy + 3.5 + bob),
+            vec2(mx(off + 1.25), cy + 6.0 + bob),
             WHITE,
         );
     }
@@ -230,8 +236,8 @@ pub fn draw_shark(x: f32, y: f32, time: f32, asleep: bool) {
     if asleep {
         // floating "z"s
         let zf = (time * 1.5).sin() * 2.0;
-        draw_text("z", cx + 12.0, cy - 12.0 + zf, 14.0, Color::from_rgba(255, 255, 255, 200));
-        draw_text("Z", cx + 18.0, cy - 20.0 - zf, 18.0, Color::from_rgba(255, 255, 255, 160));
+        draw_text("z", mx(12.0), cy - 12.0 + zf, 14.0, Color::from_rgba(255, 255, 255, 200));
+        draw_text("Z", mx(18.0), cy - 20.0 - zf, 18.0, Color::from_rgba(255, 255, 255, 160));
     }
 }
 
@@ -267,48 +273,51 @@ pub fn draw_sea_turtle(x: f32, y: f32, time: f32) {
 }
 
 /// Dolphin — a playful wanderer arcing through the water.
-pub fn draw_dolphin(x: f32, y: f32, time: f32) {
+pub fn draw_dolphin(x: f32, y: f32, dir: Dir, time: f32) {
     let cx = x + TS / 2.0;
     let cy = y + TS / 2.0 + 4.0;
     let arc = (time * 2.0).sin() * 3.0;
     let body = Color::from_rgba(120, 170, 200, 255);
     let belly = Color::from_rgba(235, 245, 250, 255);
+    // Drawn facing right (snout on +x); mirror when swimming left.
+    let f = if dir == Dir::Left { -1.0 } else { 1.0 };
+    let mx = |off: f32| cx + f * off;
 
     draw_ellipse(cx, y + TS - 4.0, 13.0, 5.0, 0.0, Color::from_rgba(0, 0, 0, 40));
 
     // Body (curved)
     draw_ellipse(cx, cy + arc, 14.0, 7.0, 0.0, body);
-    draw_ellipse(cx + 1.0, cy + 3.0 + arc, 11.0, 4.0, 0.0, belly);
+    draw_ellipse(mx(1.0), cy + 3.0 + arc, 11.0, 4.0, 0.0, belly);
 
     // Snout
     draw_triangle(
-        vec2(cx + 11.0, cy - 2.0 + arc),
-        vec2(cx + 20.0, cy + 1.0 + arc),
-        vec2(cx + 11.0, cy + 3.0 + arc),
+        vec2(mx(11.0), cy - 2.0 + arc),
+        vec2(mx(20.0), cy + 1.0 + arc),
+        vec2(mx(11.0), cy + 3.0 + arc),
         body,
     );
 
     // Dorsal fin (curved back)
     draw_triangle(
-        vec2(cx - 2.0, cy - 6.0 + arc),
-        vec2(cx + 5.0, cy - 6.0 + arc),
-        vec2(cx - 5.0, cy - 15.0 + arc),
+        vec2(mx(-2.0), cy - 6.0 + arc),
+        vec2(mx(5.0), cy - 6.0 + arc),
+        vec2(mx(-5.0), cy - 15.0 + arc),
         body,
     );
 
     // Tail fluke
     let swish = (time * 3.0).cos() * 3.0;
     draw_triangle(
-        vec2(cx - 13.0, cy + arc),
-        vec2(cx - 21.0, cy - 5.0 + arc + swish),
-        vec2(cx - 21.0, cy + 5.0 + arc - swish),
+        vec2(mx(-13.0), cy + arc),
+        vec2(mx(-21.0), cy - 5.0 + arc + swish),
+        vec2(mx(-21.0), cy + 5.0 + arc - swish),
         body,
     );
 
     // Eye + smile
     let eye = Color::from_rgba(33, 33, 33, 255);
-    draw_circle(cx + 7.0, cy - 2.0 + arc, 1.6, eye);
-    draw_line(cx + 8.0, cy + 2.0 + arc, cx + 15.0, cy + 1.0 + arc, 1.2, eye);
+    draw_circle(mx(7.0), cy - 2.0 + arc, 1.6, eye);
+    draw_line(mx(8.0), cy + 2.0 + arc, mx(15.0), cy + 1.0 + arc, 1.2, eye);
 }
 
 /// Little crab — ambient skittering wanderer.
@@ -479,4 +488,32 @@ pub fn draw_old_oak(x: f32, y: f32, time: f32) {
     draw_rectangle(cx - 3.0, cy - 2.0, 2.0, 2.0, eye);
     draw_rectangle(cx + 1.0, cy - 2.0, 2.0, 2.0, eye);
     draw_line(cx - 2.0, cy + 2.0, cx + 2.0, cy + 2.0, 1.0, eye);
+}
+
+/// A wooden signpost with a cheery little face on the board. Gives a gentle
+/// side-to-side wobble so it reads as "alive" once it joins the party — a
+/// signpost that decided to go on an adventure.
+pub fn draw_signpost(x: f32, y: f32, time: f32) {
+    let cx = x + TS / 2.0;
+    let wobble = (time * 1.6).sin() * 1.5;
+
+    // Shadow
+    draw_ellipse(cx, y + TS - 4.0, 11.0, 4.0, 0.0, Color::from_rgba(0, 0, 0, 40));
+
+    // Post
+    draw_rectangle(cx - 3.0 + wobble * 0.3, y + 22.0, 6.0, 22.0,
+        Color::from_rgba(141, 110, 99, 255));
+
+    // Sign board
+    let bx = cx - 16.0 + wobble;
+    let by = y + 8.0;
+    draw_rectangle(bx, by, 32.0, 20.0, Color::from_rgba(255, 204, 128, 255));
+    draw_rectangle_lines(bx, by, 32.0, 20.0, 2.0, Color::from_rgba(109, 76, 65, 255));
+
+    // Cheery face on the board
+    let eye = Color::from_rgba(93, 64, 55, 255);
+    draw_rectangle(bx + 9.0, by + 6.0, 3.0, 3.0, eye);
+    draw_rectangle(bx + 20.0, by + 6.0, 3.0, 3.0, eye);
+    draw_line(bx + 10.0, by + 13.0, bx + 16.0, by + 15.0, 1.5, eye);
+    draw_line(bx + 16.0, by + 15.0, bx + 22.0, by + 13.0, 1.5, eye);
 }

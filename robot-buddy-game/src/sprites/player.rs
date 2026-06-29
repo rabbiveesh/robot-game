@@ -150,6 +150,7 @@ pub fn outfit_color(id: &str) -> Color {
 pub fn draw_player_cosmetics(
     x: f32,
     y: f32,
+    dir: Dir,
     frame: u32,
     owned: &std::collections::HashSet<String>,
     color_choice: &str,
@@ -186,8 +187,9 @@ pub fn draw_player_cosmetics(
             vec2(cx + 4.0, y + TS + 4.0 - flick), flame,
         );
     }
-    // Bow tie at the collar.
-    if owned.contains("bow_tie") {
+    // Bow tie at the collar. Hidden when facing away — a bow tie on the back
+    // of the neck just looks silly.
+    if owned.contains("bow_tie") && dir != Dir::Up {
         let c = Color::from_rgba(216, 27, 96, 255);
         draw_triangle(
             vec2(cx, cy - 1.0 + bob), vec2(cx - 7.0, cy - 3.0 + bob),
