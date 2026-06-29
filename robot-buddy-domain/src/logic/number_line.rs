@@ -51,6 +51,23 @@ impl NumberLineSession {
         };
         NumberLineSession { position: puzzle.start, jumps: 0, phase, puzzle }
     }
+
+    /// Minimum unit steps from start to target — the "count-on" optimum. The
+    /// game compares the actual `jumps`/steps taken against this to silently
+    /// read whether the kid moved efficiently (counted on) vs. wandered.
+    pub fn optimal_jumps(&self) -> u8 {
+        abs_diff(self.puzzle.start, self.puzzle.target)
+    }
+
+    /// Steps from the current position to the target (0 = landed on it). Reads
+    /// the same whether the kid is short of the target or has overshot it.
+    pub fn distance_to_target(&self) -> u8 {
+        abs_diff(self.position, self.puzzle.target)
+    }
+}
+
+fn abs_diff(a: u8, b: u8) -> u8 {
+    if a >= b { a - b } else { b - a }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -103,6 +120,18 @@ pub fn generate_number_line(a: u8, b: u8, op: Operation, _rng: &mut impl Rng) ->
             NumberLinePuzzle { start: a, target, operation: Operation::Add, max }
         }
     }
+}
+
+/// Build a raw "go to mark N" puzzle — a target on a `0..=max` line that isn't
+/// tied to an a+b operation. Used by the embodied number line: hop to stone N,
+/// or set the dive gauge to depth N. `start` is where the token begins (often
+/// 0), `target` the goal; `max` is clamped to at least the target (with a touch
+/// of overshoot headroom) so the line always reaches it. The stored `operation`
+/// is informational only (forward vs. backward).
+pub fn generate_target(start: u8, target: u8, max: u8) -> NumberLinePuzzle {
+    let operation = if target >= start { Operation::Add } else { Operation::Sub };
+    let max = max.max(target.saturating_add(if target >= start { 2 } else { 0 })).max(start);
+    NumberLinePuzzle { start, target, operation, max }
 }
 
 #[cfg(test)]
@@ -188,6 +217,49 @@ mod tests {
         let s = number_line_reducer(s, NumberLineAction::JumpForward { n: 0 });
         assert_eq!(s.jumps, 0);
         assert_eq!(s.position, 3);
+    }
+
+    // ── Embodied number line: raw "go to mark N" target + count-on assessment ──
+
+    #[test]
+    fn target_puzzle_walks_forward_to_a_raw_mark() {
+        // "Hop to stone 5" — start at 0, no a+b operation involved.
+        let p = generate_target(0, 5, 8);
+        assert_eq!((p.start, p.target, p.max), (0, 5, 8));
+        let mut s = NumberLineSession::new(p);
+        assert_eq!(s.optimal_jumps(), 5);
+        assert_eq!(s.distance_to_target(), 5);
+        for _ in 0..5 {
+            s = number_line_reducer(s, NumberLineAction::JumpForward { n: 1 });
+        }
+        assert_eq!(s.phase, NumberLinePhase::Complete);
+        assert_eq!(s.distance_to_target(), 0);
+    }
+
+    #[test]
+    fn target_puzzle_can_descend_backward() {
+        // A gauge that reads downward: from 7 to 3.
+        let p = generate_target(7, 3, 10);
+        let s = NumberLineSession::new(p);
+        assert_eq!(s.optimal_jumps(), 4);
+        let s = number_line_reducer(s, NumberLineAction::JumpBackward { n: 4 });
+        assert_eq!(s.position, 3);
+        assert_eq!(s.phase, NumberLinePhase::Complete);
+    }
+
+    #[test]
+    fn generate_target_clamps_max_to_at_least_the_target() {
+        let p = generate_target(0, 9, 4); // max too small
+        assert!(p.max >= p.target, "max must reach the target");
+    }
+
+    #[test]
+    fn distance_to_target_reflects_overshoot() {
+        let p = generate_target(0, 5, 9);
+        let s = NumberLineSession::new(p);
+        let s = number_line_reducer(s, NumberLineAction::JumpForward { n: 7 }); // overshoot to 7
+        assert_eq!(s.distance_to_target(), 2, "two past the target");
+        assert_eq!(s.phase, NumberLinePhase::InProgress);
     }
 
     #[test]
