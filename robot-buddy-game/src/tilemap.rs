@@ -403,33 +403,40 @@ impl Map {
     #[allow(non_snake_case)]
     pub fn reef() -> Self {
         use Tile::*;
-        let (Ke, Co, SF, Sa, Bu, Ch) = (Kelp, Coral, SeaFloor, Sand, Bubble, Chest);
-        // 22×16 lagoon. A coral wall (row 5) with a single gap at col 8 is the
-        // shark's gate to the treasure cove above (chest at (7,2)). The wide
-        // lower basin holds the ambient number-line stepping-stones (row 11,
-        // see number_track) plus the friendly sea folk. Entry/exit portals land
-        // at (8,9)/(8,10) — both open sea floor.
-        Map {
-            id: "reef", width: 22, height: 16, render_mode: RenderMode::Aquatic,
-            tiles: vec![
-                vec![Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke],
-                vec![Ke,SF,SF,SF,SF,Co,SF,SF,SF,SF,SF,SF,SF,SF,Co,SF,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,SF,SF,SF,SF,SF,SF,Ch,SF,SF,SF,SF,SF,SF,SF,SF,SF,Co,SF,SF,SF,Ke],
-                vec![Ke,SF,Co,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Co,SF,SF,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Co,SF,SF,Ke],
-                vec![Ke,Co,Co,Co,Co,Co,Co,Co,SF,Co,Co,Co,Co,Co,Co,Co,Co,Co,Co,Co,Co,Ke],
-                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,SF,Bu,SF,Sa,Sa,SF,SF,SF,SF,SF,SF,SF,SF,Sa,Sa,SF,Bu,SF,SF,SF,Ke],
-                vec![Ke,SF,SF,SF,Sa,Sa,SF,SF,SF,SF,SF,SF,SF,SF,Sa,Sa,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,SF,Co,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Co,SF,SF,SF,Ke],
-                vec![Ke,SF,SF,SF,SF,SF,Bu,SF,SF,SF,SF,SF,SF,SF,SF,Bu,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke],
-            ],
+        // A big 28×20 lagoon, built programmatically so it's easy to grow. A
+        // coral wall (row 5) with a single gap at col 8 is the shark's gate to
+        // the treasure cove above (chest at (7,2)). The wide lower basin holds
+        // the ambient number-line stepping-stones (row 13, see number_track)
+        // plus the friendly sea folk. Entry/exit portals land at (8,9)/(8,10).
+        let (w, h) = (28usize, 20usize);
+        let mut tiles = vec![vec![SeaFloor; w]; h];
+        for x in 0..w {
+            tiles[0][x] = Kelp;
+            tiles[h - 1][x] = Kelp;
         }
+        for row in tiles.iter_mut() {
+            row[0] = Kelp;
+            row[w - 1] = Kelp;
+        }
+        // Coral wall with the shark's single gap at col 8.
+        for x in 1..w - 1 {
+            tiles[5][x] = Coral;
+        }
+        tiles[5][8] = SeaFloor;
+        // Treasure cove chest, above the wall.
+        tiles[2][7] = Chest;
+        // Scattered coral / sand beds / bubble vents for texture — kept clear of
+        // the creatures' spots, the portals, and the number-line row (13).
+        for &(x, y) in &[(2, 3), (14, 3), (22, 4), (3, 16), (20, 11), (24, 14)] {
+            tiles[y][x] = Coral;
+        }
+        for &(x, y) in &[(18, 8), (19, 8), (18, 9), (19, 9), (23, 16), (24, 16)] {
+            tiles[y][x] = Sand;
+        }
+        for &(x, y) in &[(2, 8), (25, 8), (6, 17), (21, 17)] {
+            tiles[y][x] = Bubble;
+        }
+        Map { id: "reef", width: w, height: h, render_mode: RenderMode::Aquatic, tiles }
     }
 
     /// Orbital hub — the flyable starfield. You pilot the rocket (arrow keys)
