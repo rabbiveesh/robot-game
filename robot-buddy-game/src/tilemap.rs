@@ -111,6 +111,10 @@ pub fn all_portals() -> &'static [Portal] {
         Portal { from_map: "overworld", from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0 },
         Portal { from_map: "dream",     from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0 },
         Portal { from_map: "reef", from_x: 8, from_y: 10, to_map: "overworld", to_x: 17, to_y: 16, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        // Reef dive-gauge → the trench: hop down the depth-stones to the deepest
+        // (24,13) and the descent fires. Surface again at the shaft top (24,8).
+        Portal { from_map: "reef", from_x: 24, from_y: 13, to_map: "trench", to_x: 8, to_y: 2, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "trench", from_x: 8, from_y: 12, to_map: "reef", to_x: 24, to_y: 8, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
         // SPACE: Gizmo's lab launchpad → the orbital hub, and back.
         Portal { from_map: "lab", from_x: 10, from_y: 2, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0 },
         Portal { from_map: "space_hub", from_x: 8, from_y: 10, to_map: "lab", to_x: 10, to_y: 3, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
@@ -439,6 +443,27 @@ impl Map {
         Map { id: "reef", width: w, height: h, render_mode: RenderMode::Aquatic, tiles }
     }
 
+    /// The trench — the reef's deeper zone, reached by hopping the dive gauge to
+    /// the bottom. A richer pearl path (the descent payoff) plus a way back up
+    /// at (8,12).
+    pub fn trench() -> Self {
+        use Tile::*;
+        let (w, h) = (16usize, 14usize);
+        let mut tiles = vec![vec![SeaFloor; w]; h];
+        for x in 0..w {
+            tiles[0][x] = Coral;
+            tiles[h - 1][x] = Coral;
+        }
+        for row in tiles.iter_mut() {
+            row[0] = Coral;
+            row[w - 1] = Coral;
+        }
+        for &(x, y) in &[(3, 3), (12, 3), (3, 10), (12, 10)] {
+            tiles[y][x] = Coral;
+        }
+        Map { id: "trench", width: w, height: h, render_mode: RenderMode::Aquatic, tiles }
+    }
+
     /// Orbital hub — the flyable starfield. You pilot the rocket (arrow keys)
     /// between planet pads. Border is solid asteroid rock; pads are portals.
     /// Cosmic render mode floats a starfield over everything.
@@ -544,6 +569,7 @@ impl Map {
             "control" => Self::control(),
             "annex" => Self::annex(),
             "reef" => Self::reef(),
+            "trench" => Self::trench(),
             "space_hub" => Self::space_hub(),
             "moon" => Self::moon(),
             "mars" => Self::mars(),

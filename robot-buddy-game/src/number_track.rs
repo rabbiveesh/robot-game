@@ -28,6 +28,35 @@ impl NumberTrack {
     }
 }
 
+/// A vertical "dive gauge": numbered depth-stones the kid counts *down* to
+/// descend. Stepping onto `tiles[target]` (the deepest, glowing stone) sits on
+/// a portal to the deeper zone — so walking the gauge to the bottom IS the
+/// descent. Bail = just walk off; nothing happens unless you reach the door.
+pub struct DiveTrack {
+    pub tiles: &'static [(usize, usize)],
+    pub target: usize,
+}
+
+impl DiveTrack {
+    pub fn target_tile(&self) -> (usize, usize) {
+        self.tiles[self.target]
+    }
+}
+
+/// The dive-gauge shaft for `map_id`, if it has one.
+pub fn dive_track_for_map(map_id: &str) -> Option<DiveTrack> {
+    match map_id {
+        // A vertical shaft in the reef's quiet east corner (col 24): hop DOWN
+        // the depth-stones 0..5; the deepest (depth 5, (24,13)) is the trench
+        // door. Inkwell the octopus loiters at the top.
+        "reef" => Some(DiveTrack {
+            tiles: &[(24, 8), (24, 9), (24, 10), (24, 11), (24, 12), (24, 13)],
+            target: 5,
+        }),
+        _ => None,
+    }
+}
+
 /// The ambient number path for `map_id`, if it has one.
 pub fn track_for_map(map_id: &str) -> Option<NumberTrack> {
     match map_id {
@@ -41,6 +70,16 @@ pub fn track_for_map(map_id: &str) -> Option<NumberTrack> {
                 (11, 13), (12, 13), (13, 13), (14, 13), (15, 13), (16, 13),
             ],
             target: 6,
+        }),
+        // The trench (deeper zone) has its own, richer pearl path — the payoff
+        // for descending. Row 6, marks 0..9; pearl starts on 4.
+        "trench" => Some(NumberTrack {
+            id: "trench_path_1",
+            tiles: &[
+                (3, 6), (4, 6), (5, 6), (6, 6), (7, 6),
+                (8, 6), (9, 6), (10, 6), (11, 6), (12, 6),
+            ],
+            target: 4,
         }),
         _ => None,
     }
