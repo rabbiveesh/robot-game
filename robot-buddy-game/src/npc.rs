@@ -26,6 +26,7 @@ pub enum NpcKind {
     Dolphin,
     Crab,
     Jelly,
+    Octopus,
     // Space creatures
     MoonAlien,
     FuelBot,
@@ -68,6 +69,7 @@ impl NpcKind {
             NpcKind::Dolphin => "dolphin",
             NpcKind::Crab => "crab",
             NpcKind::Jelly => "jelly",
+            NpcKind::Octopus => "octopus",
             NpcKind::MoonAlien => "moon_alien",
             NpcKind::FuelBot => "fuel_bot",
             NpcKind::MarsGuardian => "mars_guardian",
@@ -106,6 +108,7 @@ impl NpcKind {
             NpcKind::Dolphin => "Echo",
             NpcKind::Crab => "Pinchy",
             NpcKind::Jelly => "Wobble",
+            NpcKind::Octopus => "Inkwell",
             NpcKind::MoonAlien => "Zorp",
             NpcKind::FuelBot => "Tank",
             NpcKind::MarsGuardian => "Rok",
@@ -135,6 +138,7 @@ impl NpcKind {
         NpcKind::Kid1, NpcKind::Kid2, NpcKind::Shopkeeper, NpcKind::GlitchDog,
         NpcKind::GroveSpirit, NpcKind::Pip, NpcKind::Signpost,
         NpcKind::ReefShark, NpcKind::SeaTurtle, NpcKind::Dolphin, NpcKind::Crab, NpcKind::Jelly,
+        NpcKind::Octopus,
         NpcKind::MoonAlien, NpcKind::FuelBot, NpcKind::MarsGuardian, NpcKind::StarKeeper, NpcKind::StationAlien,
         NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
@@ -175,6 +179,7 @@ pub enum SpriteType {
     Dolphin,
     Crab,
     Jellyfish,
+    Octopus,
     AlienGreen,
     AlienRed,
     FuelDepot,
@@ -459,6 +464,7 @@ impl Npc {
             SpriteType::Dolphin => sprites::npcs::draw_dolphin(x, y, self.entity.dir, time),
             SpriteType::Crab => sprites::npcs::draw_crab(x, y, time),
             SpriteType::Jellyfish => sprites::npcs::draw_jellyfish(x, y, time),
+            SpriteType::Octopus => sprites::npcs::draw_octopus(x, y, time),
             SpriteType::AlienGreen => sprites::npcs::draw_alien(x, y, time,
                 Color::from_rgba(124, 207, 120, 255)),
             SpriteType::AlienRed => sprites::npcs::draw_alien(x, y, time,
@@ -549,6 +555,13 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(Dolphin,  11, 8, S::Dolphin,   true, false, false).wandering(),
             n(Crab,      3, 9, S::Crab,      true, true,  false).wandering(),
             n(Jelly,     5, 2, S::Jellyfish, true, true,  false).wandering(),
+            // Inkwell guards the dive gauge in the east corner — talk to her for
+            // the depth, then hop down the stones to the trench.
+            n(Octopus,  24, 7, S::Octopus,   true, true,  false),
+        ],
+        // The trench — deeper, quieter; a single drifting buddy for company.
+        "trench" => vec![
+            n(Jelly,     4, 9, S::Jellyfish, true, true,  false).wandering(),
         ],
         // Orbital hub — Tank the fuel droid tops up the rocket (solve to refuel).
         "space_hub" => vec![

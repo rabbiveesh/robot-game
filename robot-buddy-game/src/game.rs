@@ -3336,6 +3336,10 @@ impl Game {
         let dest_id = self.map.id;
         self.npcs = self.load_map_roster(dest_id);
 
+        // Reset the ambient pearl to the new map's path start (if any).
+        self.track_goal = number_track::track_for_map(dest_id).map(|t| t.target).unwrap_or(0);
+        self.track_on_target = false;
+
         self.player.tile_x = dest_x;
         self.player.tile_y = dest_y;
         self.player.x = dest_x as f32 * TILE_SIZE;
@@ -3412,6 +3416,13 @@ impl Game {
             if let Some(track) = number_track::track_for_map(self.map.id) {
                 let here = track.index_of((self.player.tile_x, self.player.tile_y));
                 draw_number_track(&track, here, self.track_goal, self.game_time);
+            }
+            // The dive gauge (reef): count down the depth-stones; the deepest
+            // glows as the trench door.
+            if let Some(dive) = number_track::dive_track_for_map(self.map.id) {
+                let here = dive.tiles.iter()
+                    .position(|&t| t == (self.player.tile_x, self.player.tile_y));
+                draw_dive_shaft(&dive, here, self.game_time);
             }
 
             // Click-to-walk destination marker: a pulsing ring on the tapped
@@ -4235,6 +4246,11 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
             "Drifting is a perfectly good plan, thank you very much.",
             "Don't worry, I'm the no-sting kind!",
         ],
+        Octopus => &[
+            "Want to see the trench? Hop DOWN my depth-stones — all the way to the deepest, glowing one!",
+            "Count the depths as you go down: 0, 1, 2... the bottom stone is the trench door!",
+            "Eight arms, and I STILL can't count past the deep stone. You try it!",
+        ],
         MoonAlien => &[
             "Zorp! You bounced all the way to the Moon! Boing boing!",
             "Low gravity is the BEST. Watch me jump super high! Wheee!",
@@ -4414,6 +4430,10 @@ fn secret_entry_dialogue(map_id: &str, speaker: &str) -> Vec<DialogueLine> {
             line("Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!"),
             line("Ooh, glowy stepping-stones with numbers! Hop along them to the shiny PEARL!"),
         ],
+        "trench" => vec![
+            line("WHOA, the deep trench! It's darker down here, boss... and SO many pearls!"),
+            line("More glowy number-stones! Hop to the pearl — and step on the bubbly tile to surface again."),
+        ],
         "space_hub" => vec![
             line("3... 2... 1... BLAST OFF! WHEEEE! Boss, we're in SPACE! Actual outer SPACE!"),
             line("Fly the rocket to a glowing pad to visit a planet! Tank the fuel droid is over there if we run low."),
@@ -4467,6 +4487,39 @@ fn draw_number_track(
                 draw_circle_lines(cx, cy, TILE_SIZE * 0.52, 2.0,
                     Color::new(1.0, 0.84, 0.30, 0.9));
             }
+        }
+    }
+}
+
+/// Draw the vertical dive gauge: numbered depth-stones; the deepest (`target`)
+/// glows as the trench door. `here` is the kid's depth, if on the shaft.
+fn draw_dive_shaft(dive: &number_track::DiveTrack, here: Option<usize>, time: f32) {
+    let outline = Color::from_rgba(60, 90, 110, 220);
+    for (i, &(col, row)) in dive.tiles.iter().enumerate() {
+        let cx = (col as f32 + 0.5) * TILE_SIZE;
+        let cy = (row as f32 + 0.5) * TILE_SIZE;
+        let reached = here.map_or(false, |h| i <= h);
+        // Deeper stones read darker, like sinking into the trench.
+        let shade = 200 - (i as u8).saturating_mul(18);
+        let base = if reached {
+            Color::from_rgba(120, 200, 220, 230)
+        } else {
+            Color::from_rgba(shade.max(70), shade.max(90), shade.max(120), 200)
+        };
+        draw_circle(cx, cy, TILE_SIZE * 0.34, base);
+        draw_circle_lines(cx, cy, TILE_SIZE * 0.34, 2.0, outline);
+
+        let label = format!("{i}");
+        let tw = measure_text(&label, None, 22, 1.0).width;
+        draw_text(&label, cx - tw / 2.0, cy + 7.0, 22.0, Color::from_rgba(230, 245, 250, 235));
+
+        // The trench door: the deepest stone, glowing with a downward chevron.
+        if i == dive.target {
+            let pulse = (time * 3.0).sin() * 0.5 + 0.5;
+            let teal = Color::new(0.30, 0.85, 0.90, 0.55 + 0.4 * pulse);
+            draw_circle_lines(cx, cy, TILE_SIZE * 0.42 + pulse * 3.0, 3.0, teal);
+            draw_line(cx - 7.0, cy - 11.0, cx, cy - 4.0, 3.0, teal);
+            draw_line(cx + 7.0, cy - 11.0, cx, cy - 4.0, 3.0, teal);
         }
     }
 }

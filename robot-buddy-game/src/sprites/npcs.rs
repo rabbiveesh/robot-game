@@ -377,6 +377,36 @@ pub fn draw_jellyfish(x: f32, y: f32, time: f32) {
     draw_circle(cx + 3.0, cy, 1.3, eye);
 }
 
+/// Inkwell the octopus — the dive-gauge guardian. A round purple head, big
+/// friendly eyes, and a fan of wiggling tentacles.
+pub fn draw_octopus(x: f32, y: f32, time: f32) {
+    let cx = x + TS / 2.0;
+    let cy = y + TS / 2.0 + (time * 1.4).sin() * 1.5;
+    let body = Color::from_rgba(150, 90, 190, 255);
+    let dark = Color::from_rgba(120, 66, 160, 255);
+
+    draw_ellipse(cx, y + TS - 3.0, 12.0, 4.0, 0.0, Color::from_rgba(0, 0, 0, 40));
+
+    // Tentacles — a fan that wiggles.
+    for i in 0..5 {
+        let t = i as f32 - 2.0;
+        let bx = cx + t * 5.0;
+        let wig = (time * 3.0 + i as f32).sin() * 3.0;
+        draw_line(bx, cy + 6.0, bx + wig, cy + 16.0, 3.0, dark);
+    }
+    // Head/mantle
+    draw_circle(cx, cy - 2.0, 12.0, body);
+    draw_circle(cx, cy + 5.0, 10.0, body);
+    // Eyes
+    let eye = Color::from_rgba(33, 33, 33, 255);
+    draw_circle(cx - 4.0, cy - 3.0, 3.0, WHITE);
+    draw_circle(cx + 4.0, cy - 3.0, 3.0, WHITE);
+    draw_circle(cx - 4.0, cy - 3.0, 1.4, eye);
+    draw_circle(cx + 4.0, cy - 3.0, 1.4, eye);
+    // Little smile
+    draw_line(cx - 3.0, cy + 2.0, cx + 3.0, cy + 2.0, 1.5, dark);
+}
+
 /// A friendly little alien. `hue` lets reef-style rosters drop in green pals or
 /// a rusty-red Mars guardian without a new sprite. Floaty bob + waving antennae.
 pub fn draw_alien(x: f32, y: f32, time: f32, body: Color) {

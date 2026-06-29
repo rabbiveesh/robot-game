@@ -1443,6 +1443,40 @@ fn hopping_to_the_reef_pearl_collects_it() {
 }
 
 #[test]
+fn diving_the_gauge_to_the_bottom_descends_to_the_trench() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    // The reef's dive gauge is a vertical shaft at col 24 (depths 0..5); the
+    // deepest stone (24,13) is the trench door. Hop down to it → descend.
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = Map::reef();
+    h.game.npcs = npc_mod::npcs_for_map("reef");
+    h.game.npcs_offstage.clear();
+
+    h.game.player.tile_x = 24;
+    h.game.player.tile_y = 10;
+    h.game.player.x = 24.0 * 48.0;
+    h.game.player.y = 10.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    // Hop down to depth 4, then step onto the deepest stone (the trench door).
+    h.walk_to(24, 12);
+    for _ in 0..60 {
+        if h.game.map.id == "trench" { break; }
+        h.hold(macroquad::prelude::KeyCode::Down);
+    }
+    assert_eq!(h.game.map.id, "trench", "reaching the deepest dive-stone descends to the trench");
+    assert!(
+        robot_buddy_game::number_track::track_for_map("trench").is_some(),
+        "the trench should have its own pearl path (the descent payoff)",
+    );
+}
+
+#[test]
 fn companion_snaps_to_the_player_after_a_portal_warp() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
