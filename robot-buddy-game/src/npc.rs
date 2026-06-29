@@ -17,6 +17,9 @@ pub enum NpcKind {
     GlitchDog,
     GroveSpirit,
     Pip,
+    /// The signpost by the main house. Looks like scenery, but gift it a Dum
+    /// Dum and it cheerfully uproots itself to follow you around. For the lolz.
+    Signpost,
     // Reef creatures
     ReefShark,
     SeaTurtle,
@@ -61,6 +64,7 @@ impl NpcKind {
             NpcKind::GlitchDog => "glitch_dog",
             NpcKind::GroveSpirit => "grove_spirit",
             NpcKind::Pip => "pip",
+            NpcKind::Signpost => "signpost",
             NpcKind::ReefShark => "reef_shark",
             NpcKind::SeaTurtle => "sea_turtle",
             NpcKind::Dolphin => "dolphin",
@@ -100,6 +104,7 @@ impl NpcKind {
             NpcKind::GlitchDog => "B0RK.exe",
             NpcKind::GroveSpirit => "Old Oak",
             NpcKind::Pip => "Pip",
+            NpcKind::Signpost => "Old Signy",
             NpcKind::ReefShark => "Chompy",
             NpcKind::SeaTurtle => "Shelldon",
             NpcKind::Dolphin => "Echo",
@@ -134,7 +139,7 @@ impl NpcKind {
     pub const ALL: &'static [NpcKind] = &[
         NpcKind::Sage, NpcKind::SageLab, NpcKind::DreamSage, NpcKind::Mommy,
         NpcKind::Kid1, NpcKind::Kid2, NpcKind::Shopkeeper, NpcKind::GlitchDog,
-        NpcKind::GroveSpirit, NpcKind::Pip,
+        NpcKind::GroveSpirit, NpcKind::Pip, NpcKind::Signpost,
         NpcKind::ReefShark, NpcKind::SeaTurtle, NpcKind::Dolphin, NpcKind::Crab, NpcKind::Jelly,
         NpcKind::MoonAlien, NpcKind::FuelBot, NpcKind::MarsGuardian, NpcKind::StarKeeper, NpcKind::StationAlien,
         NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
@@ -182,6 +187,7 @@ pub enum SpriteType {
     AlienRed,
     FuelDepot,
     StarTerminal,
+    Signpost,
 }
 
 /// Manhattan radius an NPC may wander away from its home tile. Keeps wanderers
@@ -414,6 +420,7 @@ impl Npc {
                 Color::from_rgba(229, 130, 110, 255)),
             SpriteType::FuelDepot => sprites::npcs::draw_fuel_depot(x, y, time),
             SpriteType::StarTerminal => sprites::npcs::draw_star_terminal(x, y, time),
+            SpriteType::Signpost => sprites::npcs::draw_signpost(x, y, time),
         }
     }
 }
@@ -451,6 +458,10 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
     match map_id {
         "overworld" => vec![
             n(Sage, 12, 12, S::Sage, true, false, true),
+            // The signpost by the main house. Stationary scenery until you gift
+            // it a Dum Dum — then it pulls itself out of the ground and tags
+            // along like any other buddy. Never challenges; it's just a sign.
+            n(Signpost, 5, 12, S::Signpost, true, true, false),
         ],
         "home" => vec![
             n(Mommy, 3, 3, S::Mommy, true, false, false),

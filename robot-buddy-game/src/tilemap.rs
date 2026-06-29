@@ -183,7 +183,7 @@ impl Map {
     pub fn overworld() -> Self {
         use Tile::*;
         let (Gr, Pa, Wa, Tr, Fl) = (Grass, Path, Water, Tree, Flower);
-        let (HW, Rf, Dr, Wi, Fc, Sg) = (HouseWall, Roof, Door, Window, Fence, Sign);
+        let (HW, Rf, Dr, Wi, Fc) = (HouseWall, Roof, Door, Window, Fence);
         let (Br, Ch, Dv) = (Bridge, Chest, DiveSpot);
         Map {
             id: "overworld", width: 30, height: 25, render_mode: RenderMode::Normal,
@@ -200,7 +200,7 @@ impl Map {
                 vec![Tr,Gr,Gr,Gr,Gr,Pa,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Pa,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Ch,Gr,Gr,Gr,Tr],
                 vec![Tr,Gr,Gr,Gr,Gr,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Pa,Gr,Gr,Gr,Gr,Gr,Fc,Fc,Fc,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
                 vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Wa,Wa,Wa,Wa,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Tr],
-                vec![Tr,Gr,Fl,Gr,Gr,Sg,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Wa,Wa,Wa,Wa,Wa,Wa,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Tr],
+                vec![Tr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Gr,Wa,Wa,Wa,Wa,Wa,Wa,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Tr],
                 vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Wa,Wa,Wa,Wa,Wa,Wa,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Tr],
                 vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Gr,Gr,Pa,Pa,Br,Br,Wa,Wa,Wa,Wa,Gr,Gr,Gr,Gr,Gr,Gr,Fl,Gr,Gr,Tr],
                 vec![Tr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Gr,Pa,Gr,Gr,Gr,Gr,Dv,Wa,Gr,Gr,Gr,Gr,Rf,Rf,Rf,Gr,Gr,Gr,Tr],

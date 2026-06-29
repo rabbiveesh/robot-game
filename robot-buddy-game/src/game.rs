@@ -4105,6 +4105,11 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
             "I like to wander in circles. It's very fun!",
             "Got any snacks? I'm always a bit hungry, hehe!",
         ],
+        Signpost => &[
+            "Howdy! I've pointed the way for YEARS. Bit lonely, though.",
+            "Psst... give a fella a Dum Dum and I'll come adventuring with you!",
+            "I know ALL the directions. Left, right, up... and the other one!",
+        ],
         // ReefShark normally reaches the player through the gate-challenge path,
         // not here — but if you chat after he's stepped aside, he's a sweetie.
         ReefShark => &[
