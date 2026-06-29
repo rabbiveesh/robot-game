@@ -404,21 +404,30 @@ impl Map {
     pub fn reef() -> Self {
         use Tile::*;
         let (Ke, Co, SF, Sa, Bu, Ch) = (Kelp, Coral, SeaFloor, Sand, Bubble, Chest);
+        // 22×16 lagoon. A coral wall (row 5) with a single gap at col 8 is the
+        // shark's gate to the treasure cove above (chest at (7,2)). The wide
+        // lower basin holds the ambient number-line stepping-stones (row 11,
+        // see number_track) plus the friendly sea folk. Entry/exit portals land
+        // at (8,9)/(8,10) — both open sea floor.
         Map {
-            id: "reef", width: 16, height: 12, render_mode: RenderMode::Aquatic,
+            id: "reef", width: 22, height: 16, render_mode: RenderMode::Aquatic,
             tiles: vec![
-                vec![Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke],
-                vec![Ke,SF,SF,SF,SF,Bu,Co,SF,SF,Co,SF,SF,Bu,SF,SF,Ke],
-                vec![Ke,SF,Co,SF,SF,SF,SF,Ch,SF,SF,SF,SF,Co,SF,SF,Ke],
-                vec![Ke,SF,SF,SF,SF,Co,SF,SF,SF,Co,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,SF,Co,SF,SF,SF,SF,SF,SF,SF,SF,SF,Co,SF,SF,Ke],
-                vec![Ke,Co,Co,Co,Co,Co,Co,Co,SF,Co,Co,Co,Co,Co,Co,Ke],
-                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,SF,Bu,Sa,Sa,SF,SF,SF,SF,SF,SF,Sa,Sa,Bu,SF,Ke],
-                vec![Ke,SF,SF,Sa,Sa,SF,SF,SF,SF,SF,SF,Sa,Sa,SF,SF,Ke],
-                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,SF,SF,SF,SF,SF,SF,SF,Sa,SF,SF,SF,SF,SF,SF,Ke],
-                vec![Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke],
+                vec![Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke],
+                vec![Ke,SF,SF,SF,SF,Co,SF,SF,SF,SF,SF,SF,SF,SF,Co,SF,SF,SF,SF,SF,SF,Ke],
+                vec![Ke,SF,SF,SF,SF,SF,SF,Ch,SF,SF,SF,SF,SF,SF,SF,SF,SF,Co,SF,SF,SF,Ke],
+                vec![Ke,SF,Co,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Co,SF,SF,SF,SF,SF,SF,SF,Ke],
+                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Co,SF,SF,Ke],
+                vec![Ke,Co,Co,Co,Co,Co,Co,Co,SF,Co,Co,Co,Co,Co,Co,Co,Co,Co,Co,Co,Co,Ke],
+                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
+                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
+                vec![Ke,SF,Bu,SF,Sa,Sa,SF,SF,SF,SF,SF,SF,SF,SF,Sa,Sa,SF,Bu,SF,SF,SF,Ke],
+                vec![Ke,SF,SF,SF,Sa,Sa,SF,SF,SF,SF,SF,SF,SF,SF,Sa,Sa,SF,SF,SF,SF,SF,Ke],
+                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
+                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
+                vec![Ke,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Ke],
+                vec![Ke,SF,Co,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,SF,Co,SF,SF,SF,Ke],
+                vec![Ke,SF,SF,SF,SF,SF,Bu,SF,SF,SF,SF,SF,SF,SF,SF,Bu,SF,SF,SF,SF,SF,Ke],
+                vec![Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke,Ke],
             ],
         }
     }

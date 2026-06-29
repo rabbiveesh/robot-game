@@ -1409,6 +1409,38 @@ fn swapped_out_cross_map_buddy_walks_out_then_teleports_home() {
 }
 
 #[test]
+fn hopping_to_the_reef_goal_stone_cheers() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    // The reef has an ambient number-line path (row 11); the goal stone is mark
+    // 6 at (10, 11). Hopping onto it fires a one-shot NumberLineReached cheer.
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = Map::reef();
+    h.game.npcs = npc_mod::npcs_for_map("reef");
+    h.game.npcs_offstage.clear();
+
+    // Stand the kid two stones short of the goal, on the path.
+    h.game.player.tile_x = 8;
+    h.game.player.tile_y = 11;
+    h.game.player.x = 8.0 * 48.0;
+    h.game.player.y = 11.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    let mark = h.mark();
+    h.walk_to(10, 11); // hop to the goal stone
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e, GameEvent::NumberLineReached { mark: 6 })),
+        "hopping to the goal stone should fire NumberLineReached {{ mark: 6 }}; got {:?}",
+        events,
+    );
+}
+
+#[test]
 fn companion_snaps_to_the_player_after_a_portal_warp() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;

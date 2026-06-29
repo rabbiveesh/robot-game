@@ -53,6 +53,7 @@ use crate::tilemap::{self, Map, TILE_SIZE};
 use crate::sprites::{self, Dir};
 use crate::follower::Follower;
 use crate::npc::{self, NpcKind};
+use crate::number_track;
 use crate::ui;
 use crate::ui::dialogue::{DialogueBox, DialogueLine};
 use crate::ui::challenge::{ChoiceBound, ScaffoldBounds};
@@ -347,6 +348,9 @@ pub enum GameEvent {
     EncounterTriggered { kind: String },
     /// A quest run reached its final step.
     QuestCompleted,
+    /// The kid hopped to the goal stone of an ambient number-line path. `mark`
+    /// is the stone's number (the target index walked to).
+    NumberLineReached { mark: u8 },
     SudokuStarted { grid_size: u8, source: String },
     SudokuResolved {
         correct: bool,
@@ -387,6 +391,10 @@ pub struct Game {
     /// or gets pushed onto a portal tile he travels through it, so this tracks
     /// where he ended up. Only meaningful while `sparky_parked`.
     sparky_map: &'static str,
+    /// True while the player is standing on the goal stone of the current map's
+    /// ambient number-line path — so the "you hopped here!" cheer fires once on
+    /// arrival, not every frame they linger on it.
+    track_on_target: bool,
     /// Wander cooldown for parked Sparky. Ticks down only while parked AND
     /// the player is on his home map; reset to a small initial delay on
     /// park so he doesn't twitch on the same frame he's swapped out.
@@ -516,6 +524,7 @@ impl Game {
             companion: None,
             sparky_parked: false,
             sparky_map: SPARKY_HOME_MAP,
+            track_on_target: false,
             sparky_wander_cooldown: 0.0,
             dreaming: false,
             game_time: 0.0,
@@ -856,6 +865,7 @@ impl Game {
         // Buddies heading off-map blink home once they've walked out of view.
         if self.state == GameState::Playing {
             self.evict_offscreen_leavers();
+            self.check_number_track_landing();
         }
 
         // Interaction menu input (layout from step-side; render() draws separately)
@@ -2947,6 +2957,22 @@ impl Game {
         }
     }
 
+    /// Ambient number-line path: fire a one-shot cheer the moment the kid hops
+    /// onto the goal stone (rising edge — not every frame they stand on it).
+    /// Pure feedback; never gates progress.
+    fn check_number_track_landing(&mut self) {
+        let on_target = number_track::track_for_map(self.map.id)
+            .map(|t| (self.player.tile_x, self.player.tile_y) == t.target_tile())
+            .unwrap_or(false);
+        if on_target && !self.track_on_target {
+            if let Some(t) = number_track::track_for_map(self.map.id) {
+                self.events.push(GameEvent::NumberLineReached { mark: t.target as u8 });
+                self.dum_dum_hud.flash();
+            }
+        }
+        self.track_on_target = on_target;
+    }
+
     /// Whisk any swapped-out buddy that's `leaving_map` off to its real home the
     /// moment it walks off-screen or reaches the exit doorway. Until then it's a
     /// normal roster NPC strolling toward the door. Keeps the "walk out, then
@@ -3347,6 +3373,13 @@ impl Game {
 
             clear_background(Color::from_rgba(26, 26, 46, 255));
             tilemap::draw_map(&self.map, self.camera.x, self.camera.y, GAME_W, GAME_H, self.game_time);
+
+            // Embodied number line: stepping-stones drawn on the ground (under
+            // the sprites) so the kid hops across the numbers.
+            if let Some(track) = number_track::track_for_map(self.map.id) {
+                let here = track.index_of((self.player.tile_x, self.player.tile_y));
+                draw_number_track(&track, here, self.game_time);
+            }
 
             // Click-to-walk destination marker: a pulsing ring on the tapped
             // tile, drawn on the ground (under the sprites) until arrival.
@@ -4340,6 +4373,43 @@ fn secret_entry_dialogue(map_id: &str, speaker: &str) -> Vec<DialogueLine> {
             line("Fly the rocket to a glowing pad to visit a planet! Tank the fuel droid is over there if we run low."),
         ],
         _ => vec![],
+    }
+}
+
+/// Draw the ambient number-line stepping-stones in world space (under the
+/// sprites). Stones up to the kid's current stone are lit; the goal stone
+/// pulses gold and bursts when stood on. `here` is the kid's mark, if on the path.
+fn draw_number_track(track: &number_track::NumberTrack, here: Option<usize>, time: f32) {
+    let outline = Color::from_rgba(94, 122, 60, 200);
+    for (i, &(col, row)) in track.tiles.iter().enumerate() {
+        let cx = (col as f32 + 0.5) * TILE_SIZE;
+        let cy = (row as f32 + 0.5) * TILE_SIZE;
+        let lit = here.map_or(false, |h| i <= h);
+        let base = if lit {
+            Color::from_rgba(255, 236, 179, 235)
+        } else {
+            Color::from_rgba(176, 190, 197, 170)
+        };
+        draw_circle(cx, cy, TILE_SIZE * 0.34, base);
+        draw_circle_lines(cx, cy, TILE_SIZE * 0.34, 2.0, outline);
+
+        if i == track.target {
+            let pulse = (time * 4.0).sin() * 0.5 + 0.5;
+            let gold = Color::new(1.0, 0.84, 0.30, 0.55 + 0.45 * pulse);
+            draw_circle_lines(cx, cy, TILE_SIZE * 0.40 + pulse * 3.0, 3.0, gold);
+            if here == Some(track.target) {
+                draw_circle_lines(cx, cy, TILE_SIZE * 0.52, 2.0, gold);
+            }
+        }
+
+        let label = format!("{i}");
+        let tw = measure_text(&label, None, 22, 1.0).width;
+        let tc = if lit {
+            Color::from_rgba(60, 50, 30, 255)
+        } else {
+            Color::from_rgba(55, 71, 79, 230)
+        };
+        draw_text(&label, cx - tw / 2.0, cy + 7.0, 22.0, tc);
     }
 }
 
