@@ -1063,7 +1063,8 @@ impl Game {
 
                     if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge, input) {
                         ac.state = challenge_reducer(ac.state.clone(), action);
-                        speak_challenge_feedback(&ac.state);
+                        // Intake runs before any buddy can be recruited — Sparky.
+                        speak_challenge_feedback(&ac.state, "Sparky");
                     } else if ac.state.phase == Phase::Complete
                         && (input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter))
                     {
@@ -1077,7 +1078,7 @@ impl Game {
                             &ac.choice_bounds, &ac.scaffold,
                         ) {
                             ac.state = challenge_reducer(ac.state.clone(), action);
-                            speak_challenge_feedback(&ac.state);
+                            speak_challenge_feedback(&ac.state, "Sparky");
                         } else if ac.state.phase == Phase::Complete {
                             dismiss = true;
                         }
@@ -1459,10 +1460,11 @@ impl Game {
                 && self.map.tiles[facing.1][facing.0] == tilemap::Tile::Chest;
 
             if facing_chest {
+                let buddy = self.current_buddy_name();
                 self.menu_target_id = "chest".into();
-                self.menu_target_name = "Sparky".into();
+                self.menu_target_name = buddy.clone();
                 self.start_dialogue(vec![DialogueLine {
-                    speaker: "Sparky".into(),
+                    speaker: buddy,
                     text: "OOOOH a treasure chest! But it has a LOCK! We need to solve the puzzle to open it!".into(),
                 }]);
                 self.pending_challenge = true;
@@ -1649,6 +1651,9 @@ impl Game {
     }
 
     fn step_challenge(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        // Whoever's tagging along narrates the challenge feedback. Bound up
+        // front so it doesn't clash with the mutable borrow of active_challenge.
+        let buddy = self.current_buddy_name();
         // Populate hit-test bounds from the pure layout fn.
         if let Some(ref mut ac) = self.active_challenge {
             let (bounds, scaffold) = ui::challenge::layout(&ac.state, &ac.challenge, screen);
@@ -1665,7 +1670,7 @@ impl Game {
 
             if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge, input) {
                 ac.state = challenge_reducer(ac.state.clone(), action);
-                speak_challenge_feedback(&ac.state);
+                speak_challenge_feedback(&ac.state, &buddy);
             } else if ac.state.phase == Phase::Complete
                 && (input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter))
             {
@@ -1679,7 +1684,7 @@ impl Game {
                     &ac.choice_bounds, &ac.scaffold,
                 ) {
                     ac.state = challenge_reducer(ac.state.clone(), action);
-                    speak_challenge_feedback(&ac.state);
+                    speak_challenge_feedback(&ac.state, &buddy);
                 } else if ac.state.phase == Phase::Complete {
                     dismiss = true;
                 }
@@ -1867,7 +1872,7 @@ impl Game {
                 self.events.push(GameEvent::ChallengeStarted {
                     question: ac.challenge.display_text.clone(),
                 });
-                audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
                 self.active_challenge = Some(ac);
                 self.set_state(GameState::Challenge);
             }
@@ -1962,7 +1967,7 @@ impl Game {
                 self.dum_dum_hud.flash();
                 self.events.push(GameEvent::DumDumsAwarded { amount: 1 });
                 self.start_dialogue(vec![DialogueLine {
-                    speaker: "Sparky".into(),
+                    speaker: self.current_buddy_name(),
                     text: "Ooh! A shiny Dum Dum, just sitting here!".into(),
                 }]);
                 self.set_state(GameState::Dialogue);
@@ -1986,7 +1991,7 @@ impl Game {
                 self.events.push(GameEvent::ChallengeStarted {
                     question: ac.challenge.display_text.clone(),
                 });
-                audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
                 self.active_challenge = Some(ac);
                 self.set_state(GameState::Challenge);
             }
@@ -2005,7 +2010,7 @@ impl Game {
             if let Some(manip) = try_make_manipulative(&self.profile, &ac.challenge) {
                 // Speak the prompt too, so a TTS-on parent hears it whether the
                 // kid gets the quiz or the hands-on version.
-                audio::tts::speak("Sparky", &ac.challenge.speech_text);
+                audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
                 self.active_manipulative = Some(ActiveManipulative {
                     manip,
                     challenge: ac.challenge,
@@ -2016,7 +2021,7 @@ impl Game {
                 return;
             }
         }
-        audio::tts::speak("Sparky", &ac.challenge.speech_text);
+        audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
         self.active_challenge = Some(ac);
         self.set_state(GameState::Challenge);
     }
@@ -2774,6 +2779,17 @@ impl Game {
         }
     }
 
+    /// Display name of whoever's currently tagging along — the active NPC
+    /// companion if there is one, else Sparky. This is the voice that narrates
+    /// flavor text (TTS) and side-chatter as the player explores, so it must
+    /// track the real buddy rather than assuming Sparky.
+    pub fn current_buddy_name(&self) -> String {
+        match self.companion.as_ref() {
+            Some(c) => c.name().to_string(),
+            None => "Sparky".to_string(),
+        }
+    }
+
     /// Tile + direction for parked Sparky's resting spot. Sparky faces the
     /// player's typical entry direction (Down — toward the path) so the kid
     /// runs into him head-on when arriving at the overworld.
@@ -3149,7 +3165,7 @@ impl Game {
         // punishment — Sparky points at the fuel droid; no transfer happens.
         if fuel_cost > 0 && self.fuel < fuel_cost {
             self.start_dialogue(vec![DialogueLine {
-                speaker: "Sparky".into(),
+                speaker: self.current_buddy_name(),
                 text: format!(
                     "Not enough fuel for that jump, boss! It needs {fuel_cost} and we've got {}. Let's find Tank the fuel droid and do some math to top up!",
                     self.fuel
@@ -3173,7 +3189,7 @@ impl Game {
         if toll_due && self.dum_dums < cost {
             let need = cost - self.dum_dums;
             self.start_dialogue(vec![DialogueLine {
-                speaker: "Sparky".into(),
+                speaker: self.current_buddy_name(),
                 text: format!(
                     "Ooh, a dive spot! The first splash in costs {cost} Dum Dums. We need {need} more — let's go find some, boss!"
                 ),
@@ -3237,7 +3253,7 @@ impl Game {
         });
 
         if secret {
-            let lines = secret_entry_dialogue(self.map.id);
+            let lines = secret_entry_dialogue(self.map.id, &self.current_buddy_name());
             if !lines.is_empty() {
                 self.start_dialogue(lines);
                 self.set_state(GameState::Dialogue);
@@ -4288,43 +4304,37 @@ fn display_name_for_buddy_id(id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-fn speak_challenge_feedback(cs: &ChallengeState) {
+fn speak_challenge_feedback(cs: &ChallengeState, speaker: &str) {
     if let Some(ref fb) = cs.feedback {
-        audio::tts::speak("Sparky", &fb.speech);
+        audio::tts::speak(speaker, &fb.speech);
     }
 }
 
-fn secret_entry_dialogue(map_id: &str) -> Vec<DialogueLine> {
+/// Flavor lines for stepping into a secret/special map, voiced by whoever's
+/// currently tagging along (`speaker`) — not always Sparky, since the player
+/// may be travelling with a recruited buddy.
+fn secret_entry_dialogue(map_id: &str, speaker: &str) -> Vec<DialogueLine> {
+    let line = |text: &str| DialogueLine { speaker: speaker.to_string(), text: text.to_string() };
     match map_id {
         "dream" => vec![
-            DialogueLine { speaker: "Sparky".into(),
-                text: "BZZZT! Boss! My circuits feel all tingly! Everything looks... purple?".into() },
-            DialogueLine { speaker: "Sparky".into(),
-                text: "Are we... dreaming? The flowers are floating! BEEP BOOP this is WEIRD!".into() },
+            line("BZZZT! Boss! My circuits feel all tingly! Everything looks... purple?"),
+            line("Are we... dreaming? The flowers are floating! BEEP BOOP this is WEIRD!"),
         ],
         "doghouse" => vec![
-            DialogueLine { speaker: "Sparky".into(),
-                text: "ERROR ERROR! Visual systems reporting... BORK?! What IS this place?!".into() },
-            DialogueLine { speaker: "Sparky".into(),
-                text: "My display is all glitchy! I see scan lines and... is that a DOG made of CODE?!".into() },
+            line("ERROR ERROR! Visual systems reporting... BORK?! What IS this place?!"),
+            line("My display is all glitchy! I see scan lines and... is that a DOG made of CODE?!"),
         ],
         "grove" => vec![
-            DialogueLine { speaker: "Sparky".into(),
-                text: "Whoa boss! We just walked RIGHT THROUGH those trees! How did we do that?!".into() },
-            DialogueLine { speaker: "Sparky".into(),
-                text: "This place is SO pretty! And SO secret! The trees are whispering!".into() },
+            line("Whoa boss! We just walked RIGHT THROUGH those trees! How did we do that?!"),
+            line("This place is SO pretty! And SO secret! The trees are whispering!"),
         ],
         "reef" => vec![
-            DialogueLine { speaker: "Sparky".into(),
-                text: "BLUB BLUB! We're UNDERWATER, boss! And I didn't even rust! Best upgrade EVER!".into() },
-            DialogueLine { speaker: "Sparky".into(),
-                text: "Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!".into() },
+            line("BLUB BLUB! We're UNDERWATER, boss! And I didn't even rust! Best upgrade EVER!"),
+            line("Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!"),
         ],
         "space_hub" => vec![
-            DialogueLine { speaker: "Sparky".into(),
-                text: "3... 2... 1... BLAST OFF! WHEEEE! Boss, we're in SPACE! Actual outer SPACE!".into() },
-            DialogueLine { speaker: "Sparky".into(),
-                text: "Fly the rocket to a glowing pad to visit a planet! Tank the fuel droid is over there if we run low.".into() },
+            line("3... 2... 1... BLAST OFF! WHEEEE! Boss, we're in SPACE! Actual outer SPACE!"),
+            line("Fly the rocket to a glowing pad to visit a planet! Tank the fuel droid is over there if we run low."),
         ],
         _ => vec![],
     }
