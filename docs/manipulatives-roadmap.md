@@ -18,6 +18,16 @@ These apply to *every* manipulative we build:
 4. **Guided + immediate in-world feedback.** The bags fill, the bridge wobbles, the merchant frowns. Manipulatives help *most* with guidance, *least* as unguided sandbox.
 5. **Per-operation, reversible staging.** Readiness = rolling accuracy at the current representation for *that* operation; drop back a level on a frustration signal.
 
+## Cadence & restraint — how often, and where it fits
+
+The failure mode is overuse: if every door and chest is "walk to a number," a manipulative stops being *the world* and becomes a worksheet with a skin. Guardrails:
+
+- **Lane, not spine.** Each manipulative owns a math lane and stays out of the others'. The **number line** owns *magnitude / distance / position / measurement / count-on–back*. It is **not** for *combining* sets (→ counters/ten-frame), *sharing* (→ grouping/division), *buying* (→ money/part-whole), or *tiling* (→ array). If we ever reach for "make this a number line" on a shop purchase, that's the tell we've left its lane — swap in the right tool.
+- **Three appearance tiers, three cadences.** (1) **Ambient terrain** — frequent, ungated, asks almost nothing (stepping-stones you cross to get somewhere). (2) **Quest-embedded** — occasional, purposeful (a handful per biome). (3) **Adaptive check-in** — rare, invisible (when the system wants a fresh read).
+- **Place it only where the fiction already wanted that math.** Bridges, gauges, depths, gaps — features already in the world. There are only so many, which *naturally* bounds saturation; don't invent a pond every 20 tiles to justify it.
+- **Frequency auto-tunes per kid, per operation.** Heavy for the youngest at the concrete stage (the 4yo may live in it — correctly), recedes as an operation is mastered, resurfaces only when a *new* operation comes online. That's macro-scale concreteness fading; we don't guess a global frequency.
+- **A biome may be a manipulative's showcase.** The reef makes the number line its *spine* precisely because depth fits the lane — which is exactly why it can stay light everywhere else.
+
 ---
 
 ## Tier 1 — Core / proven (P0–P1, build first)
