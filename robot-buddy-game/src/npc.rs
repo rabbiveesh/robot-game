@@ -305,6 +305,13 @@ impl Npc {
     /// path queue instead — see `next_follower_intent`.
     pub fn is_following(&self) -> bool { self.pathing.is_some() && !self.homing }
 
+    /// Chompy the reef shark is a mount, not a trailing follower: while he's the
+    /// buddy the kid rides him, so he locks onto the player's tile each frame
+    /// instead of retracing a path queue. See the rideable handling in game.rs.
+    pub fn is_rideable(&self) -> bool {
+        matches!(self.kind, NpcKind::ReefShark)
+    }
+
     /// Mark this NPC as the player's companion. The path queue starts empty —
     /// it fills as the player moves. Idempotent.
     pub fn start_following(&mut self) {

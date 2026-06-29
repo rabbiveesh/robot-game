@@ -803,6 +803,22 @@ impl Game {
             a
         };
 
+        // A rideable buddy (Chompy the shark) is a mount: lock it to the
+        // player's exact position and facing every frame so the kid rides it
+        // rather than the shark trailing behind. Done after the player has
+        // animated this frame so the mount tracks pixel-for-pixel.
+        if let Some(c) = self.companion.as_mut() {
+            if c.is_rideable() {
+                c.entity.tile_x = self.player.tile_x;
+                c.entity.tile_y = self.player.tile_y;
+                c.entity.x = self.player.x;
+                c.entity.y = self.player.y;
+                c.entity.target_x = self.player.target_x;
+                c.entity.target_y = self.player.target_y;
+                c.entity.moving = self.player.moving;
+                c.entity.dir = self.player.dir;
+            }
+        }
         // Portal check after arrival
         if arrived && self.state == GameState::Playing {
             let prev_map = self.map.id;
@@ -1347,9 +1363,16 @@ impl Game {
         } else {
             self.sparky.next_intent(player_at)
         };
-        let companion_intent = self.companion.as_mut()
-            .map(|c| c.next_follower_intent(player_at.0, player_at.1))
-            .unwrap_or(MoveIntent::Stay);
+        // A rideable buddy doesn't path-follow — it's pinned to the player —
+        // so it neither generates a follow intent nor enters the resolver.
+        let companion_rideable = self.companion.as_ref().map(|c| c.is_rideable()).unwrap_or(false);
+        let companion_intent = if companion_rideable {
+            MoveIntent::Stay
+        } else {
+            self.companion.as_mut()
+                .map(|c| c.next_follower_intent(player_at.0, player_at.1))
+                .unwrap_or(MoveIntent::Stay)
+        };
 
         // Soft-block / push pressure: figure out which entity (if any) sits on
         // the tile the player is trying to walk into this frame, and accumulate
@@ -1399,7 +1422,7 @@ impl Game {
         if sparky_here {
             intents.push((EntityId::Sparky, sparky_intent));
         }
-        if self.companion.is_some() {
+        if self.companion.is_some() && !companion_rideable {
             intents.push((EntityId::Companion, companion_intent));
         }
         // Snapshot the camera rect once so the wander gate doesn't re-borrow
@@ -1433,8 +1456,11 @@ impl Game {
                 MoveResolution::Granted { entity: EntityId::Player, to, .. } => {
                     self.sparky.record_player_pos(self.player.tile_x, self.player.tile_y);
                     if let Some(c) = self.companion.as_mut() {
-                        if let Some(p) = c.pathing.as_mut() {
-                            p.record_player_pos(self.player.tile_x, self.player.tile_y);
+                        // A rideable mount isn't retracing a path — skip its queue.
+                        if !c.is_rideable() {
+                            if let Some(p) = c.pathing.as_mut() {
+                                p.record_player_pos(self.player.tile_x, self.player.tile_y);
+                            }
                         }
                     }
                     self.player.start_move(to.0, to.1);
@@ -1613,8 +1639,12 @@ impl Game {
             v.push(entity_state(EntityId::Sparky, &self.sparky.entity, sparky_solidity, sparky_phasing));
         }
         if let Some(c) = self.companion.as_ref() {
-            // Companion is a follower — same rules as active Sparky.
-            v.push(entity_state(EntityId::Companion, &c.entity, Solidity::SoftAfter(0.12), true));
+            // A rideable mount shares the player's tile — it never collides as a
+            // separate entity, so keep it out of the resolver snapshot.
+            if !c.is_rideable() {
+                // Companion is a follower — same rules as active Sparky.
+                v.push(entity_state(EntityId::Companion, &c.entity, Solidity::SoftAfter(0.12), true));
+            }
         }
         for (i, n) in self.npcs.iter().enumerate() {
             // Wanderers are loose creatures who shuffle around — leaning into
@@ -3413,7 +3443,11 @@ impl Game {
                 renderables.push(Renderable { y: self.sparky.entity.y, kind: SpriteKind::Sparky });
             }
             if let Some(c) = self.companion.as_ref() {
-                renderables.push(Renderable { y: c.entity.y, kind: SpriteKind::Npc(c) });
+                // A rideable buddy (Chompy) sits on the player's tile as a
+                // mount — nudge its sort key just behind the player so the kid
+                // always draws on top, looking like they're riding it.
+                let y = if c.is_rideable() { self.player.y - 1.0 } else { c.entity.y };
+                renderables.push(Renderable { y, kind: SpriteKind::Npc(c) });
             }
             // Cull roster NPCs outside the viewport. The map only draws the
             // tiles under the camera (everything else is the void-blue clear

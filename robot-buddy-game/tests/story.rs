@@ -1359,6 +1359,47 @@ fn gifting_parked_sparky_brings_him_back_and_sends_the_npc_home() {
 }
 
 #[test]
+fn riding_chompy_keeps_the_shark_on_the_players_tile() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    // Chompy the reef shark is a mount, not a trailing follower: while he's the
+    // buddy the kid rides him, so he should sit on the player's exact tile every
+    // frame rather than retracing a path queue behind them.
+    let mut h = Harness::new(5);
+    h.start_dev_game();
+    h.game.map = Map::home();
+    h.game.npcs = npc_mod::npcs_for_map("home");
+    h.game.npcs_offstage.clear();
+
+    let mut chompy = npc_mod::npcs_for_map("reef").into_iter()
+        .find(|n| n.kind == NpcKind::ReefShark)
+        .expect("reef roster should contain Chompy");
+    chompy.gate = false; // his gate state is irrelevant to riding
+    chompy.start_following();
+    h.game.companion = Some(chompy);
+    h.game.sparky_parked = true;
+
+    assert!(h.game.companion.as_ref().unwrap().is_rideable(),
+        "Chompy should be a rideable buddy");
+
+    // Drive the player around; the shark must stay glued to the player's tile
+    // (whether or not a wall blocks the step, the mount tracks the player).
+    for dir in [KeyCode::Right, KeyCode::Down, KeyCode::Left, KeyCode::Up] {
+        for _ in 0..4 {
+            h.hold(dir);
+            let p = (h.game.player.tile_x, h.game.player.tile_y);
+            let c = h.game.companion.as_ref().unwrap();
+            assert_eq!((c.entity.tile_x, c.entity.tile_y), p,
+                "rideable shark should stay locked on the player's tile");
+            assert_eq!(c.entity.dir, h.game.player.dir,
+                "rideable shark should face the way the player faces");
+        }
+    }
+}
+
+#[test]
 fn swapped_out_cross_map_buddy_walks_out_then_teleports_home() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
