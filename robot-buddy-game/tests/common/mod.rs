@@ -598,13 +598,6 @@ impl Harness {
                     }
                     ConcreteKind::TakeAway => vec!["Take one"; s.puzzle.b as usize],
                 },
-                Manip::NumberLine(s) => {
-                    if s.puzzle.target >= s.puzzle.start {
-                        vec!["Forward ▶"; (s.puzzle.target - s.puzzle.start) as usize]
-                    } else {
-                        vec!["◀ Back"; (s.puzzle.start - s.puzzle.target) as usize]
-                    }
-                }
             }
         };
         for label in labels {

@@ -43,7 +43,6 @@ use robot_buddy_domain::logic::sudoku::{
 use robot_buddy_domain::economy::shop::{self, ShopItem};
 use robot_buddy_domain::world::encounters::{self, EncounterConfig, EncounterKind};
 use robot_buddy_domain::logic::manipulate_concrete::{self, ConcreteKind, generate_concrete};
-use robot_buddy_domain::logic::number_line::{self, generate_number_line};
 use robot_buddy_domain::quest::{self, Quest, QuestAction, QuestSession, QuestStatus, QuestStep};
 use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel, Operation};
 use robot_buddy_domain::world::movement::{
@@ -4114,10 +4113,11 @@ fn try_make_manipulative(profile: &LearnerProfile, challenge: &Challenge) -> Opt
             let puzzle = generate_concrete(kind, a, b, &mut SmallRng::seed_from_u64(0));
             Some(Manip::Concrete(manipulate_concrete::ConcreteSession::new(puzzle)))
         }
-        CraStage::Representational => {
-            let puzzle = generate_number_line(a, b, op, &mut SmallRng::seed_from_u64(0));
-            Some(Manip::NumberLine(number_line::NumberLineSession::new(puzzle)))
-        }
+        // The representational stage used to pop a number-line manipulative with
+        // ±1 "Back/Forward" buttons, but it can't be gotten wrong (just step to
+        // the target) and reads as a bare, too-abstract stepper. Fall through to
+        // the real quiz until the *embodied* number line (walk the world) lands.
+        CraStage::Representational => None,
         CraStage::Abstract => None,
     }
 }
@@ -4128,12 +4128,6 @@ fn apply_manip_intent(manip: &mut ui::manipulative::Manip, intent: ui::manipulat
         (Manip::Concrete(s), ManipInput::Concrete(a)) => {
             *s = manipulate_concrete::concrete_reducer(s.clone(), a);
         }
-        (Manip::NumberLine(s), ManipInput::NumberLine(a)) => {
-            *s = number_line::number_line_reducer(s.clone(), a);
-        }
-        // Mismatched pairings can't occur (layout builds inputs from the same
-        // session), so ignore them rather than panic.
-        _ => {}
     }
 }
 

@@ -1,16 +1,14 @@
 //! CRA manipulative UI — the hands-on alternative to the multiple-choice quiz.
 //! Pure layout + render; the domain reducers do the math.
 //!
-//! Wraps the concrete and representational manipulative sessions behind one
-//! `Manip` enum so `game.rs` can drive any of them through a single state.
-//! Opt-in (feature-flagged) while the path is being playtested.
+//! Wraps the concrete manipulative session behind a `Manip` enum so `game.rs`
+//! can drive it through a single state. Opt-in (feature-flagged) while the path
+//! is being playtested. (The old number-line manipulative was retired — the
+//! embodied number line replaces it.)
 
 use crate::prelude::*;
 use robot_buddy_domain::logic::manipulate_concrete::{
     ConcreteAction, ConcreteKind, ConcretePhase, ConcreteSession,
-};
-use robot_buddy_domain::logic::number_line::{
-    NumberLineAction, NumberLinePhase, NumberLineSession,
 };
 
 use crate::input::FrameInput;
@@ -18,14 +16,12 @@ use crate::input::FrameInput;
 /// The active manipulative, holding its domain session.
 pub enum Manip {
     Concrete(ConcreteSession),
-    NumberLine(NumberLineSession),
 }
 
 impl Manip {
     pub fn is_complete(&self) -> bool {
         match self {
             Manip::Concrete(s) => s.phase == ConcretePhase::Complete,
-            Manip::NumberLine(s) => s.phase == NumberLinePhase::Complete,
         }
     }
 }
@@ -35,7 +31,6 @@ impl Manip {
 #[derive(Clone, Copy)]
 pub enum ManipInput {
     Concrete(ConcreteAction),
-    NumberLine(NumberLineAction),
 }
 
 #[derive(Clone, Copy)]
@@ -74,10 +69,6 @@ pub fn layout(manip: &Manip, screen: (f32, f32)) -> ManipLayout {
 
     let specs: Vec<(String, ManipInput)> = match manip {
         Manip::Concrete(s) => concrete_buttons(s),
-        Manip::NumberLine(_) => vec![
-            ("◀ Back".into(), ManipInput::NumberLine(NumberLineAction::JumpBackward { n: 1 })),
-            ("Forward ▶".into(), ManipInput::NumberLine(NumberLineAction::JumpForward { n: 1 })),
-        ],
     };
 
     let n = specs.len().max(1);
@@ -136,15 +127,7 @@ pub fn handle_key(manip: &Manip, input: &FrameInput, layout: &ManipLayout) -> Op
     if manip.is_complete() {
         return None;
     }
-    // Arrow keys drive the number line; number keys map to buttons in order.
-    if let Manip::NumberLine(_) = manip {
-        if input.pressed(KeyCode::Left) {
-            return Some(ManipInput::NumberLine(NumberLineAction::JumpBackward { n: 1 }));
-        }
-        if input.pressed(KeyCode::Right) {
-            return Some(ManipInput::NumberLine(NumberLineAction::JumpForward { n: 1 }));
-        }
-    }
+    // Number keys map to buttons in order.
     let keys = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3];
     for (i, key) in keys.iter().take(layout.buttons.len()).enumerate() {
         if input.pressed(*key) {
@@ -179,7 +162,6 @@ pub fn draw(manip: &Manip, prompt: &str, layout: &ManipLayout) {
 
     match manip {
         Manip::Concrete(s) => draw_concrete(s, p),
-        Manip::NumberLine(s) => draw_number_line(s, p),
     }
 
     if done {
@@ -219,29 +201,4 @@ fn draw_concrete(s: &ConcreteSession, p: UiRect) {
     let start_x = p.x + 40.0;
     let after_a = draw_dot_row(start_x, y, s.bucket_a, RED);
     draw_dot_row(after_a + 14.0, y, s.bucket_b, BLUE);
-}
-
-fn draw_number_line(s: &NumberLineSession, p: UiRect) {
-    let max = s.puzzle.max as usize;
-    let line_y = p.y + p.h / 2.0;
-    let left = p.x + 50.0;
-    let right = p.x + p.w - 50.0;
-    let span = right - left;
-    let step = span / max as f32;
-    draw_line(left, line_y, right, line_y, 3.0, WHITE);
-
-    for i in 0..=max {
-        let x = left + i as f32 * step;
-        draw_line(x, line_y - 8.0, x, line_y + 8.0, 2.0, WHITE);
-        let label = format!("{i}");
-        let lw = measure_text(&label, None, 18, 1.0).width;
-        draw_text(&label, x - lw / 2.0, line_y + 30.0, 18.0, Color::new(0.8, 0.85, 0.95, 1.0));
-        if i as u8 == s.puzzle.target {
-            draw_circle_lines(x, line_y, 18.0, 3.0, GOLD);
-        }
-    }
-    // The character marker at the current position.
-    let mx = left + s.position as f32 * step;
-    draw_circle(mx, line_y - 26.0, 12.0, WIN_GREEN);
-    draw_line(mx, line_y - 14.0, mx, line_y, 2.0, WIN_GREEN);
 }
