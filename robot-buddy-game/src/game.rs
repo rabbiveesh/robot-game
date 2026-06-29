@@ -842,6 +842,11 @@ impl Game {
 
         self.camera.follow(self.player.x, self.player.y, &self.map, GAME_W, GAME_H);
 
+        // Buddies heading off-map blink home once they've walked out of view.
+        if self.state == GameState::Playing {
+            self.evict_offscreen_leavers();
+        }
+
         // Interaction menu input (layout from step-side; render() draws separately)
         if self.state == GameState::InteractionMenu {
             self.handle_interaction_menu(input, screen);
@@ -1402,7 +1407,11 @@ impl Game {
         // no random direction roll. The kid you can't see isn't burning RNG.
         let cam = (self.camera.x, self.camera.y);
         for (i, n) in self.npcs.iter_mut().enumerate() {
-            let intent = if npc_in_camera(cam, n) {
+            let intent = if n.homing {
+                // A buddy walking back to its spot finishes the trip even if it
+                // strolls off-screen — it's a short, finite route.
+                n.next_homing_intent()
+            } else if npc_in_camera(cam, n) {
                 n.next_intent(dt, &mut self.rng)
             } else {
                 MoveIntent::Stay
@@ -1443,6 +1452,8 @@ impl Game {
                 }
                 MoveResolution::Granted { entity: EntityId::Npc(i), to, .. } => {
                     if let Some(n) = self.npcs.get_mut(*i as usize) {
+                        // A homing buddy advances its route queue on each grant.
+                        if n.homing { n.on_follower_move_granted(); }
                         n.entity.start_move(to.0, to.1);
                     }
                 }
@@ -2900,7 +2911,7 @@ impl Game {
 
         let left = self.companion.replace(new_companion).map(|mut old| {
             let kind = old.kind;
-            old.reset_to_home();
+            old.stop_following();
             self.send_npc_home(old);
             kind
         });
@@ -2920,7 +2931,7 @@ impl Game {
         let mut leaving = self.companion.take()
             .expect("swap_sparky_in called with no companion to displace");
         let kind = leaving.kind;
-        leaving.reset_to_home();
+        leaving.stop_following();
         self.send_npc_home(leaving);
         self.unpark_sparky();
         kind
@@ -2934,35 +2945,115 @@ impl Game {
         let (hx, hy) = (npc.home_tx, npc.home_ty);
 
         if home_map == self.map.id {
+            // Same map: the buddy strolls back to its spot from wherever it was
+            // tagging along, rather than blinking out of existence. Route is a
+            // static-terrain BFS; the resolver handles any live entities in the
+            // way (it just waits). If home is somehow unreachable, fall back to
+            // the old snap so the NPC can never get lost.
             let map = &self.map;
-            let player = (self.player.tile_x, self.player.tile_y);
-            let sparky = (self.sparky.entity.tile_x, self.sparky.entity.tile_y);
-            let companion_pos = self.companion.as_ref()
-                .map(|c| (c.entity.tile_x, c.entity.tile_y));
-            let others: Vec<(usize, usize)> = self.npcs.iter()
-                .map(|n| (n.entity.tile_x, n.entity.tile_y))
-                .collect();
-            let (nx, ny) = npc::find_npc_spawn_spot(
-                hx, hy, map.width, map.height,
-                |cx, cy| map.is_solid(cx, cy),
-                |cx, cy| (cx, cy) == player || (cx, cy) == sparky
-                    || companion_pos == Some((cx, cy))
-                    || others.iter().any(|t| *t == (cx, cy)),
+            let cur = (npc.entity.tile_x, npc.entity.tile_y);
+            let route = crate::pathfinding::find_path(
+                cur, (hx, hy), map.width, map.height,
+                |cx, cy| !map.is_solid(cx, cy),
             );
-            npc.entity.tile_x = nx;
-            npc.entity.tile_y = ny;
-            npc.entity.x = nx as f32 * TILE_SIZE;
-            npc.entity.y = ny as f32 * TILE_SIZE;
-            npc.entity.target_x = npc.entity.x;
-            npc.entity.target_y = npc.entity.y;
-            self.npcs.push(npc);
+            match route {
+                Some(path) => {
+                    // start_homing tolerates an empty path (already home).
+                    npc.entity.moving = false;
+                    npc.start_homing(path);
+                    self.npcs.push(npc);
+                }
+                None => {
+                    let player = (self.player.tile_x, self.player.tile_y);
+                    let sparky = (self.sparky.entity.tile_x, self.sparky.entity.tile_y);
+                    let companion_pos = self.companion.as_ref()
+                        .map(|c| (c.entity.tile_x, c.entity.tile_y));
+                    let others: Vec<(usize, usize)> = self.npcs.iter()
+                        .map(|n| (n.entity.tile_x, n.entity.tile_y))
+                        .collect();
+                    let (nx, ny) = npc::find_npc_spawn_spot(
+                        hx, hy, map.width, map.height,
+                        |cx, cy| map.is_solid(cx, cy),
+                        |cx, cy| (cx, cy) == player || (cx, cy) == sparky
+                            || companion_pos == Some((cx, cy))
+                            || others.iter().any(|t| *t == (cx, cy)),
+                    );
+                    npc.reset_to_home();
+                    npc.entity.tile_x = nx;
+                    npc.entity.tile_y = ny;
+                    npc.entity.x = nx as f32 * TILE_SIZE;
+                    npc.entity.y = ny as f32 * TILE_SIZE;
+                    npc.entity.target_x = npc.entity.x;
+                    npc.entity.target_y = npc.entity.y;
+                    self.npcs.push(npc);
+                }
+            }
         } else {
-            // Home is a different map: stash them in the offstage roster so
-            // they pop back when the player next visits that map.
+            // Home is on another map: rather than blinking away on the spot, the
+            // buddy heads for the nearest exit and only teleports home once it's
+            // walked off-screen (or reached the doorway). Pick a door that leads
+            // toward home — its own map first, then the overworld hub, then any
+            // reachable exit — and route there.
+            let cur = (npc.entity.tile_x, npc.entity.tile_y);
+            let route = {
+                let map = &self.map;
+                let mut exits: Vec<&tilemap::Portal> = tilemap::all_portals().iter()
+                    .filter(|p| p.from_map == map.id)
+                    .collect();
+                exits.sort_by_key(|p| {
+                    let rank = if p.to_map == home_map { 0 }
+                        else if p.to_map == "overworld" { 1 }
+                        else { 2 };
+                    let dist = (p.from_x as i32 - cur.0 as i32).abs()
+                        + (p.from_y as i32 - cur.1 as i32).abs();
+                    (rank, dist)
+                });
+                exits.iter().find_map(|p| {
+                    crate::pathfinding::find_path(
+                        cur, (p.from_x, p.from_y), map.width, map.height,
+                        |cx, cy| !map.is_solid(cx, cy),
+                    ).filter(|path| !path.is_empty())
+                })
+            };
+            match route {
+                Some(path) => {
+                    npc.entity.moving = false;
+                    npc.start_homing(path);
+                    npc.leaving_map = true;
+                    self.npcs.push(npc);
+                }
+                None => {
+                    // Already at the door, or no reachable exit — snap straight
+                    // to the offstage roster so the buddy can never get lost.
+                    npc.reset_to_home();
+                    self.npcs_offstage
+                        .entry(home_map.to_string())
+                        .or_insert_with(Vec::new)
+                        .push(npc);
+                }
+            }
+        }
+    }
+
+    /// Whisk any swapped-out buddy that's `leaving_map` off to its real home the
+    /// moment it walks off-screen or reaches the exit doorway. Until then it's a
+    /// normal roster NPC strolling toward the door. Keeps the "walk out, then
+    /// teleport" illusion without ever stranding a buddy on the wrong map.
+    fn evict_offscreen_leavers(&mut self) {
+        let cam = (self.camera.x, self.camera.y);
+        let gone: Vec<usize> = self.npcs.iter().enumerate()
+            .filter(|(_, n)| n.leaving_map && (!npc_in_camera(cam, n) || !n.homing))
+            .map(|(i, _)| i)
+            .collect();
+        for i in gone.into_iter().rev() {
+            let mut n = self.npcs.remove(i);
+            n.leaving_map = false;
+            let home_map = n.home_map;
+            n.reset_to_home();
             self.npcs_offstage
                 .entry(home_map.to_string())
                 .or_insert_with(Vec::new)
-                .push(npc);
+                .push(n);
         }
     }
 
@@ -3026,6 +3117,9 @@ impl Game {
             if i >= self.npcs.len() { continue; }
             // Dev controls don't migrate — they're knobs bolted to the floor.
             if self.npcs[i].kind.is_dev_control() { continue; }
+            // A buddy walking out to leave the map is owned by the leaver-evict
+            // path (it teleports to its real home, not through this door).
+            if self.npcs[i].leaving_map { continue; }
             let (tx, ty) = (self.npcs[i].entity.tile_x, self.npcs[i].entity.tile_y);
             let portal = match tilemap::check_portal(self.map.id, tx, ty) {
                 Some(p) => p,

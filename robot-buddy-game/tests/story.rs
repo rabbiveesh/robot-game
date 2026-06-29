@@ -1230,10 +1230,22 @@ fn giving_a_dum_dum_recruits_the_npc_as_companion_and_returns_the_previous_one()
         "companion slot should hold Mommy now; got {:?}",
         h.game.companion.as_ref().map(|c| c.kind),
     );
+    // Kid1 doesn't blink home — she's released back into the home roster and
+    // strolls back to her spot. Give her time to walk there.
+    assert!(
+        h.game.npcs.iter().any(|n| n.kind == NpcKind::Kid1),
+        "Kid1 should be back in the home roster after being swapped out",
+    );
+    h.run_until(
+        |g| g.npcs.iter().any(|n| n.kind == NpcKind::Kid1
+            && !n.homing
+            && (n.entity.tile_x, n.entity.tile_y) == (6, 5)),
+        400,
+    );
     let returned_kid = h.game.npcs.iter().find(|n| n.kind == NpcKind::Kid1)
         .expect("Kid1 should be back in the home roster after being swapped out");
     assert_eq!((returned_kid.entity.tile_x, returned_kid.entity.tile_y), (6, 5),
-        "swapped-out Kid1 should snap back to her static home tile (6, 5)");
+        "swapped-out Kid1 should walk back to her static home tile (6, 5)");
     assert!(!returned_kid.is_following(),
         "released companion should drop follower mode and resume normal NPC behavior");
 }
@@ -1344,6 +1356,53 @@ fn gifting_parked_sparky_brings_him_back_and_sends_the_npc_home() {
         "Sparky should no longer be parked after swapping back in");
     assert!(h.game.companion.is_none(),
         "companion slot should be empty after Sparky returns as buddy");
+}
+
+#[test]
+fn swapped_out_cross_map_buddy_walks_out_then_teleports_home() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    // A buddy whose home is on another map shouldn't blink away on the spot when
+    // displaced — it walks toward the nearest exit and only teleports to its
+    // real home once it's off-screen (or reached the doorway).
+    let mut h = Harness::new(7);
+    h.start_dev_game(); // grants 20 dum dums
+    h.game.map = Map::overworld();
+    h.game.npcs = npc_mod::npcs_for_map("overworld");
+    h.game.npcs_offstage.clear();
+
+    // Install a reef sea turtle (home map = "reef") as the active buddy.
+    let mut turtle = npc_mod::npcs_for_map("reef").into_iter()
+        .find(|n| n.kind == NpcKind::SeaTurtle)
+        .expect("reef roster should contain the sea turtle");
+    turtle.start_following();
+    h.game.companion = Some(turtle);
+    h.game.sparky_parked = true;
+
+    // Recruit Professor Gizmo (Sage) by gifting a Dum Dum, displacing the turtle.
+    h.walk_to_npc(NpcKind::Sage);
+    h.interact();
+    h.select_option("give");
+    h.wait_until(|g| g.state == GameState::Dialogue);
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    // Right after the swap the turtle is still on the overworld, walking out.
+    assert!(
+        h.game.npcs.iter().any(|n| n.kind == NpcKind::SeaTurtle && n.leaving_map),
+        "displaced cross-map buddy should walk toward the exit, not vanish on the spot",
+    );
+
+    // Eventually it leaves the screen / reaches a door and is whisked offstage
+    // to its real home map (the reef).
+    h.run_until(
+        |g| !g.npcs.iter().any(|n| n.kind == NpcKind::SeaTurtle)
+            && g.npcs_offstage.get("reef")
+                .map(|v| v.iter().any(|n| n.kind == NpcKind::SeaTurtle))
+                .unwrap_or(false),
+        3000,
+    );
 }
 
 #[test]

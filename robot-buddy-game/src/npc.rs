@@ -275,6 +275,16 @@ pub struct Npc {
     /// solved, refills the rocket's fuel. Like `gate`, it short-circuits the
     /// normal interaction menu.
     pub refuel: bool,
+    /// True while this NPC is strolling back to its home tile after being
+    /// swapped out as the player's buddy (on the same map). It walks a
+    /// precomputed route stored in `pathing` via `next_route_intent`; when the
+    /// route runs out it clears this flag and resumes wander/stationary life.
+    pub homing: bool,
+    /// True for a swapped-out buddy whose home is on *another* map: it walks
+    /// (via `homing`) toward the nearest exit portal, and gets whisked offstage
+    /// to its real home the moment it leaves the screen or reaches the doorway —
+    /// so it heads out a door rather than blinking away on the spot.
+    pub leaving_map: bool,
 }
 
 impl Npc {
@@ -293,7 +303,7 @@ impl Npc {
     /// True if the player has chosen this NPC as their travel companion. A
     /// companion ignores wander/stationary behavior and follows the player's
     /// path queue instead — see `next_follower_intent`.
-    pub fn is_following(&self) -> bool { self.pathing.is_some() }
+    pub fn is_following(&self) -> bool { self.pathing.is_some() && !self.homing }
 
     /// Mark this NPC as the player's companion. The path queue starts empty —
     /// it fills as the player moves. Idempotent.
@@ -342,6 +352,42 @@ impl Npc {
         if let Some(p) = self.pathing.as_mut() {
             p.on_move_granted();
         }
+    }
+
+    /// Begin strolling back home along a precomputed `route` (tiles from the
+    /// NPC's current position up to and including the home tile). The NPC stays
+    /// exactly where it is and walks the route; an empty route just clears any
+    /// follower state and leaves it put. See `homing`.
+    pub fn start_homing(&mut self, route: Vec<(usize, usize)>) {
+        if route.is_empty() {
+            self.homing = false;
+            self.pathing = None;
+            return;
+        }
+        let mut p = Pathing::new();
+        for tile in route {
+            p.record_player_pos(tile.0, tile.1);
+        }
+        self.pathing = Some(p);
+        self.homing = true;
+    }
+
+    /// One frame of homing movement. When the route is spent, drops the homing
+    /// state (resuming normal wander/stationary behavior) and stays put. Caller
+    /// must only invoke this while `homing` is true.
+    pub fn next_homing_intent(&mut self) -> MoveIntent {
+        let spent = self.pathing.as_ref().map(|p| p.is_empty()).unwrap_or(true);
+        if spent {
+            self.homing = false;
+            self.pathing = None;
+            // Settle before the first wander roll so it doesn't twitch on arrival.
+            self.wander_cooldown = WANDER_COOLDOWN_MIN;
+            return MoveIntent::Stay;
+        }
+        let p = self.pathing.as_mut().expect("next_homing_intent with no route");
+        let d = p.next_route_intent((self.entity.tile_x, self.entity.tile_y), self.entity.moving);
+        if let Some(f) = d.face { self.entity.dir = f; }
+        d.intent
     }
 
     /// Decide what this NPC wants to do this frame.
@@ -447,6 +493,8 @@ fn npc(home_map: &'static str, kind: NpcKind, tx: usize, ty: usize, sprite: Spri
         gate: false,
         gate_id: None,
         refuel: false,
+        homing: false,
+        leaving_map: false,
     }
 }
 
