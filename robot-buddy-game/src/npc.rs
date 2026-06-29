@@ -43,8 +43,6 @@ pub enum NpcKind {
     CtrlTriggerChallenge,
     CtrlToggleEncounters,
     CtrlTriggerEncounter,
-    CtrlToggleManipulatives,
-    CtrlTriggerManipulative,
     CtrlToggleQuest,
     CtrlStartQuest,
 }
@@ -86,8 +84,6 @@ impl NpcKind {
             NpcKind::CtrlTriggerChallenge => "ctrl_trigger_challenge",
             NpcKind::CtrlToggleEncounters => "ctrl_toggle_encounters",
             NpcKind::CtrlTriggerEncounter => "ctrl_trigger_encounter",
-            NpcKind::CtrlToggleManipulatives => "ctrl_toggle_manipulatives",
-            NpcKind::CtrlTriggerManipulative => "ctrl_trigger_manipulative",
             NpcKind::CtrlToggleQuest => "ctrl_toggle_quest",
             NpcKind::CtrlStartQuest => "ctrl_start_quest",
         }
@@ -126,8 +122,6 @@ impl NpcKind {
             NpcKind::CtrlTriggerChallenge => "Trigger Challenge",
             NpcKind::CtrlToggleEncounters => "Encounters Flag",
             NpcKind::CtrlTriggerEncounter => "Trigger Encounter",
-            NpcKind::CtrlToggleManipulatives => "Manipulatives Flag",
-            NpcKind::CtrlTriggerManipulative => "Trigger Manipulative",
             NpcKind::CtrlToggleQuest => "Quest Flag",
             NpcKind::CtrlStartQuest => "Start Quest",
         }
@@ -146,7 +140,6 @@ impl NpcKind {
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
         NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerBalance, NpcKind::CtrlTriggerSudoku,
         NpcKind::CtrlTriggerChallenge, NpcKind::CtrlToggleEncounters, NpcKind::CtrlTriggerEncounter,
-        NpcKind::CtrlToggleManipulatives, NpcKind::CtrlTriggerManipulative,
         NpcKind::CtrlToggleQuest, NpcKind::CtrlStartQuest,
     ];
 
@@ -164,7 +157,6 @@ impl NpcKind {
             | NpcKind::CtrlTriggerPattern | NpcKind::CtrlTriggerBalance
             | NpcKind::CtrlTriggerSudoku | NpcKind::CtrlTriggerChallenge
             | NpcKind::CtrlToggleEncounters | NpcKind::CtrlTriggerEncounter
-            | NpcKind::CtrlToggleManipulatives | NpcKind::CtrlTriggerManipulative
             | NpcKind::CtrlToggleQuest | NpcKind::CtrlStartQuest)
     }
 }
@@ -590,8 +582,6 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(CtrlTriggerSudoku,    7,  5, S::Kid1,       false, true, false),
             n(CtrlToggleEncounters, 2,  7, S::Dog,        false, true, false),
             n(CtrlTriggerEncounter, 4,  7, S::Sage,       false, true, false),
-            n(CtrlToggleManipulatives, 6, 3, S::Kid2,    false, true, false),
-            n(CtrlTriggerManipulative, 8, 7, S::Mommy,    false, true, false),
             n(CtrlToggleQuest,      10, 5, S::OldOak,     false, true, false),
             n(CtrlStartQuest,       10, 7, S::Sage,       false, true, false),
             n(CtrlTriggerChallenge, 8,  5, S::Kid2,       false, true, false),
