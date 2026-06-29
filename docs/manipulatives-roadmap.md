@@ -56,18 +56,24 @@ These apply to *every* manipulative we build:
 
 ## Tier 3 — Experimental / frontier (the sandbox)
 
-Higher-risk, higher-upside. Some are shipping tools we'd adapt; some are research ideas. **Evidence varies — flagged honestly.** This tier is being expanded by the running bleeding-edge research pass.
+Higher-risk, higher-upside. Now **grounded** in `docs/manipulatives-frontier-research.md` (5 research agents, evidence-rated, hype-flagged). Ordered by the brief's ranked shortlist (evidence × RPG fit × fits-our-architecture).
 
-| Idea | RPG mechanic | What's novel | Maturity | Notes |
+> **The lesson the whole frontier sweep converged on:** the manipulative is *necessary but not sufficient* — the embedded structure/guidance/progression is the active ingredient (Cuisenaire needs Gattegno's pedagogy; sandboxes fail novices per Kirschner/Sweller; DragonBox engages but doesn't transfer; Catch-Up's gains were the 1:1 *attention*, not the method). **Our adaptive scaffolding / CRA staging / frustration dials ARE that active ingredient** — that's our edge. Build the progression, not just the toy. And don't over-credit a mechanic for what Sparky's attention may be doing.
+
+| # | Idea | RPG mechanic | Evidence | Notes |
 |---|---|---|---|---|
-| **Embodied number line** | The **player's own avatar walks the number line** — the world *is* the line; movement *is* arithmetic | makes the number line a place you inhabit, not a UI; embodied-cognition leverage | speculative-but-grounded | Maximally RPG-native; pair w/ path-first rule |
-| **Numberblocks-style quantity creatures** | Companions/enemies whose **body visibly = their value** (a "7" is 7 blocks); split a 7 into 3+4 | representational *consistency* — the character can't lie about its number | promising (huge engagement evidence, learning evidence thinner) | Composes with our follower system |
-| **Draggable notation (Graspable Math / DragonBox)** | Glowing runes/crystals that **are** the equation; drag to combine, balance two sides to free a creature | symbols become physical objects you manipulate | promising (DragonBox engagement strong; transfer contested) | "Isolate the box" = solve for unknown |
-| **Magnitude-comparison / ANS duels** | "Which treasure pile is bigger?" snap-judgment duels that adapt to your acuity | trains the approximate number system | contested (ANS→symbolic transfer is disputed — flag) | Fast, wordless, good for pre-readers |
-| **Spatial-temporal / wordless puzzles (ST Math / JiJi)** | Language-free visual puzzle rooms; manipulate to make it work | zero reading load; pure visual reasoning | promising (ST Math has efficacy studies) | Ideal for atypical/pre-literate kids |
-| **Open manipulative sandbox (Mathigon Polypad)** | A "tinker bench" room with free manipulatives, low-floor/high-ceiling | unstructured exploration; kid-led | promising | Risk: violates "guided" rule — gate w/ light goals |
-| **Perceptual-learning fluency (Kellman PLM)** | Fast match-the-representations rounds (array ↔ numeral ↔ ten-frame) | builds automaticity in mapping representations | promising (PLM has strong lab evidence) | A great *fading* / R↔A bridge drill |
-| **Variation-theory sequences** | Puzzle chains that vary exactly one dimension at a time | conceptual contrast as the teacher | promising (theory-strong) | A way to *author* puzzle progressions |
+| 1 | **Embodied number line** (FIRST SPIKE) | The **avatar walks the line** — a quest path *is* a number line; distance walked = magnitude | **proven-ish** — number-line estimation is THE strongest math correlate (r=.443, N>10k); walk-the-line shows child-age transfer; congruency (motion=magnitude) survives a flat screen | Nearly free given movement; doubles as stealth assessment; scales 4–10 |
+| 2 | **Quantity creatures** (2nd spike) | Companions/enemies whose **body = N unit cubes** (no numeral needed); combine/split = add/subtract/factor | **promising** — representational *consistency* (can't misrepresent the quantity); principles well-evidenced, show itself unstudied | Composes with follower system; **keep cubes schematic** (richness hurts transfer) |
+| 3 | **Adaptive skill-tree engine** | (under the mechanics) Bayesian learner-model routes stay/regress/advance over a skill graph | **promising→proven** (Calcularis RCTs, 3-mo retention) | Maps onto our reducer/band/profile arch; personalizes without labels |
+| 4 | **Perceptual-learning fluency drill** | "Scanner tuning": snap-match dots ↔ numeral ↔ ten-frame ↔ number-line | **promising→proven** (Kellman PLM: large fluency gains, retained) | The C↔R↔A *fluency* bridge; un-timed-**feeling** (no visible clock) |
+| 5 | **Desirable-difficulties scheduler** | Facts re-surface at expanding intervals; operation types interleave across the world | **proven** (Bjork; most mature evidence here) | Infrastructure not content; bolt onto encounters/bands; cheap |
+| 6 | **Productive-failure loop** | Try-first → tinker/fail safely → an NPC reveal that *lands* | **proven** w/ boundary cond. (Kapur meta) — consolidation reveal must be strong | Broccoli-Test-perfect; author ladders via **variation theory** |
+| 7 | **Cuisenaire–Gattegno rods** | Numeral-free rod creatures; match/combine to a target bar (built-in equation) | **proven (best-evidenced manipulative, d≈0.55)** — fidelity-dependent | **Ship the progression, not just rods** |
+| 8 | **Draggable notation** | Drag glyphs across a shimmering `=` barrier (auto-sign-flip); zero-pair annihilation | **promising** (Graspable Math RCT g≈0.135; only notation-as-object tool with an RCT) | Scale to commutativity/integers for our ages; **keep symbols visible** (avoid DragonBox trap) |
+| 9 | **Wordless struggle rooms** | A wrong move animates a graceful in-world consequence; retry freely, no text | **pattern proven, product oversold** (ST-Math's strongest RCT nulled) | Serves pre-readers/atypical; build the pattern, keep an invisible hint ramp |
+| 10 | **WODB / Splat! flavor puzzles** | "Which gem is cursed?" (many right answers); covered-treasure part-whole | **promising/practitioner** (not RCT-proven) | Flavor not driver; reasoning is the play → Broccoli-safe |
+
+**Deliberately NOT building on** (hype flags from the brief): non-symbolic ANS dot-comparison as an assessment/progression backbone (originating lab failed to replicate transfer — keep "which swarm is bigger?" as fun *onboarding* only); DragonBox-style notation-hiding; finger-gnosis training (failed to beat active control); mental abacus (no broad transfer); Osmo/AR tangibles (needs hardware, off-table for WASM).
 
 ---
 
@@ -81,15 +87,15 @@ For each candidate, before building, answer: **"If the kid already knew the answ
 
 1. **P0 — number path + ten-frame**, with **concreteness fading** wired as the C→R transition (this is also the CRA-engine spike). Targets the 4yo immediately.
 2. **P1 — subitizing, counters, part-part-whole, rekenrek, true number line, base-ten** — the early-number core.
-3. **Pick ONE Tier-3 spike** to prototype early as the "experimental ground" proof — strongest candidates today: **embodied number line** (RPG-native), **Numberblocks-style quantity creatures** (composes with followers), or **wordless ST-Math-style rooms** (atypical-friendly). The research pass will sharpen this pick.
+3. **First experimental spike — the embodied number line** (Tier 3 #1). The research settles it: number-line estimation is the single strongest correlate of math achievement, the embodied "walk-the-line" variant has direct child-age evidence, the congruency (motion = magnitude) survives a flat screen, it doubles as stealth assessment, and it's *nearly free* given our movement system. **Second spike: quantity creatures** (#2, composes with followers).
 4. **P2/P3** as operations come online (arrays/area + bar model when multiplication/division matter).
 
 ## Open questions
 
-- One generic "manipulative panel" component vs. bespoke per mechanic? (The CRA-Integrated layout argues for a shared 3-pane fade component.)
-- How much free-play sandbox vs. guided — where's the line for our youngest?
-- Which Tier-3 idea is the first experimental spike? (await research pass)
+- One generic "manipulative panel" component vs. bespoke per mechanic? (The CRA-Integrated layout argues for a shared 3-pane fade component; the frontier "build 2–3 deeply-integrated reusable manipulatives, not a library" finding agrees.)
+- How much free-play sandbox vs. guided — where's the line for our youngest? (Frontier answer: *constrained microworlds with embedded goals*, never an open canvas — discovery fails novices.)
+- Validating attribution: heed the Catch-Up warning — before crediting any mechanic, sanity-check it isn't just Sparky's 1:1 attention doing the work.
 
-## Pending enrichment
+## Frontier findings
 
-A bleeding-edge research pass (frontier manipulatives, dynamic notation, ANS trainers, embodied math, wordless/spatial systems, recent 2018–2025 edtech/HCI) is running. Its ranked shortlist of 8–12 "experimental goodies" will be folded into Tier 3 with evidence ratings and criticisms, and will settle the first-spike pick above.
+The bleeding-edge pass is **done** — see `docs/manipulatives-frontier-research.md` for the full evidence-rated brief (number line as load-bearing mechanic; embodiment-on-a-flat-screen; representational consistency; draggable notation's transfer gap; perceptual-richness caution; pedagogy mechanics to gamify; the contested ANS-transfer debate; and what *not* to lean on). Its ranked shortlist of 10 experimental goodies is folded into Tier 3 above.
