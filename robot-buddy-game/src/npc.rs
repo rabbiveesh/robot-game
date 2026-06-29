@@ -409,9 +409,9 @@ impl Npc {
             SpriteType::OldOak => sprites::npcs::draw_old_oak(x, y, time),
             // A gate shark naps (eyes shut) until its puzzle is solved; once
             // satisfied (`gate` cleared) it wakes up and grins.
-            SpriteType::Shark => sprites::npcs::draw_shark(x, y, time, self.gate),
+            SpriteType::Shark => sprites::npcs::draw_shark(x, y, self.entity.dir, time, self.gate),
             SpriteType::SeaTurtle => sprites::npcs::draw_sea_turtle(x, y, time),
-            SpriteType::Dolphin => sprites::npcs::draw_dolphin(x, y, time),
+            SpriteType::Dolphin => sprites::npcs::draw_dolphin(x, y, self.entity.dir, time),
             SpriteType::Crab => sprites::npcs::draw_crab(x, y, time),
             SpriteType::Jellyfish => sprites::npcs::draw_jellyfish(x, y, time),
             SpriteType::AlienGreen => sprites::npcs::draw_alien(x, y, time,
