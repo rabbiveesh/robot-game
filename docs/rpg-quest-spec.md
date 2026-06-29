@@ -206,6 +206,19 @@ These replace the current "flash card" system. Each puzzle type maps to a math o
 5. **Travel + minigame**: Earn the extra gold by helping NPCs (smaller math puzzles)
 6. **Reward**: Sparky gets a visible upgrade (new antenna? jet boots? laser eyes?)
 
+#### Key Quest (area unlock): "Calibrate the Dive"
+**Band 1-3, counting & measuring — unlocks the coral reef**
+
+The reef is teased from the start (you can peek at the dive spot; the buddy keeps wondering what's down there), but it stays shut until this quest opens it. The *math is the key*, not a token you grind for.
+
+1. **Dialogue**: Gizmo's telescope spotted a reef below the pond. "To dive safe, I need to know exactly how deep — help me read the markings!"
+2. **Puzzle (counting)**: "Count the depth marks on the rope — how many before the water line?" (counting to a target)
+3. **Travel**: Walk the rope out to the dive spot at the pond's edge.
+4. **Puzzle (measuring/compare)**: "The rope is 8 marks, the reef sits at 5. Is the rope long enough?" (compare) — a wrong read just means "hmm, let's recount," never a block.
+5. **Reward**: Dive spot opens (sets the reef's unlocked flag), small Dum Dum payout, and the buddy cheers. The unlock *is* the payoff of the calibration — there was no fetch step.
+
+> Mechanically this is the same shape as a toll or a gate guardian, just packaged as a story: the Reward step flips the flag the dive portal checks. Later biomes (grove → patterns, planets → bigger numbers) follow the same template with their signature math.
+
 ### Failure & Retry Mechanics
 
 Wrong answers should have consequences that feel natural, not punitive:
@@ -232,6 +245,42 @@ The game world is organized so different areas emphasize different math:
 | The Trading Post | Economy, merchants | Division, multi-step | 6-8 |
 | The Crystal Caves | Puzzles, codes | Number bonds, missing values | 3-7 |
 | The Sky Tower | Advanced challenges | All operations, multi-step | 8-10 |
+
+> **Zones vs. biomes.** The table above is the aspirational economy/RPG vision. The game as built has *themed biomes* reached through secret doors and portals — the coral reef, the grove, the doghouse, the dream world, and the space hub with its moon / red planet / asteroid base. Kids gravitate to these. The framing below applies to both: every area, aspirational zone or themed biome, unlocks the same way.
+
+#### Unlocking Areas: Key Quests, Not Collection Gates
+
+When kids love an area, the temptation is to gate it: "collect 5 star-pieces and the door opens." **Resist it.** That fails the Broccoli Test — the *collecting* is a tax with math bolted on, not gameplay. The kid wants to be in the reef; the tokens are the broccoli between them and it.
+
+Instead: **an area is the reward of a short _key quest_ whose math IS the key.** The act of solving opens the door — there's no separate fetch.
+
+> Gizmo's telescope spots a coral reef. He asks you to help calibrate the dive depth — a couple of measuring/counting puzzles in the *story's* numbers. Solve them and the dive spot opens. The math didn't unlock the reef; the math *was* the unlocking.
+
+**This reuses gating primitives the world already has** — each is a math-tied gate, not a count:
+
+- **Gate guardians** (Chompy at the reef, Rok on the red planet) block a chokepoint until you solve their puzzle, then step aside. Persisted per gate.
+- **Tolls** — a portal can cost Dum Dums you earned by playing (the reef dive already does), paid once.
+- **Fuel** — space jumps spend fuel you top up by solving the fuel droid's puzzle.
+
+A key quest's **Reward step flips an "area unlocked" flag the portal checks** — the same persistence pattern tolls and solved-gates already use. (`Quest.reward` already lists *map unlocks* as a reward type.) So a new area-unlock is data + a flag, not new architecture.
+
+**Soft-gate for the youngest (ages 4–10).** A locked door is a wall, not a carrot, and walls violate *fail gracefully* and *no pressure*:
+
+- **Tease, don't block.** Let the kid peek through the portal, or have the buddy hype the place up, so it reads as "coming soon," not "denied."
+- **First area free.** Only later biomes are gated, so a 4-year-old never hits a wall at the very first door.
+- **Failing never punishes.** A missed step just doesn't open the area *yet* — with an encouraging nudge, never a red X. (Same "never hard-block" rule as every other puzzle.)
+
+**The band sets eligibility; the kid's solving is the unlock.** The adaptive system decides *when* an area's key quest becomes available and *how* its numbers scale (each biome pins a `minBand`/`maxBand` and a signature operation). Within that, *completing the quest* is what opens the door — preserving autonomy (SDT) instead of an algorithm silently flipping a switch. This gives the biomes a natural order and a reason to visit each:
+
+| Biome | Signature math (key quest) | Feel |
+|-------|---------------------------|------|
+| Coral reef | Counting & measuring (dive depth, school sizes) | calm, exploratory |
+| The grove | Patterns & sequences (what the trees whisper) | wise, slow |
+| Space hub → Moon | Bigger numbers, place value (countdowns, craters) | wonder |
+| Red planet | Subtraction-as-fuel, navigation (plot a course) | adventure |
+| Asteroid base | Star-chart patterns (constellation sequences) | puzzle-y |
+
+A light **key-quest chain** ("Gizmo sends you biome to biome, each handing back a star-piece") strings these into the journey-and-completion arc kids respond to — without any biome ever becoming a grind-gate.
 
 #### NPCs as Quest Givers
 Each NPC has a personality that maps to a math framing:
@@ -279,12 +328,12 @@ The quest system and the adaptive learning system are deeply intertwined:
 
 | Adaptive dial | Effect on quests |
 |--------------|-----------------|
-| Band level | Determines which zones are unlocked and what numbers appear in puzzles |
+| Band level | Sets which biomes are *eligible* — gates whether an area's key quest is available and how its numbers scale (it never silently opens the door; see "Unlocking Areas") |
 | representationStyle (CRA stage) | When hints are shown, use appropriate representation (dots vs blocks vs abstract) |
 | pace | Controls how long NPCs talk before getting to the puzzle |
 | frustrationState | If high, generate easier micro-quests to rebuild confidence before story quests |
 | operationStats | Weight generated puzzles toward strengths (60%) with growth sprinkles (40%) |
-| streakToPromote | After N quests completed successfully in a zone, unlock next zone |
+| streakToPromote | Display-only / promotion signal. Areas open by completing that area's *key quest* (see "Unlocking Areas"), never by a raw count of quests finished |
 
 ### How the Quest System Feeds Back to Adaptive
 
