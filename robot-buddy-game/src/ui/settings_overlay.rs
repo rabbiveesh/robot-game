@@ -7,7 +7,6 @@ use crate::input::FrameInput;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Feature {
     Encounters,
-    Manipulatives,
     Quest,
 }
 
@@ -51,9 +50,8 @@ fn round_rect(x: f32, y: f32, w: f32, h: f32, r: f32, color: Color) {
     draw_circle(x + w - r, y + h - r, r, color);
 }
 
-const FEATURES: [(Feature, &str); 3] = [
+const FEATURES: [(Feature, &str); 2] = [
     (Feature::Encounters, "Random encounters"),
-    (Feature::Manipulatives, "Hands-on math"),
     (Feature::Quest, "Quests"),
 ];
 
@@ -158,7 +156,6 @@ pub fn draw(screen: (f32, f32), features: FeatureFlags, parent_open: bool) {
 
     let feature_on = |f: Feature| match f {
         Feature::Encounters => features.encounters,
-        Feature::Manipulatives => features.cra_manipulatives,
         Feature::Quest => features.quest,
     };
     let feature_label = |f: Feature| FEATURES.iter().find(|(ff, _)| *ff == f).map(|(_, l)| *l).unwrap_or("");
