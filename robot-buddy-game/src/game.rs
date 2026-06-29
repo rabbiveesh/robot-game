@@ -397,6 +397,11 @@ pub struct Game {
     /// rendered, soft-blocked, and interactable when the player is on his
     /// parked map. When the player gifts him a dum dum, he rejoins.
     pub sparky_parked: bool,
+    /// Which map parked Sparky is currently loitering on. Starts at
+    /// `SPARKY_HOME_MAP` when he parks, but — like any wanderer — if he drifts
+    /// or gets pushed onto a portal tile he travels through it, so this tracks
+    /// where he ended up. Only meaningful while `sparky_parked`.
+    sparky_map: &'static str,
     /// Wander cooldown for parked Sparky. Ticks down only while parked AND
     /// the player is on his home map; reset to a small initial delay on
     /// park so he doesn't twitch on the same frame he's swapped out.
@@ -526,6 +531,7 @@ impl Game {
             npcs_offstage: HashMap::new(),
             companion: None,
             sparky_parked: false,
+            sparky_map: SPARKY_HOME_MAP,
             sparky_wander_cooldown: 0.0,
             dreaming: false,
             game_time: 0.0,
@@ -790,11 +796,12 @@ impl Game {
         // portal handler only fires once per arrival, not every frame they
         // sit on a portal tile waiting to wander again.
         let mut arrived_npcs: Vec<usize> = Vec::new();
+        let mut sparky_arrived = false;
         let arrived = if self.settings_open {
             false
         } else {
             let a = self.player.move_toward_target(dt);
-            self.sparky.animate(dt);
+            sparky_arrived = self.sparky.animate(dt);
             if let Some(c) = self.companion.as_mut() { c.animate(dt); }
             for (i, n) in self.npcs.iter_mut().enumerate() {
                 if n.animate(dt) { arrived_npcs.push(i); }
@@ -819,6 +826,17 @@ impl Game {
                 c.entity.dir = self.player.dir;
             }
         }
+
+        // Parked Sparky is a loose creature near Gizmo — if he's nudged or
+        // pushed onto a portal tile, he travels through it like any wanderer
+        // would, instead of just standing on the doorway. Only fires while he's
+        // parked and on the player's current map (the only time he can move).
+        if sparky_arrived && self.state == GameState::Playing
+            && self.sparky_parked && self.sparky_is_here()
+        {
+            self.handle_parked_sparky_portal();
+        }
+
         // Portal check after arrival
         if arrived && self.state == GameState::Playing {
             let prev_map = self.map.id;
@@ -2807,7 +2825,7 @@ impl Game {
     /// parked at his home tile on `SPARKY_HOME_MAP`. While parked elsewhere,
     /// he should not render, soft-block, or be interactable.
     pub fn sparky_is_here(&self) -> bool {
-        !self.sparky_parked || self.map.id == SPARKY_HOME_MAP
+        !self.sparky_parked || self.map.id == self.sparky_map
     }
 
     /// Stable id string for the entity currently following the player. Used
@@ -2836,6 +2854,7 @@ impl Game {
     /// runs into him head-on when arriving at the overworld.
     fn park_sparky(&mut self) {
         self.sparky_parked = true;
+        self.sparky_map = SPARKY_HOME_MAP;
         self.sparky.entity.tile_x = SPARKY_HOME_TX;
         self.sparky.entity.tile_y = SPARKY_HOME_TY;
         self.sparky.entity.x = SPARKY_HOME_TX as f32 * TILE_SIZE;
@@ -3161,6 +3180,50 @@ impl Game {
             // non-secret exit, so a kid that drifts in can drift back out.
             self.transfer_npc_through_portal(i, portal);
         }
+    }
+
+    /// Parked Sparky stepped (or got pushed) onto a portal tile — carry him
+    /// through it just like a roster wanderer. Updates `sparky_map` to wherever
+    /// he lands; he won't move again until the player is on that map (only then
+    /// does his wander roll run). Re-anchoring his wander tether isn't needed:
+    /// off his home map he just waits to be found or re-recruited.
+    fn handle_parked_sparky_portal(&mut self) {
+        let (tx, ty) = (self.sparky.entity.tile_x, self.sparky.entity.tile_y);
+        let portal = match tilemap::check_portal(self.sparky_map, tx, ty) {
+            Some(p) => p,
+            None => return,
+        };
+        let dest_map = portal.to_map;
+        let dest_geometry = Map::by_id(dest_map);
+        let player_on_dest = dest_map == self.map.id;
+        let player = (self.player.tile_x, self.player.tile_y);
+        let empty: Vec<npc::Npc> = Vec::new();
+        let occupants = self.npcs_offstage.get(dest_map).unwrap_or(&empty);
+        let occ_tiles: Vec<(usize, usize)> = occupants.iter()
+            .map(|n| (n.entity.tile_x, n.entity.tile_y))
+            .collect();
+        let roster_tiles: Vec<(usize, usize)> = if player_on_dest {
+            self.npcs.iter().map(|n| (n.entity.tile_x, n.entity.tile_y)).collect()
+        } else {
+            Vec::new()
+        };
+        let (dx, dy) = npc::find_npc_spawn_spot(
+            portal.to_x, portal.to_y, dest_geometry.width, dest_geometry.height,
+            |cx, cy| dest_geometry.is_solid(cx, cy),
+            |cx, cy| (player_on_dest && (cx, cy) == player)
+                || occ_tiles.iter().any(|t| *t == (cx, cy))
+                || roster_tiles.iter().any(|t| *t == (cx, cy)),
+        );
+        self.sparky_map = dest_map;
+        let e = &mut self.sparky.entity;
+        e.tile_x = dx;
+        e.tile_y = dy;
+        e.x = dx as f32 * TILE_SIZE;
+        e.y = dy as f32 * TILE_SIZE;
+        e.target_x = e.x;
+        e.target_y = e.y;
+        e.moving = false;
+        self.sparky_wander_cooldown = npc::WANDER_COOLDOWN_MIN;
     }
 
     /// Move NPC at index `i` of `self.npcs` to the portal's destination map
@@ -3772,6 +3835,9 @@ impl Game {
         self.sparky.entity.moving = false;
         self.sparky.pathing.clear();
         self.sparky_parked = save_data.sparky_parked;
+        // Parked Sparky comes home on reload — we don't persist whichever map
+        // he may have wandered off to, and home is always a safe, valid spot.
+        self.sparky_map = SPARKY_HOME_MAP;
         // Fresh cooldown after load — wander roll won't fire on the first
         // frame, and only ticks if Sparky's parked AND on his home map.
         self.sparky_wander_cooldown = if save_data.sparky_parked {
