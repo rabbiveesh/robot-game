@@ -3329,7 +3329,7 @@ impl Game {
                                 Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
                             }
                             // Cosmetics bought from Bolt's shop ride on the kid.
-                            sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.frame, &self.shop_owned, &self.color_choice);
+                            sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.dir, self.player.frame, &self.shop_owned, &self.color_choice);
                             // On planet surfaces the kid wears a space helmet.
                             if self.map.render_mode == tilemap::RenderMode::Cosmic {
                                 sprites::player::draw_spacesuit_overlay(self.player.x, self.player.y, self.player.frame);
@@ -3512,7 +3512,7 @@ impl Game {
                     Gender::Boy => sprites::player::draw_player_boy(px, py, Dir::Down, 0, self.game_time),
                     Gender::Girl => sprites::player::draw_player_girl(px, py, Dir::Down, 0, self.game_time),
                 }
-                sprites::player::draw_player_cosmetics(px, py, 0, &ash.owned, &self.color_choice);
+                sprites::player::draw_player_cosmetics(px, py, Dir::Down, 0, &ash.owned, &self.color_choice);
             }
         }
 
