@@ -58,7 +58,7 @@ use crate::ui;
 use crate::ui::dialogue::{DialogueBox, DialogueLine};
 use crate::ui::challenge::{ChoiceBound, ScaffoldBounds};
 use crate::ui::title_screen::{TitleAction, NewGameAction, NewGameForm};
-use crate::ui::hud::{DumDumHud, DebugOverlay};
+use crate::ui::hud::{DumDumHud, PearlHud, DebugOverlay};
 use crate::ui::interaction_menu::MenuOption;
 use crate::save::{self, CompanionSave, SaveBackend, SaveData, SaveSlots, Gender};
 use crate::audio;
@@ -392,9 +392,19 @@ pub struct Game {
     /// where he ended up. Only meaningful while `sparky_parked`.
     sparky_map: &'static str,
     /// True while the player is standing on the goal stone of the current map's
-    /// ambient number-line path — so the "you hopped here!" cheer fires once on
-    /// arrival, not every frame they linger on it.
+    /// ambient number-line path — so the pearl is collected once on arrival,
+    /// not every frame they linger on it.
     track_on_target: bool,
+    /// Current goal stone (index along the path) holding the pearl. Starts at
+    /// the track's static target; hops to a new stone after each pearl is
+    /// collected, so the path is a repeatable counting game.
+    track_goal: usize,
+    /// Brief floating cheer text + remaining seconds, shown after a collection.
+    track_toast: Option<(String, f32)>,
+    /// Reef-local currency, earned hopping the number path and (later) from the
+    /// deeper zones; spent at the reef trader on diving gear.
+    pub pearls: u32,
+    pearl_hud: PearlHud,
     /// Wander cooldown for parked Sparky. Ticks down only while parked AND
     /// the player is on his home map; reset to a small initial delay on
     /// park so he doesn't twitch on the same frame he's swapped out.
@@ -525,6 +535,10 @@ impl Game {
             sparky_parked: false,
             sparky_map: SPARKY_HOME_MAP,
             track_on_target: false,
+            track_goal: number_track::track_for_map("reef").map(|t| t.target).unwrap_or(0),
+            track_toast: None,
+            pearls: 0,
+            pearl_hud: PearlHud::new(),
             sparky_wander_cooldown: 0.0,
             dreaming: false,
             game_time: 0.0,
@@ -763,6 +777,11 @@ impl Game {
             self.pending_challenge = false;
         }
         self.dum_dum_hud.update(dt);
+        self.pearl_hud.update(dt);
+        if let Some((_, ref mut t)) = self.track_toast {
+            *t -= dt;
+            if *t <= 0.0 { self.track_toast = None; }
+        }
         if self.fuel_flash > 0.0 { self.fuel_flash -= dt; }
 
         // Time tracking + auto-save
@@ -2957,20 +2976,34 @@ impl Game {
         }
     }
 
-    /// Ambient number-line path: fire a one-shot cheer the moment the kid hops
-    /// onto the goal stone (rising edge — not every frame they stand on it).
-    /// Pure feedback; never gates progress.
+    /// Ambient number-line path: when the kid hops onto the goal stone (the one
+    /// with the pearl), collect it — +1 pearl, a cheer, and the pearl hops to a
+    /// fresh stone so the path is a repeatable counting game. Rising-edge so it
+    /// fires once per arrival. Pure reward; never gates progress.
     fn check_number_track_landing(&mut self) {
-        let on_target = number_track::track_for_map(self.map.id)
-            .map(|t| (self.player.tile_x, self.player.tile_y) == t.target_tile())
-            .unwrap_or(false);
-        if on_target && !self.track_on_target {
-            if let Some(t) = number_track::track_for_map(self.map.id) {
-                self.events.push(GameEvent::NumberLineReached { mark: t.target as u8 });
-                self.dum_dum_hud.flash();
+        let track = match number_track::track_for_map(self.map.id) {
+            Some(t) => t,
+            None => { self.track_on_target = false; return; }
+        };
+        let goal = self.track_goal.min(track.tiles.len() - 1);
+        let goal_tile = track.tiles[goal];
+        let on_goal = (self.player.tile_x, self.player.tile_y) == goal_tile;
+
+        if on_goal && !self.track_on_target {
+            self.pearls = self.pearls.saturating_add(1);
+            self.pearl_hud.flash();
+            self.events.push(GameEvent::NumberLineReached { mark: goal as u8 });
+            self.track_toast = Some((format!("You hopped to {goal}!  +1 pearl"), 1.8));
+            // Hop the pearl to a different stone for the next round.
+            if track.tiles.len() > 1 {
+                let mut next = goal;
+                while next == goal {
+                    next = self.rng.gen_range(0..track.tiles.len());
+                }
+                self.track_goal = next;
             }
         }
-        self.track_on_target = on_target;
+        self.track_on_target = on_goal;
     }
 
     /// Whisk any swapped-out buddy that's `leaving_map` off to its real home the
@@ -3378,7 +3411,7 @@ impl Game {
             // the sprites) so the kid hops across the numbers.
             if let Some(track) = number_track::track_for_map(self.map.id) {
                 let here = track.index_of((self.player.tile_x, self.player.tile_y));
-                draw_number_track(&track, here, self.game_time);
+                draw_number_track(&track, here, self.track_goal, self.game_time);
             }
 
             // Click-to-walk destination marker: a pulsing ring on the tapped
@@ -3513,6 +3546,16 @@ impl Game {
     fn render_hud(&mut self, screen: (f32, f32)) {
         ui::hud::draw_area_name(self.map.id, self.player.tile_x, self.player.tile_y);
         self.dum_dum_hud.draw(self.dum_dums, screen);
+        // Pearl counter — only once the kid has earned any (reef-local currency).
+        if self.pearls > 0 {
+            self.pearl_hud.draw(self.pearls, screen);
+        }
+        // A brief floating cheer after hopping to the pearl.
+        if let Some((ref msg, _)) = self.track_toast {
+            let (sw, _) = screen;
+            let tw = measure_text(msg, None, 26, 1.0).width;
+            draw_text(msg, sw / 2.0 - tw / 2.0, 92.0, 26.0, Color::from_rgba(178, 235, 242, 255));
+        }
         // Rocket fuel gauge — only relevant (and only shown) in space.
         if self.map.render_mode == tilemap::RenderMode::Cosmic {
             ui::hud::draw_fuel_gauge(self.fuel, FUEL_MAX, self.fuel_flash, screen);
@@ -3649,6 +3692,7 @@ impl Game {
             sparky_parked: self.sparky_parked,
             math_band: None,
             dum_dums: self.dum_dums,
+            pearls: self.pearls,
             play_time: self.play_time,
             timestamp: 0,
             gifts_given: self.gifts_given.clone(),
@@ -3672,6 +3716,7 @@ impl Game {
         self.player_gender = save_data.gender;
         self.profile = save_data.profile.clone();
         self.dum_dums = save_data.dum_dums;
+        self.pearls = save_data.pearls;
         self.play_time = save_data.play_time;
         self.gifts_given = save_data.gifts_given.clone();
         self.shop_owned = save_data.shop_owned.iter().cloned().collect();
@@ -4367,6 +4412,7 @@ fn secret_entry_dialogue(map_id: &str, speaker: &str) -> Vec<DialogueLine> {
         "reef" => vec![
             line("BLUB BLUB! We're UNDERWATER, boss! And I didn't even rust! Best upgrade EVER!"),
             line("Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!"),
+            line("Ooh, glowy stepping-stones with numbers! Hop along them to the shiny PEARL!"),
         ],
         "space_hub" => vec![
             line("3... 2... 1... BLAST OFF! WHEEEE! Boss, we're in SPACE! Actual outer SPACE!"),
@@ -4377,9 +4423,15 @@ fn secret_entry_dialogue(map_id: &str, speaker: &str) -> Vec<DialogueLine> {
 }
 
 /// Draw the ambient number-line stepping-stones in world space (under the
-/// sprites). Stones up to the kid's current stone are lit; the goal stone
-/// pulses gold and bursts when stood on. `here` is the kid's mark, if on the path.
-fn draw_number_track(track: &number_track::NumberTrack, here: Option<usize>, time: f32) {
+/// sprites). Stones up to the kid's current stone are lit; the `goal` stone
+/// carries a shimmering pearl and bursts when stood on. `here` is the kid's
+/// mark, if on the path.
+fn draw_number_track(
+    track: &number_track::NumberTrack,
+    here: Option<usize>,
+    goal: usize,
+    time: f32,
+) {
     let outline = Color::from_rgba(94, 122, 60, 200);
     for (i, &(col, row)) in track.tiles.iter().enumerate() {
         let cx = (col as f32 + 0.5) * TILE_SIZE;
@@ -4393,15 +4445,6 @@ fn draw_number_track(track: &number_track::NumberTrack, here: Option<usize>, tim
         draw_circle(cx, cy, TILE_SIZE * 0.34, base);
         draw_circle_lines(cx, cy, TILE_SIZE * 0.34, 2.0, outline);
 
-        if i == track.target {
-            let pulse = (time * 4.0).sin() * 0.5 + 0.5;
-            let gold = Color::new(1.0, 0.84, 0.30, 0.55 + 0.45 * pulse);
-            draw_circle_lines(cx, cy, TILE_SIZE * 0.40 + pulse * 3.0, 3.0, gold);
-            if here == Some(track.target) {
-                draw_circle_lines(cx, cy, TILE_SIZE * 0.52, 2.0, gold);
-            }
-        }
-
         let label = format!("{i}");
         let tw = measure_text(&label, None, 22, 1.0).width;
         let tc = if lit {
@@ -4410,6 +4453,21 @@ fn draw_number_track(track: &number_track::NumberTrack, here: Option<usize>, tim
             Color::from_rgba(55, 71, 79, 230)
         };
         draw_text(&label, cx - tw / 2.0, cy + 7.0, 22.0, tc);
+
+        // The pearl sits above the goal stone, bobbing.
+        if i == goal {
+            let bob = (time * 2.5).sin() * 3.0;
+            let py = cy - TILE_SIZE * 0.32 + bob;
+            let pulse = (time * 4.0).sin() * 0.5 + 0.5;
+            draw_circle_lines(cx, py, 11.0 + pulse * 3.0, 2.0,
+                Color::new(0.70, 0.92, 0.96, 0.5 + 0.4 * pulse));
+            draw_circle(cx, py, 8.0, Color::from_rgba(225, 245, 254, 255));
+            draw_circle(cx - 2.5, py - 2.5, 2.5, Color::from_rgba(255, 255, 255, 235));
+            if here == Some(goal) {
+                draw_circle_lines(cx, cy, TILE_SIZE * 0.52, 2.0,
+                    Color::new(1.0, 0.84, 0.30, 0.9));
+            }
+        }
     }
 }
 

@@ -123,6 +123,60 @@ impl DumDumHud {
     }
 }
 
+/// Reef-local pearl counter — drawn just under the Dum Dum counter when the kid
+/// has any. Same shape as `DumDumHud`, with a pearl icon.
+pub struct PearlHud {
+    flash_timer: f32,
+}
+
+impl PearlHud {
+    pub fn new() -> Self {
+        PearlHud { flash_timer: 0.0 }
+    }
+
+    pub fn flash(&mut self) {
+        self.flash_timer = 0.5;
+    }
+
+    pub fn update(&mut self, dt: f32) {
+        if self.flash_timer > 0.0 {
+            self.flash_timer -= dt;
+        }
+    }
+
+    pub fn draw(&self, count: u32, screen: (f32, f32)) {
+        let sw = screen.0;
+        let bg_w = 80.0;
+        let bg_h = 44.0;
+        let x = sw - bg_w - 12.0;
+        let y = 62.0; // just under the Dum Dum counter
+
+        let scale = if self.flash_timer > 0.0 {
+            1.0 + 0.3 * (self.flash_timer / 0.5)
+        } else {
+            1.0
+        };
+        let cx = x + bg_w / 2.0;
+        let cy = y + bg_h / 2.0;
+        let sx = cx - (bg_w * scale) / 2.0;
+        let sy = cy - (bg_h * scale) / 2.0;
+
+        draw_rectangle(sx, sy, bg_w * scale, bg_h * scale,
+            Color::new(0.078, 0.078, 0.157, 0.8));
+
+        // Pearl icon: a pale shimmering bead.
+        let icon_x = sx + 18.0;
+        let icon_y = sy + bg_h * scale / 2.0;
+        draw_circle(icon_x, icon_y, 8.0, Color::from_rgba(225, 245, 254, 255));
+        draw_circle(icon_x - 2.5, icon_y - 2.5, 2.5, Color::from_rgba(255, 255, 255, 230));
+
+        let text = format!("x{}", count);
+        let tw = measure_text(&text, None, 22, 1.0).width;
+        draw_text(&text, sx + bg_w * scale - tw - 10.0, sy + bg_h * scale / 2.0 + 8.0,
+            22.0, Color::from_rgba(178, 235, 242, 255));
+    }
+}
+
 // ─── FUEL GAUGE (space maps) ────────────────────────────
 
 /// Draw the rocket's fuel gauge just under the Dum Dum counter. Shown only on

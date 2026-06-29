@@ -1409,35 +1409,37 @@ fn swapped_out_cross_map_buddy_walks_out_then_teleports_home() {
 }
 
 #[test]
-fn hopping_to_the_reef_goal_stone_cheers() {
+fn hopping_to_the_reef_pearl_collects_it() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
 
-    // The reef has an ambient number-line path (row 11); the goal stone is mark
-    // 6 at (10, 11). Hopping onto it fires a one-shot NumberLineReached cheer.
+    // The reef has an ambient number-line path (row 13); the pearl starts on
+    // mark 6 at (11, 13). Hopping onto it collects a pearl + fires the cheer.
     let mut h = Harness::new(9);
     h.start_dev_game();
     h.game.map = Map::reef();
     h.game.npcs = npc_mod::npcs_for_map("reef");
     h.game.npcs_offstage.clear();
+    assert_eq!(h.game.pearls, 0, "no pearls to start");
 
-    // Stand the kid two stones short of the goal, on the path.
-    h.game.player.tile_x = 8;
-    h.game.player.tile_y = 11;
-    h.game.player.x = 8.0 * 48.0;
-    h.game.player.y = 11.0 * 48.0;
+    // Stand the kid two stones short of the pearl, on the path.
+    h.game.player.tile_x = 9;
+    h.game.player.tile_y = 13;
+    h.game.player.x = 9.0 * 48.0;
+    h.game.player.y = 13.0 * 48.0;
     h.game.player.target_x = h.game.player.x;
     h.game.player.target_y = h.game.player.y;
     h.game.player.moving = false;
 
     let mark = h.mark();
-    h.walk_to(10, 11); // hop to the goal stone
+    h.walk_to(11, 13); // hop to the pearl
     let events = h.events_since(mark);
     assert!(
         events.iter().any(|e| matches!(e, GameEvent::NumberLineReached { mark: 6 })),
-        "hopping to the goal stone should fire NumberLineReached {{ mark: 6 }}; got {:?}",
+        "hopping to the pearl should fire NumberLineReached {{ mark: 6 }}; got {:?}",
         events,
     );
+    assert_eq!(h.game.pearls, 1, "collecting the pearl awards one pearl");
 }
 
 #[test]

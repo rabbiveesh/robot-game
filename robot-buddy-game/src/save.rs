@@ -26,6 +26,8 @@ pub struct SaveData {
     #[serde(skip_serializing)]
     pub(crate) math_band: Option<u8>,
     pub dum_dums: u32,
+    #[serde(default)]
+    pub pearls: u32,
     pub play_time: f32,
     pub timestamp: u64,
     #[serde(default)]

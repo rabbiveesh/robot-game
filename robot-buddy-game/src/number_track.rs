@@ -31,13 +31,14 @@ impl NumberTrack {
 /// The ambient number path for `map_id`, if it has one.
 pub fn track_for_map(map_id: &str) -> Option<NumberTrack> {
     match map_id {
-        // Reef row 11 is a clear stretch of the lower basin — stepping-stones
-        // the kid hops along (marks 0..9). Hop to 6 for the goal.
+        // Reef row 13 is a long clear stretch of the lower basin — stepping-
+        // stones the kid hops along (marks 0..11). `target` is the *initial*
+        // goal; the game moves the pearl to a new stone after each collection.
         "reef" => Some(NumberTrack {
             id: "reef_path_1",
             tiles: &[
-                (4, 11), (5, 11), (6, 11), (7, 11), (8, 11),
-                (9, 11), (10, 11), (11, 11), (12, 11), (13, 11),
+                (5, 13), (6, 13), (7, 13), (8, 13), (9, 13), (10, 13),
+                (11, 13), (12, 13), (13, 13), (14, 13), (15, 13), (16, 13),
             ],
             target: 6,
         }),
@@ -63,7 +64,7 @@ mod tests {
     #[test]
     fn index_and_target_tile_round_trip() {
         let t = track_for_map("reef").unwrap();
-        assert_eq!(t.index_of((6, 11)), Some(2));
+        assert_eq!(t.index_of((7, 13)), Some(2));
         assert_eq!(t.index_of((0, 0)), None);
         assert_eq!(t.index_of(t.target_tile()), Some(t.target));
     }
