@@ -27,6 +27,7 @@ use robot_buddy_domain::learning::intake_assessor::{
     IntakeAnswer, generate_intake_question, process_intake_results, next_intake_band, intake_complete,
 };
 use robot_buddy_domain::economy::give;
+use robot_buddy_domain::economy::rewards;
 use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
 use robot_buddy_domain::logic::kenken::{
     self, KenKenAction, KenKenPhase, KenKenSession, cage_ops_for_band, generate_kenken,
@@ -2237,12 +2238,13 @@ impl Game {
                     response_time_ms: Some(response_ms),
                 });
 
-                if was_correct {
-                    // Same reward shape as a correct arithmetic challenge: 1 Dum Dum.
-                    let award = 1u32;
-                    self.dum_dums += award;
+                // Same payout rule as every activity: earned only by a clean
+                // solve. Violations = mistakes; hints stay reward-neutral
+                // (asking for help is a behavior we want, not a grind).
+                if let Some(reward) = rewards::determine_reward(was_correct, violations as u32) {
+                    self.dum_dums += reward.amount;
                     self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
                 }
 
                 self.events.push(GameEvent::KenKenResolved {
@@ -2306,12 +2308,13 @@ impl Game {
                     response_time_ms: Some(response_ms),
                 });
 
-                if was_correct {
-                    // Same reward shape as a correct challenge or kenken: 1 Dum Dum.
-                    let award = 1u32;
-                    self.dum_dums += award;
+                // `attempts` counts every guess including the right one, so
+                // mistakes = attempts - 1. Guess-grinding pays nothing.
+                let mistakes = attempts.saturating_sub(1) as u32;
+                if let Some(reward) = rewards::determine_reward(was_correct, mistakes) {
+                    self.dum_dums += reward.amount;
                     self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
                 }
 
                 self.events.push(GameEvent::PatternResolved {
@@ -2366,11 +2369,13 @@ impl Game {
                 let level = balance::balance_level_for_band(self.profile.math_band);
                 let attempts = ab.session.attempts;
 
-                if was_correct {
-                    let award = 1u32;
-                    self.dum_dums += award;
+                // The balance scale is the grindiest of all — tap every number
+                // until it levels. Only a first-guess balance pays.
+                let mistakes = attempts.saturating_sub(1) as u32;
+                if let Some(reward) = rewards::determine_reward(was_correct, mistakes) {
+                    self.dum_dums += reward.amount;
                     self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
                 }
 
                 self.events.push(GameEvent::BalanceResolved {
@@ -2422,11 +2427,10 @@ impl Game {
                 let grid_size = asd.session.puzzle.grid_size;
                 let violations = asd.session.constraint_violations;
 
-                if was_correct {
-                    let award = 1u32;
-                    self.dum_dums += award;
+                if let Some(reward) = rewards::determine_reward(was_correct, violations as u32) {
+                    self.dum_dums += reward.amount;
                     self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
+                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
                 }
 
                 self.events.push(GameEvent::SudokuResolved {

@@ -260,6 +260,7 @@ fn balance_wrong_guess_tips_then_solves() {
     h.interact();
 
     let mark = h.mark();
+    let start_dums = h.game.dum_dums;
     h.select_option("balance");
     h.wait_until(|g| g.state == GameState::Balance);
 
@@ -277,6 +278,17 @@ fn balance_wrong_guess_tips_then_solves() {
         _ => None,
     }).expect("expected BalanceResolved");
     assert!(attempts >= 2, "wrong then right is at least two attempts, got {attempts}");
+
+    // Guessed-down solves celebrate but never pay — otherwise tapping every
+    // number in turn becomes a Dum Dum grinder (field report: one 4yo).
+    assert_eq!(
+        h.game.dum_dums, start_dums,
+        "a balance solved by burning wrong guesses must not award a Dum Dum",
+    );
+    assert!(
+        !events.iter().any(|e| matches!(e, GameEvent::DumDumsAwarded { .. })),
+        "no award event for a guessed-down solve; got {:?}", events,
+    );
 }
 
 #[test]

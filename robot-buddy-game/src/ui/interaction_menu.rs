@@ -83,6 +83,19 @@ pub fn draw(layout: &Layout, mouse_pos: (f32, f32)) {
     let (sx, sy, sw, sh) = layout.strip;
     draw_rectangle(sx, sy, sw, sh, Color::new(0.078, 0.078, 0.157, 0.85));
 
+    // One font size for the whole strip: the largest that fits EVERY label
+    // inside its button with padding. Buttons shrink when a puzzler stacks
+    // six options, so a fixed size bleeds out of the box ("Spot the
+    // Pattern" et al.); a shared size keeps the row visually uniform.
+    let pad = 10.0;
+    let mut font: u16 = 26;
+    for btn in &layout.buttons {
+        let label = format!("[{}] {}", btn.key, btn.label);
+        while font > 12 && measure_text(&label, None, font, 1.0).width > btn.rect.2 - pad {
+            font -= 1;
+        }
+    }
+
     let (mx, my) = mouse_pos;
     for btn in &layout.buttons {
         let (bx, by, bw, bh) = btn.rect;
@@ -96,7 +109,13 @@ pub fn draw(layout: &Layout, mouse_pos: (f32, f32)) {
         draw_rectangle_lines(bx, by, bw, bh, 1.5, Color::new(1.0, 1.0, 1.0, 0.3));
 
         let label = format!("[{}] {}", btn.key, btn.label);
-        let tw = measure_text(&label, None, 26, 1.0).width;
-        draw_text(&label, bx + bw / 2.0 - tw / 2.0, by + 37.0, 26.0, WHITE);
+        let m = measure_text(&label, None, font, 1.0);
+        draw_text(
+            &label,
+            bx + bw / 2.0 - m.width / 2.0,
+            by + bh / 2.0 + m.height / 2.0,
+            font as f32,
+            WHITE,
+        );
     }
 }
