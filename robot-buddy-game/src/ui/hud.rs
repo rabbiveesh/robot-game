@@ -41,6 +41,8 @@ pub fn get_area_name(map_id: &str, tx: usize, ty: usize) -> &'static str {
         "control" => "Control Room",
         "annex" => "The Annex",
         "reef" => "Coral Reef",
+        "trench" => "The Deep Trench",
+        "cove_home" => "Myrtle's Cottage",
         "space_hub" => "Orbital Hub",
         "moon" => "The Moon",
         "mars" => "Red Planet",

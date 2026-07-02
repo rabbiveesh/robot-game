@@ -27,6 +27,14 @@ pub enum NpcKind {
     Crab,
     Jelly,
     Octopus,
+    /// Shelly, the pearl-path clam — one on each map with a number path. She
+    /// calls out which stone hides her pearl (see `number_track`).
+    Clam,
+    // Trench creatures
+    Anglerfish,
+    Eel,
+    /// Grandma Myrtle, the reef village's cottage resident.
+    TurtleElder,
     // Space creatures
     MoonAlien,
     FuelBot,
@@ -70,6 +78,10 @@ impl NpcKind {
             NpcKind::Crab => "crab",
             NpcKind::Jelly => "jelly",
             NpcKind::Octopus => "octopus",
+            NpcKind::Clam => "clam",
+            NpcKind::Anglerfish => "anglerfish",
+            NpcKind::Eel => "eel",
+            NpcKind::TurtleElder => "turtle_elder",
             NpcKind::MoonAlien => "moon_alien",
             NpcKind::FuelBot => "fuel_bot",
             NpcKind::MarsGuardian => "mars_guardian",
@@ -109,6 +121,10 @@ impl NpcKind {
             NpcKind::Crab => "Pinchy",
             NpcKind::Jelly => "Wobble",
             NpcKind::Octopus => "Inkwell",
+            NpcKind::Clam => "Shelly",
+            NpcKind::Anglerfish => "Glimmer",
+            NpcKind::Eel => "Wiggles",
+            NpcKind::TurtleElder => "Grandma Myrtle",
             NpcKind::MoonAlien => "Zorp",
             NpcKind::FuelBot => "Tank",
             NpcKind::MarsGuardian => "Rok",
@@ -138,7 +154,7 @@ impl NpcKind {
         NpcKind::Kid1, NpcKind::Kid2, NpcKind::Shopkeeper, NpcKind::GlitchDog,
         NpcKind::GroveSpirit, NpcKind::Pip, NpcKind::Signpost,
         NpcKind::ReefShark, NpcKind::SeaTurtle, NpcKind::Dolphin, NpcKind::Crab, NpcKind::Jelly,
-        NpcKind::Octopus,
+        NpcKind::Octopus, NpcKind::Clam, NpcKind::Anglerfish, NpcKind::Eel, NpcKind::TurtleElder,
         NpcKind::MoonAlien, NpcKind::FuelBot, NpcKind::MarsGuardian, NpcKind::StarKeeper, NpcKind::StationAlien,
         NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
@@ -180,6 +196,9 @@ pub enum SpriteType {
     Crab,
     Jellyfish,
     Octopus,
+    Clam,
+    Anglerfish,
+    Eel,
     AlienGreen,
     AlienRed,
     FuelDepot,
@@ -465,6 +484,9 @@ impl Npc {
             SpriteType::Crab => sprites::npcs::draw_crab(x, y, time),
             SpriteType::Jellyfish => sprites::npcs::draw_jellyfish(x, y, time),
             SpriteType::Octopus => sprites::npcs::draw_octopus(x, y, time),
+            SpriteType::Clam => sprites::npcs::draw_clam(x, y, time),
+            SpriteType::Anglerfish => sprites::npcs::draw_anglerfish(x, y, self.entity.dir, time),
+            SpriteType::Eel => sprites::npcs::draw_eel(x, y, self.entity.dir, time),
             SpriteType::AlienGreen => sprites::npcs::draw_alien(x, y, time,
                 Color::from_rgba(124, 207, 120, 255)),
             SpriteType::AlienRed => sprites::npcs::draw_alien(x, y, time,
@@ -555,13 +577,26 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(Dolphin,  11, 8, S::Dolphin,   true, false, false).wandering(),
             n(Crab,      3, 9, S::Crab,      true, true,  false).wandering(),
             n(Jelly,     5, 2, S::Jellyfish, true, true,  false).wandering(),
-            // Inkwell guards the dive gauge in the east corner — talk to her for
+            // Shelly perches west of the pearl path calling out her number —
+            // her tile must match the track's `clam` in number_track.rs, and
+            // she stays put (she IS the signpost of the counting game).
+            n(Clam,      3, 13, S::Clam,     true, true,  false),
+            // Inkwell guards the dive gauge on the east edge — talk to her for
             // the depth, then hop down the stones to the trench.
-            n(Octopus,  24, 7, S::Octopus,   true, true,  false),
+            n(Octopus,  36, 7, S::Octopus,   true, true,  false),
         ],
-        // The trench — deeper, quieter; a single drifting buddy for company.
+        // The trench — deeper and stranger: Glimmer lights the pearl basin,
+        // Wiggles winds around the east pocket, a jelly drifts the ledge, and
+        // the trench's own Shelly runs the deeper pearl path.
         "trench" => vec![
-            n(Jelly,     4, 9, S::Jellyfish, true, true,  false).wandering(),
+            n(Jelly,      16, 3, S::Jellyfish, true, true,  false).wandering(),
+            n(Anglerfish, 10, 10, S::Anglerfish, true, false, false).wandering(),
+            n(Eel,        22, 8, S::Eel,       true, true,  false).wandering(),
+            n(Clam,       3, 8, S::Clam,       true, true,  false),
+        ],
+        // Myrtle's shell cottage, inside the reef village.
+        "cove_home" => vec![
+            n(TurtleElder, 3, 3, S::SeaTurtle, true, true, false),
         ],
         // Orbital hub — Tank the fuel droid tops up the rocket (solve to refuel).
         "space_hub" => vec![

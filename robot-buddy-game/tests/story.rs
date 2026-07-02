@@ -1409,12 +1409,14 @@ fn swapped_out_cross_map_buddy_walks_out_then_teleports_home() {
 }
 
 #[test]
-fn hopping_to_the_reef_pearl_collects_it() {
+fn finding_shellys_called_stone_collects_the_hidden_pearl() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
 
-    // The reef has an ambient number-line path (row 13); the pearl starts on
-    // mark 6 at (11, 13). Hopping onto it collects a pearl + fires the cheer.
+    // Shelly calls out stone 6 (the reef path's initial goal); her pearl hides
+    // UNDER that stone — no marker. Stepping on a wrong stone gives nothing;
+    // finding the called stone pops the pearl, and the event log records how
+    // many hops it took vs the straight count-on (stealth assessment).
     let mut h = Harness::new(9);
     h.start_dev_game();
     h.game.map = Map::reef();
@@ -1422,7 +1424,7 @@ fn hopping_to_the_reef_pearl_collects_it() {
     h.game.npcs_offstage.clear();
     assert_eq!(h.game.pearls, 0, "no pearls to start");
 
-    // Stand the kid two stones short of the pearl, on the path.
+    // Stand the kid on stone 4 of the path (row 13 starts at x=5).
     h.game.player.tile_x = 9;
     h.game.player.tile_y = 13;
     h.game.player.x = 9.0 * 48.0;
@@ -1432,14 +1434,32 @@ fn hopping_to_the_reef_pearl_collects_it() {
     h.game.player.moving = false;
 
     let mark = h.mark();
-    h.walk_to(11, 13); // hop to the pearl
+    // Guess wrong twice: hop to stone 3, then all the way down to stone 1.
+    // Nothing happens — no pearl, no event, no buzzer (rule 7: wrong answers
+    // have natural consequences only).
+    h.walk_to(8, 13);
+    h.walk_to(6, 13);
+    assert_eq!(h.game.pearls, 0, "a wrong stone never pays out");
+    assert!(
+        !h.events_since(mark).iter().any(|e| matches!(e, GameEvent::NumberLineReached { .. })),
+        "a wrong stone must not log a find",
+    );
+
+    // Now walk to the called stone 6 at (11,13): the pearl pops out.
+    h.walk_to(11, 13);
     let events = h.events_since(mark);
     assert!(
-        events.iter().any(|e| matches!(e, GameEvent::NumberLineReached { mark: 6 })),
-        "hopping to the pearl should fire NumberLineReached {{ mark: 6 }}; got {:?}",
+        events.iter().any(|e| matches!(
+            e,
+            // The session opened on the first stone landed on (stone 3, one
+            // step into the walk), 3 hops from the goal — but the detour down
+            // to stone 1 and back cost 7. That gap is the silent signal.
+            GameEvent::NumberLineReached { mark: 6, jumps: 7, optimal: 3 }
+        )),
+        "finding the called stone should log the find with hop efficiency; got {:?}",
         events,
     );
-    assert_eq!(h.game.pearls, 1, "collecting the pearl awards one pearl");
+    assert_eq!(h.game.pearls, 1, "finding the pearl awards one pearl");
 }
 
 #[test]
@@ -1447,24 +1467,24 @@ fn diving_the_gauge_to_the_bottom_descends_to_the_trench() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
 
-    // The reef's dive gauge is a vertical shaft at col 24 (depths 0..5); the
-    // deepest stone (24,13) is the trench door. Hop down to it → descend.
+    // The reef's dive gauge is a vertical shaft at col 36 (depths 0..5); the
+    // deepest stone (36,13) is the trench door. Hop down to it → descend.
     let mut h = Harness::new(9);
     h.start_dev_game();
     h.game.map = Map::reef();
     h.game.npcs = npc_mod::npcs_for_map("reef");
     h.game.npcs_offstage.clear();
 
-    h.game.player.tile_x = 24;
+    h.game.player.tile_x = 36;
     h.game.player.tile_y = 10;
-    h.game.player.x = 24.0 * 48.0;
+    h.game.player.x = 36.0 * 48.0;
     h.game.player.y = 10.0 * 48.0;
     h.game.player.target_x = h.game.player.x;
     h.game.player.target_y = h.game.player.y;
     h.game.player.moving = false;
 
     // Hop down to depth 4, then step onto the deepest stone (the trench door).
-    h.walk_to(24, 12);
+    h.walk_to(36, 12);
     for _ in 0..60 {
         if h.game.map.id == "trench" { break; }
         h.hold(macroquad::prelude::KeyCode::Down);
@@ -1474,6 +1494,96 @@ fn diving_the_gauge_to_the_bottom_descends_to_the_trench() {
         robot_buddy_game::number_track::track_for_map("trench").is_some(),
         "the trench should have its own pearl path (the descent payoff)",
     );
+}
+
+#[test]
+fn every_visible_underwater_exit_sits_on_a_marker_tile() {
+    use robot_buddy_game::tilemap::{self, Map, RenderMode, Tile};
+
+    // The structural contract behind "the rise spots are invisible": any
+    // non-secret portal leaving an underwater map must sit on a tile that
+    // visibly flags it (rise column, whirlpool, or a door). A portal on plain
+    // floor is undiscoverable by a kid.
+    for p in tilemap::all_portals() {
+        let map = Map::by_id(p.from_map);
+        if map.render_mode != RenderMode::Aquatic || p.secret {
+            continue;
+        }
+        let tile = map.tiles[p.from_y][p.from_x];
+        assert!(
+            matches!(tile, Tile::RiseSpot | Tile::DiveSpot | Tile::Door),
+            "portal {}→{} at ({},{}) sits on an unmarked tile — invisible to the player",
+            p.from_map, p.to_map, p.from_x, p.from_y,
+        );
+    }
+}
+
+#[test]
+fn the_trench_is_explorable_end_to_end() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    // The trench roster has its own creatures (all giftable, per the themed-
+    // map convention) and its own Shelly running the deeper pearl path.
+    let roster = npc_mod::npcs_for_map("trench");
+    for kind in [npc_mod::NpcKind::Anglerfish, npc_mod::NpcKind::Eel, npc_mod::NpcKind::Clam] {
+        let n = roster.iter().find(|n| n.kind == kind)
+            .unwrap_or_else(|| panic!("trench roster should include {kind:?}"));
+        assert!(n.can_receive_gifts, "{kind:?} should be giftable");
+    }
+
+    // From the arrival ledge the kid can reach the pearl path, the treasure
+    // chest's doorstep in the vent field, and the rise spot home — the BFS
+    // walk itself is the reachability assertion (it panics if walled off).
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = Map::trench();
+    h.game.npcs.clear(); // wanderers out of the way; roster asserted above
+    h.game.npcs_offstage.clear();
+
+    h.game.player.tile_x = 13;
+    h.game.player.tile_y = 2;
+    h.game.player.x = 13.0 * 48.0;
+    h.game.player.y = 2.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    h.walk_to(16, 8);  // far end of the pearl path, mid-basin
+    h.walk_to(23, 14); // the chest's doorstep, deep in the vent field
+    h.walk_to(11, 2);  // back up to the arrival ledge, beside the rise spot...
+    h.step_through_portal(macroquad::prelude::KeyCode::Left, "reef"); // ...and up we go
+}
+
+#[test]
+fn myrtles_cottage_door_leads_inside_and_back() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    // The reef village's one open cottage: walk in the front door, meet
+    // Grandma Myrtle, walk back out.
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = Map::reef();
+    h.game.npcs = npc_mod::npcs_for_map("reef");
+    h.game.npcs_offstage.clear();
+
+    h.game.player.tile_x = 27;
+    h.game.player.tile_y = 20;
+    h.game.player.x = 27.0 * 48.0;
+    h.game.player.y = 20.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    h.walk_to(27, 19);
+    h.step_through_portal(KeyCode::Up, "cove_home");
+    assert!(
+        h.game.npcs.iter().any(|n| n.kind == npc_mod::NpcKind::TurtleElder),
+        "Grandma Myrtle should be home",
+    );
+    h.step_through_portal(KeyCode::Down, "reef");
 }
 
 #[test]

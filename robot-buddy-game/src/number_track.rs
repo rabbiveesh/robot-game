@@ -9,11 +9,14 @@
 
 /// A numbered path of tiles. `tiles[i]` is the stone for mark `i` (so they must
 /// be listed in order and each adjacent to the next). `target` is the index of
-/// the goal stone — hop there and the path gives a little cheer.
+/// the *initial* goal stone — the game rerolls it after each find. `clam` is
+/// the tile where Shelly the clam perches and calls out the goal number; her
+/// pearl hides under that stone, invisible until the kid lands on it.
 pub struct NumberTrack {
     pub id: &'static str,
     pub tiles: &'static [(usize, usize)],
     pub target: usize,
+    pub clam: (usize, usize),
 }
 
 impl NumberTrack {
@@ -46,11 +49,11 @@ impl DiveTrack {
 /// The dive-gauge shaft for `map_id`, if it has one.
 pub fn dive_track_for_map(map_id: &str) -> Option<DiveTrack> {
     match map_id {
-        // A vertical shaft in the reef's quiet east corner (col 24): hop DOWN
-        // the depth-stones 0..5; the deepest (depth 5, (24,13)) is the trench
+        // A vertical shaft on the reef's east edge (col 36): hop DOWN the
+        // depth-stones 0..5; the deepest (depth 5, (36,13)) is the trench
         // door. Inkwell the octopus loiters at the top.
         "reef" => Some(DiveTrack {
-            tiles: &[(24, 8), (24, 9), (24, 10), (24, 11), (24, 12), (24, 13)],
+            tiles: &[(36, 8), (36, 9), (36, 10), (36, 11), (36, 12), (36, 13)],
             target: 5,
         }),
         _ => None,
@@ -60,9 +63,9 @@ pub fn dive_track_for_map(map_id: &str) -> Option<DiveTrack> {
 /// The ambient number path for `map_id`, if it has one.
 pub fn track_for_map(map_id: &str) -> Option<NumberTrack> {
     match map_id {
-        // Reef row 13 is a long clear stretch of the lower basin — stepping-
-        // stones the kid hops along (marks 0..11). `target` is the *initial*
-        // goal; the game moves the pearl to a new stone after each collection.
+        // Reef row 13 is a long clear stretch of the middle basin — stepping-
+        // stones the kid hops along (marks 0..11). Shelly perches just west of
+        // stone 0 and calls the goal number.
         "reef" => Some(NumberTrack {
             id: "reef_path_1",
             tiles: &[
@@ -70,16 +73,18 @@ pub fn track_for_map(map_id: &str) -> Option<NumberTrack> {
                 (11, 13), (12, 13), (13, 13), (14, 13), (15, 13), (16, 13),
             ],
             target: 6,
+            clam: (3, 13),
         }),
         // The trench (deeper zone) has its own, richer pearl path — the payoff
-        // for descending. Row 6, marks 0..9; pearl starts on 4.
+        // for descending. Row 8, marks 0..11.
         "trench" => Some(NumberTrack {
             id: "trench_path_1",
             tiles: &[
-                (3, 6), (4, 6), (5, 6), (6, 6), (7, 6),
-                (8, 6), (9, 6), (10, 6), (11, 6), (12, 6),
+                (5, 8), (6, 8), (7, 8), (8, 8), (9, 8), (10, 8),
+                (11, 8), (12, 8), (13, 8), (14, 8), (15, 8), (16, 8),
             ],
-            target: 4,
+            target: 7,
+            clam: (3, 8),
         }),
         _ => None,
     }
@@ -90,14 +95,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reef_track_is_ordered_and_adjacent() {
-        let t = track_for_map("reef").unwrap();
-        for pair in t.tiles.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            let dist = (a.0 as i32 - b.0 as i32).abs() + (a.1 as i32 - b.1 as i32).abs();
-            assert_eq!(dist, 1, "stones {a:?} and {b:?} must be adjacent");
+    fn tracks_are_ordered_adjacent_with_clam_off_the_path() {
+        for map_id in ["reef", "trench"] {
+            let t = track_for_map(map_id).unwrap();
+            for pair in t.tiles.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                let dist = (a.0 as i32 - b.0 as i32).abs() + (a.1 as i32 - b.1 as i32).abs();
+                assert_eq!(dist, 1, "{map_id}: stones {a:?} and {b:?} must be adjacent");
+            }
+            assert!(t.target < t.tiles.len(), "{map_id}: target index in range");
+            assert!(
+                t.index_of(t.clam).is_none(),
+                "{map_id}: Shelly's perch must not sit on a stone (she'd block the path)",
+            );
         }
-        assert!(t.target < t.tiles.len(), "target index in range");
     }
 
     #[test]

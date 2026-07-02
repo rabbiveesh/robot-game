@@ -37,6 +37,9 @@ use robot_buddy_domain::logic::patterns::{
 use robot_buddy_domain::logic::balance::{
     self, BalancePhase, BalanceSession, generate_for_band as generate_balance_for_band,
 };
+use robot_buddy_domain::logic::number_line::{
+    NumberLineAction, NumberLineSession, generate_target, number_line_reducer,
+};
 use robot_buddy_domain::logic::sudoku::{
     self, SudokuPhase, SudokuSession, generate_for_level as generate_sudoku_for_level,
 };
@@ -348,9 +351,12 @@ pub enum GameEvent {
     EncounterTriggered { kind: String },
     /// A quest run reached its final step.
     QuestCompleted,
-    /// The kid hopped to the goal stone of an ambient number-line path. `mark`
-    /// is the stone's number (the target index walked to).
-    NumberLineReached { mark: u8 },
+    /// The kid found Shelly's pearl: landed on the called-out stone of a
+    /// number path. `mark` is the stone's number; `jumps` is how many stone-
+    /// to-stone hops the kid took vs the `optimal` straight count-on from
+    /// where they stepped onto the path — silent efficiency signal for the
+    /// adaptive system (never shown to the kid).
+    NumberLineReached { mark: u8, jumps: u8, optimal: u8 },
     SudokuStarted { grid_size: u8, source: String },
     SudokuResolved {
         correct: bool,
@@ -395,10 +401,24 @@ pub struct Game {
     /// ambient number-line path — so the pearl is collected once on arrival,
     /// not every frame they linger on it.
     track_on_target: bool,
-    /// Current goal stone (index along the path) holding the pearl. Starts at
-    /// the track's static target; hops to a new stone after each pearl is
-    /// collected, so the path is a repeatable counting game.
+    /// The stone Shelly's pearl hides under (index along the path). She calls
+    /// this number out in her bubble; the pearl itself is invisible — reading
+    /// the numeral and finding that stone IS the game. Rerolled after each
+    /// find.
     track_goal: usize,
+    /// Domain number-line session for the current find: created when the kid
+    /// steps onto the path, fed one jump per stone-to-stone hop. `jumps` vs
+    /// `optimal_jumps()` silently reads whether the kid counted on or
+    /// wandered (stealth assessment, per the adaptive-learning spec).
+    track_session: Option<NumberLineSession>,
+    /// Stone the player stood on last frame (`None` when off the path) —
+    /// resets the dwell timer on each hop.
+    track_last_stone: Option<usize>,
+    /// Seconds spent standing still on a wrong stone; past a beat, Shelly
+    /// nudges with a bigger/smaller hint. Never a penalty — rule 7.
+    track_dwell: f32,
+    /// Stone the dwell-nudge already fired for (once per visit, not per frame).
+    track_hinted: Option<usize>,
     /// Brief floating cheer text + remaining seconds, shown after a collection.
     track_toast: Option<(String, f32)>,
     /// Reef-local currency, earned hopping the number path and (later) from the
@@ -536,6 +556,10 @@ impl Game {
             sparky_map: SPARKY_HOME_MAP,
             track_on_target: false,
             track_goal: number_track::track_for_map("reef").map(|t| t.target).unwrap_or(0),
+            track_session: None,
+            track_last_stone: None,
+            track_dwell: 0.0,
+            track_hinted: None,
             track_toast: None,
             pearls: 0,
             pearl_hud: PearlHud::new(),
@@ -883,8 +907,8 @@ impl Game {
 
         // Buddies heading off-map blink home once they've walked out of view.
         if self.state == GameState::Playing {
-            self.evict_offscreen_leavers();
-            self.check_number_track_landing();
+            self.evict_offscreen_leavers(screen);
+            self.check_number_track_landing(dt);
         }
 
         // Interaction menu input (layout from step-side; render() draws separately)
@@ -1451,13 +1475,13 @@ impl Game {
         // Snapshot the camera rect once so the wander gate doesn't re-borrow
         // self mid-iteration. Off-screen wanderers freeze: no cooldown tick,
         // no random direction roll. The kid you can't see isn't burning RNG.
-        let cam = (self.camera.x, self.camera.y);
+        let view = visible_world_rect((self.camera.x, self.camera.y), screen);
         for (i, n) in self.npcs.iter_mut().enumerate() {
             let intent = if n.homing {
                 // A buddy walking back to its spot finishes the trip even if it
                 // strolls off-screen — it's a short, finite route.
                 n.next_homing_intent()
-            } else if npc_in_camera(cam, n) {
+            } else if npc_in_camera(view, n) {
                 n.next_intent(dt, &mut self.rng)
             } else {
                 MoveIntent::Stay
@@ -1986,8 +2010,13 @@ impl Game {
         };
         self.events.push(GameEvent::EncounterTriggered { kind: label.into() });
         match kind {
-            EncounterKind::FlavorDialogue { speaker, text } => {
-                self.start_dialogue(vec![DialogueLine { speaker, text }]);
+            EncounterKind::FlavorDialogue { text } => {
+                // Whoever's tagging along does the chattering — Sparky or the
+                // current NPC buddy.
+                self.start_dialogue(vec![DialogueLine {
+                    speaker: self.current_buddy_name(),
+                    text,
+                }]);
                 self.set_state(GameState::Dialogue);
             }
             EncounterKind::FoundDumDum => {
@@ -2976,25 +3005,93 @@ impl Game {
         }
     }
 
-    /// Ambient number-line path: when the kid hops onto the goal stone (the one
-    /// with the pearl), collect it — +1 pearl, a cheer, and the pearl hops to a
-    /// fresh stone so the path is a repeatable counting game. Rising-edge so it
-    /// fires once per arrival. Pure reward; never gates progress.
-    fn check_number_track_landing(&mut self) {
+    /// Shelly's pearl game on the number path: she calls out a stone number in
+    /// her bubble; her pearl hides UNDER that stone, invisible. Reading the
+    /// numeral and walking the path to it is the whole game — find it and the
+    /// pearl pops out (+1, cheer), then she hides it under a new number.
+    ///
+    /// Every stone-to-stone hop feeds a domain `NumberLineSession`, so the
+    /// event log silently records hops-taken vs the straight count-on
+    /// (stealth assessment). Standing a beat on a wrong stone gets a gentle
+    /// bigger/smaller nudge from Shelly — scaffolding, never a buzzer.
+    /// Pure reward; never gates progress.
+    fn check_number_track_landing(&mut self, dt: f32) {
         let track = match number_track::track_for_map(self.map.id) {
             Some(t) => t,
-            None => { self.track_on_target = false; return; }
+            None => {
+                self.track_on_target = false;
+                self.track_session = None;
+                self.track_last_stone = None;
+                return;
+            }
         };
         let goal = self.track_goal.min(track.tiles.len() - 1);
-        let goal_tile = track.tiles[goal];
-        let on_goal = (self.player.tile_x, self.player.tile_y) == goal_tile;
+        let here = track.index_of((self.player.tile_x, self.player.tile_y));
+
+        let i = match here {
+            None => {
+                // Off the path: bailing is always free. Keep the session — the
+                // kid may be detouring around a creature — but stop dwelling.
+                self.track_on_target = false;
+                self.track_last_stone = None;
+                self.track_dwell = 0.0;
+                return;
+            }
+            Some(i) => i,
+        };
+
+        // Feed the hop into the domain session (starting one on first touch).
+        match &mut self.track_session {
+            None => {
+                self.track_session = Some(NumberLineSession::new(generate_target(
+                    i as u8,
+                    goal as u8,
+                    (track.tiles.len() - 1) as u8,
+                )));
+            }
+            Some(s) => {
+                let pos = s.position as usize;
+                if i != pos {
+                    let action = if i > pos {
+                        NumberLineAction::JumpForward { n: (i - pos) as u8 }
+                    } else {
+                        NumberLineAction::JumpBackward { n: (pos - i) as u8 }
+                    };
+                    *s = number_line_reducer(s.clone(), action);
+                }
+            }
+        }
+
+        let on_goal = i == goal;
+
+        // Dwell nudge: pause on a wrong stone and Shelly compares numbers for
+        // you — "bigger" / "smaller" is real count-on scaffolding.
+        if self.track_last_stone != Some(i) {
+            self.track_last_stone = Some(i);
+            self.track_dwell = 0.0;
+        }
+        self.track_dwell += dt;
+        if !on_goal && self.track_dwell > 1.2 && self.track_hinted != Some(i) {
+            self.track_hinted = Some(i);
+            let hint = if i < goal {
+                format!("That's stone {i} — my pearl's under a BIGGER number!")
+            } else {
+                format!("That's stone {i} — too big! Hop back toward {goal}!")
+            };
+            self.track_toast = Some((hint, 2.2));
+        }
 
         if on_goal && !self.track_on_target {
             self.pearls = self.pearls.saturating_add(1);
             self.pearl_hud.flash();
-            self.events.push(GameEvent::NumberLineReached { mark: goal as u8 });
-            self.track_toast = Some((format!("You hopped to {goal}!  +1 pearl"), 1.8));
-            // Hop the pearl to a different stone for the next round.
+            let (jumps, optimal) = self
+                .track_session
+                .as_ref()
+                .map(|s| (s.jumps, s.optimal_jumps()))
+                .unwrap_or((0, 0));
+            self.events.push(GameEvent::NumberLineReached { mark: goal as u8, jumps, optimal });
+            self.track_toast = Some((format!("The pearl was under stone {goal}!  +1 pearl"), 2.0));
+            // Shelly hides the pearl under a different stone for the next round.
             if track.tiles.len() > 1 {
                 let mut next = goal;
                 while next == goal {
@@ -3002,6 +3099,8 @@ impl Game {
                 }
                 self.track_goal = next;
             }
+            self.track_session = None;
+            self.track_hinted = None;
         }
         self.track_on_target = on_goal;
     }
@@ -3010,10 +3109,10 @@ impl Game {
     /// moment it walks off-screen or reaches the exit doorway. Until then it's a
     /// normal roster NPC strolling toward the door. Keeps the "walk out, then
     /// teleport" illusion without ever stranding a buddy on the wrong map.
-    fn evict_offscreen_leavers(&mut self) {
-        let cam = (self.camera.x, self.camera.y);
+    fn evict_offscreen_leavers(&mut self, screen: (f32, f32)) {
+        let view = visible_world_rect((self.camera.x, self.camera.y), screen);
         let gone: Vec<usize> = self.npcs.iter().enumerate()
-            .filter(|(_, n)| n.leaving_map && (!npc_in_camera(cam, n) || !n.homing))
+            .filter(|(_, n)| n.leaving_map && (!npc_in_camera(view, n) || !n.homing))
             .map(|(i, _)| i)
             .collect();
         for i in gone.into_iter().rev() {
@@ -3339,6 +3438,10 @@ impl Game {
         // Reset the ambient pearl to the new map's path start (if any).
         self.track_goal = number_track::track_for_map(dest_id).map(|t| t.target).unwrap_or(0);
         self.track_on_target = false;
+        self.track_session = None;
+        self.track_last_stone = None;
+        self.track_dwell = 0.0;
+        self.track_hinted = None;
 
         self.player.tile_x = dest_x;
         self.player.tile_y = dest_y;
@@ -3409,7 +3512,12 @@ impl Game {
             });
 
             clear_background(Color::from_rgba(26, 26, 46, 255));
-            tilemap::draw_map(&self.map, self.camera.x, self.camera.y, GAME_W, GAME_H, self.game_time);
+            // Draw the tiles the camera actually shows — the whole window, not
+            // just the logical 960×720 frame. This is the structural guarantee
+            // that nothing world-space (stones, sprites, markers) can ever be
+            // visible over undrawn void: wherever the camera looks, tiles are.
+            let view = visible_world_rect((self.camera.x, self.camera.y), (sw, sh));
+            tilemap::draw_map(&self.map, view.x, view.y, view.w, view.h, self.game_time);
 
             // Embodied number line: stepping-stones drawn on the ground (under
             // the sprites) so the kid hops across the numbers.
@@ -3452,13 +3560,10 @@ impl Game {
                 let y = if c.is_rideable() { self.player.y - 1.0 } else { c.entity.y };
                 renderables.push(Renderable { y, kind: SpriteKind::Npc(c) });
             }
-            // Cull roster NPCs outside the viewport. The map only draws the
-            // tiles under the camera (everything else is the void-blue clear
-            // color), so an unculled wanderer off to the side would float in
-            // that void instead of staying hidden until the camera reaches it.
-            let cam = (self.camera.x, self.camera.y);
+            // Skip roster NPCs outside the visible rect — pure draw-call
+            // thrift; anywhere visible has tiles under it now.
             for n in &self.npcs {
-                if npc_in_camera(cam, n) {
+                if npc_in_camera(view, n) {
                     renderables.push(Renderable { y: n.entity.y, kind: SpriteKind::Npc(n) });
                 }
             }
@@ -4251,6 +4356,26 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
             "Count the depths as you go down: 0, 1, 2... the bottom stone is the trench door!",
             "Eight arms, and I STILL can't count past the deep stone. You try it!",
         ],
+        Clam => &[
+            "Brrbl! My pearl is hiding under a stone — the number in my bubble says WHICH one!",
+            "Read my number, then hop the stones till you find it. No peeking... okay, peek all you want!",
+            "Every time you find my pearl, I hide it again. It's my favorite game!",
+        ],
+        Anglerfish => &[
+            "Like my light? I grew it myself! It's for finding pearls... and friends!",
+            "Down here the dark is friendly — especially with a lamp on your head!",
+            "If you get lost in the trench, just follow the glow. That's me!",
+        ],
+        Eel => &[
+            "Wiggle wiggle! I know every crack and cranny in this trench!",
+            "Did somebody say TREASURE? There's a chest past the vents, you know.",
+            "I'm not slimy, I'm streamlined!",
+        ],
+        TurtleElder => &[
+            "Come in, come in, little swimmer! Mind the kettle vent, it bubbles.",
+            "I've lived on this reef two hundred years. The numbered stones? I helped lay them!",
+            "Rest your fins a moment, dear. Adventuring is hungry work.",
+        ],
         MoonAlien => &[
             "Zorp! You bounced all the way to the Moon! Boing boing!",
             "Low gravity is the BEST. Watch me jump super high! Wheee!",
@@ -4289,17 +4414,29 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
     vec![DialogueLine { speaker: npc.name().into(), text: lines[idx].into() }]
 }
 
-/// True iff any pixel of the NPC's tile rect overlaps the camera viewport.
+/// The world-space rect the camera actually shows. `render_world`'s Camera2D
+/// maps one world pixel to one screen pixel, centered on the logical
+/// GAME_W×GAME_H frame — so a window larger than 960×720 sees MORE world than
+/// the frame. Every "is it on screen" decision (tile drawing, atmosphere
+/// overlays, sprite culling, leaver eviction) must go through this one rect;
+/// anything measured against GAME_W×GAME_H instead ends up drawn over — or
+/// hidden inside — the undrawn void at the window's fringe.
+pub fn visible_world_rect(cam: (f32, f32), screen: (f32, f32)) -> Rect {
+    let (sw, sh) = screen;
+    Rect::new(
+        cam.0 + (GAME_W - sw) / 2.0,
+        cam.1 + (GAME_H - sh) / 2.0,
+        sw,
+        sh,
+    )
+}
+
+/// True iff any pixel of the NPC's tile rect overlaps the visible world rect.
 /// Used to gate wander cooldown ticks — off-screen wanderers freeze in place
 /// so unseen rooms don't burn RNG and don't have characters drifting around
 /// out of sight.
-fn npc_in_camera(cam: (f32, f32), n: &npc::Npc) -> bool {
-    let x = n.entity.x;
-    let y = n.entity.y;
-    x + TILE_SIZE > cam.0
-        && x < cam.0 + GAME_W
-        && y + TILE_SIZE > cam.1
-        && y < cam.1 + GAME_H
+fn npc_in_camera(view: Rect, n: &npc::Npc) -> bool {
+    view.overlaps(&Rect::new(n.entity.x, n.entity.y, TILE_SIZE, TILE_SIZE))
 }
 
 fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Npc]) -> (usize, usize) {
@@ -4428,11 +4565,12 @@ fn secret_entry_dialogue(map_id: &str, speaker: &str) -> Vec<DialogueLine> {
         "reef" => vec![
             line("BLUB BLUB! We're UNDERWATER, boss! And I didn't even rust! Best upgrade EVER!"),
             line("Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!"),
-            line("Ooh, glowy stepping-stones with numbers! Hop along them to the shiny PEARL!"),
+            line("See Shelly the clam by the number-stones? Her bubble says which stone hides her PEARL!"),
+            line("And little houses to the east! An underwater VILLAGE! Can we knock? Please please please?"),
         ],
         "trench" => vec![
-            line("WHOA, the deep trench! It's darker down here, boss... and SO many pearls!"),
-            line("More glowy number-stones! Hop to the pearl — and step on the bubbly tile to surface again."),
+            line("WHOA, the deep trench! It's darker down here, boss... and look at all the glowing vents!"),
+            line("There's another Shelly with number-stones — find her pearl! The bright bubble column takes us back up."),
         ],
         "space_hub" => vec![
             line("3... 2... 1... BLAST OFF! WHEEEE! Boss, we're in SPACE! Actual outer SPACE!"),
@@ -4443,9 +4581,9 @@ fn secret_entry_dialogue(map_id: &str, speaker: &str) -> Vec<DialogueLine> {
 }
 
 /// Draw the ambient number-line stepping-stones in world space (under the
-/// sprites). Stones up to the kid's current stone are lit; the `goal` stone
-/// carries a shimmering pearl and bursts when stood on. `here` is the kid's
-/// mark, if on the path.
+/// sprites), plus Shelly's callout bubble naming the goal stone. Stones up to
+/// the kid's current stone are lit; the pearl stays hidden until the kid
+/// stands on the called-out stone. `here` is the kid's mark, if on the path.
 fn draw_number_track(
     track: &number_track::NumberTrack,
     here: Option<usize>,
@@ -4474,20 +4612,49 @@ fn draw_number_track(
         };
         draw_text(&label, cx - tw / 2.0, cy + 7.0, 22.0, tc);
 
-        // The pearl sits above the goal stone, bobbing.
-        if i == goal {
+        // The pearl is HIDDEN under the goal stone — no marker; finding it by
+        // reading Shelly's number is the game. On the find, it pops out.
+        if i == goal && here == Some(goal) {
             let bob = (time * 2.5).sin() * 3.0;
-            let py = cy - TILE_SIZE * 0.32 + bob;
+            let py = cy - TILE_SIZE * 0.45 + bob;
             let pulse = (time * 4.0).sin() * 0.5 + 0.5;
             draw_circle_lines(cx, py, 11.0 + pulse * 3.0, 2.0,
                 Color::new(0.70, 0.92, 0.96, 0.5 + 0.4 * pulse));
             draw_circle(cx, py, 8.0, Color::from_rgba(225, 245, 254, 255));
             draw_circle(cx - 2.5, py - 2.5, 2.5, Color::from_rgba(255, 255, 255, 235));
-            if here == Some(goal) {
-                draw_circle_lines(cx, cy, TILE_SIZE * 0.52, 2.0,
-                    Color::new(1.0, 0.84, 0.30, 0.9));
-            }
+            draw_circle_lines(cx, cy, TILE_SIZE * 0.52, 2.0,
+                Color::new(1.0, 0.84, 0.30, 0.9));
         }
+    }
+
+    // Shelly's callout bubble over her perch: the goal number, big, with a
+    // row of countable pips under it so pre-readers can match by counting.
+    let (ccol, crow) = track.clam;
+    let bx = (ccol as f32 + 0.5) * TILE_SIZE;
+    let pip_rows = (goal + 4) / 5; // pips laid out in rows of 5
+    let bh = 30.0 + pip_rows as f32 * 8.0;
+    let bw = 44.0;
+    let by = crow as f32 * TILE_SIZE - bh - 6.0 + (time * 1.8).sin() * 2.0;
+    draw_rectangle(bx - bw / 2.0, by, bw, bh, Color::from_rgba(250, 252, 255, 235));
+    draw_rectangle_lines(bx - bw / 2.0, by, bw, bh, 2.0, Color::from_rgba(120, 160, 190, 255));
+    draw_triangle(
+        vec2(bx - 5.0, by + bh),
+        vec2(bx + 5.0, by + bh),
+        vec2(bx, by + bh + 6.0),
+        Color::from_rgba(250, 252, 255, 235),
+    );
+    let label = format!("{goal}");
+    let tw = measure_text(&label, None, 26, 1.0).width;
+    draw_text(&label, bx - tw / 2.0, by + 22.0, 26.0, Color::from_rgba(40, 70, 100, 255));
+    let pip = Color::from_rgba(90, 150, 190, 255);
+    for p in 0..goal {
+        let (prow, pcol) = (p / 5, p % 5);
+        draw_circle(
+            bx - 14.0 + pcol as f32 * 7.0,
+            by + 28.0 + prow as f32 * 8.0,
+            2.2,
+            pip,
+        );
     }
 }
 
@@ -4550,6 +4717,22 @@ mod tests {
         assert!(g.player_path.is_empty(), "walk path must not survive into another state");
         assert_eq!(g.pending_interact, None, "pending auto-interact must be cancelled");
         assert_eq!(g.click_target, None, "walk marker must be cleared");
+    }
+
+    // ── The visible-rect seam: what the camera shows is what gets drawn ──
+    #[test]
+    fn visible_world_rect_matches_the_window_not_the_logical_frame() {
+        // At the logical size the rect IS the camera frame.
+        let r = visible_world_rect((96.0, 48.0), (GAME_W, GAME_H));
+        assert_eq!((r.x, r.y, r.w, r.h), (96.0, 48.0, GAME_W, GAME_H));
+
+        // A larger window sees MORE world, centered on the same frame — the
+        // extra margin splits evenly on both sides. draw_map and the sprite
+        // culling both consume this rect, so nothing can be visible over
+        // undrawn tiles at the window fringe.
+        let r = visible_world_rect((96.0, 48.0), (GAME_W + 200.0, GAME_H + 100.0));
+        assert_eq!((r.x, r.y), (96.0 - 100.0, 48.0 - 50.0));
+        assert_eq!((r.w, r.h), (GAME_W + 200.0, GAME_H + 100.0));
     }
 
     // ── Fix #2: tap→tile mapping holds when the window isn't 960×720 ──

@@ -547,3 +547,108 @@ pub fn draw_signpost(x: f32, y: f32, time: f32) {
     draw_line(bx + 10.0, by + 13.0, bx + 16.0, by + 15.0, 1.5, eye);
     draw_line(bx + 16.0, by + 15.0, bx + 22.0, by + 13.0, 1.5, eye);
 }
+
+/// Shelly the pearl clam: a scalloped shell that yawns open and shut, with a
+/// pearl glinting inside and little eyes peeking over the lip. She's the
+/// signpost of the number-path game, so she reads friendly, not like scenery.
+pub fn draw_clam(x: f32, y: f32, time: f32) {
+    let cx = x + TS / 2.0;
+    let cy = y + TS / 2.0 + 6.0;
+    let shell = Color::from_rgba(240, 170, 180, 255);
+    let lip = Color::from_rgba(200, 120, 135, 255);
+
+    draw_ellipse(cx, y + TS - 3.0, 13.0, 4.0, 0.0, Color::from_rgba(0, 0, 0, 40));
+
+    // Bottom shell half.
+    draw_ellipse(cx, cy + 4.0, 14.0, 7.0, 0.0, shell);
+    // The gap yawns open and shut; the pearl glints inside when it's open.
+    let yawn = ((time * 1.2).sin() * 0.5 + 0.5) * 6.0;
+    draw_ellipse(cx, cy + 1.0 - yawn * 0.3, 12.0, 3.0 + yawn * 0.4, 0.0,
+        Color::from_rgba(60, 30, 45, 255));
+    let glint = (time * 3.0).sin() * 0.5 + 0.5;
+    draw_circle(cx, cy + 1.0 - yawn * 0.3, 2.5 + glint,
+        Color::from_rgba(235, 245, 254, 230));
+    // Top shell half, hinged at the back, lifting with the yawn.
+    draw_ellipse(cx, cy - 3.0 - yawn, 13.0, 6.0, 0.0, shell);
+    // Scallop ridges.
+    for i in -1..=1 {
+        let rx = cx + i as f32 * 7.0;
+        draw_line(rx, cy - 6.0 - yawn, rx, cy - 1.0 - yawn, 1.5, lip);
+    }
+    // Eyes peeking over the top lip.
+    let eye = Color::from_rgba(33, 33, 33, 255);
+    draw_circle(cx - 4.0, cy - 8.0 - yawn, 2.5, WHITE);
+    draw_circle(cx + 4.0, cy - 8.0 - yawn, 2.5, WHITE);
+    draw_circle(cx - 4.0, cy - 8.0 - yawn, 1.2, eye);
+    draw_circle(cx + 4.0, cy - 8.0 - yawn, 1.2, eye);
+}
+
+/// Glimmer the anglerfish: round dark body, big grin, and a lure that swings
+/// on its stalk casting real light — the trench's friendly lantern.
+pub fn draw_anglerfish(x: f32, y: f32, dir: Dir, time: f32) {
+    let cx = x + TS / 2.0;
+    let cy = y + TS / 2.0 + 2.0 + (time * 1.6).sin() * 2.0;
+    let body = Color::from_rgba(60, 70, 110, 255);
+    let fin = Color::from_rgba(45, 52, 88, 255);
+    // Drawn facing right; mirror when swimming left.
+    let f = if dir == Dir::Left { -1.0 } else { 1.0 };
+    let mx = |off: f32| cx + f * off;
+
+    draw_ellipse(cx, y + TS - 4.0, 12.0, 5.0, 0.0, Color::from_rgba(0, 0, 0, 40));
+
+    // Lure: stalk arcs forward from the forehead, tip swings and glows.
+    let sway = (time * 2.2).sin() * 3.0;
+    let (lx, ly) = (mx(10.0 + sway * 0.4), cy - 14.0 + (time * 2.8).cos() * 1.5);
+    draw_line(mx(-2.0), cy - 8.0, mx(4.0), cy - 15.0, 2.0, fin);
+    draw_line(mx(4.0), cy - 15.0, lx, ly, 2.0, fin);
+    let pulse = (time * 4.0).sin() * 0.5 + 0.5;
+    draw_circle(lx, ly, 6.0 + pulse * 3.0, Color::new(1.0, 0.95, 0.6, 0.25));
+    draw_circle(lx, ly, 3.0, Color::from_rgba(255, 240, 170, 255));
+
+    // Tail fin, then body over it.
+    draw_triangle(
+        vec2(mx(-10.0), cy),
+        vec2(mx(-18.0), cy - 6.0),
+        vec2(mx(-18.0), cy + 6.0),
+        fin,
+    );
+    draw_circle(cx, cy, 11.0, body);
+    // Big friendly grin with two stubby teeth.
+    draw_line(mx(2.0), cy + 4.0, mx(10.0), cy + 1.0, 2.0, Color::from_rgba(20, 24, 44, 255));
+    draw_rectangle(mx(4.0), cy + 3.0, 2.0, 3.0, WHITE);
+    draw_rectangle(mx(7.5), cy + 2.0, 2.0, 3.0, WHITE);
+    // Eye catching the lure light.
+    draw_circle(mx(4.0), cy - 3.0, 3.5, WHITE);
+    draw_circle(mx(4.5), cy - 3.0, 1.8, Color::from_rgba(33, 33, 33, 255));
+}
+
+/// Wiggles the eel: a sinuous ribbon of segments trailing the head, always
+/// mid-wriggle. Friendly face so nobody's scared of the pocket he guards.
+pub fn draw_eel(x: f32, y: f32, dir: Dir, time: f32) {
+    let cx = x + TS / 2.0;
+    let cy = y + TS / 2.0 + 4.0;
+    let body = Color::from_rgba(110, 180, 130, 255);
+    let belly = Color::from_rgba(170, 215, 175, 255);
+    let f = if dir == Dir::Left { -1.0 } else { 1.0 };
+    let mx = |off: f32| cx + f * off;
+
+    draw_ellipse(cx, y + TS - 4.0, 13.0, 4.0, 0.0, Color::from_rgba(0, 0, 0, 40));
+
+    // Body: segments snake behind the head, each a beat out of phase.
+    for i in 0..6 {
+        let t = i as f32;
+        let sx = mx(6.0 - t * 4.5);
+        let sy = cy + ((time * 3.0 - t * 0.8).sin()) * (2.0 + t * 0.8);
+        let r = 6.0 - t * 0.6;
+        draw_circle(sx, sy, r, body);
+    }
+    // Head + belly patch.
+    let hy = cy + (time * 3.0).sin() * 2.0;
+    draw_circle(mx(8.0), hy, 6.5, body);
+    draw_ellipse(mx(8.0), hy + 3.0, 4.5, 2.5, 0.0, belly);
+    // Face.
+    let eye = Color::from_rgba(33, 33, 33, 255);
+    draw_circle(mx(10.0), hy - 2.0, 2.5, WHITE);
+    draw_circle(mx(10.5), hy - 2.0, 1.2, eye);
+    draw_line(mx(6.0), hy + 3.0, mx(11.0), hy + 3.5, 1.5, eye);
+}
