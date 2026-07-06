@@ -807,8 +807,13 @@ impl Game {
             self.parent_panel_open = true;
         }
 
-        // Backtick toggles the dev debug overlay (moved off P).
-        if !self.settings_open && input.pressed(KeyCode::GraveAccent)
+        // Backtick toggles the dev debug overlay. Accept both the keycode and
+        // the typed '`' char — on web these arrive via independent browser
+        // events (keydown vs. keypress), so honoring either is robust to
+        // keyboard-mapping quirks. (Session export is also on the parent panel,
+        // reachable by mouse, if the key still won't cooperate.)
+        let backtick = input.pressed(KeyCode::GraveAccent) || input.chars_typed.contains(&'`');
+        if !self.settings_open && backtick
             && self.state != GameState::Title && self.state != GameState::NewGame
         {
             self.debug_overlay.toggle();
@@ -2884,6 +2889,16 @@ impl Game {
                         Feature::Encounters => self.features.encounters = !self.features.encounters,
                         Feature::Quest => self.features.quest = !self.features.quest,
                     },
+                    // Mouse-reachable session export (parent dashboard). Same
+                    // payload as the debug overlay's Export button.
+                    SettingsResult::ExportSession => {
+                        let json = session::build_export(
+                            &self.player_name, &self.session_log, &self.gifts_given,
+                            self.dum_dums, self.play_time, &self.profile, self.map.id,
+                        );
+                        let filename = format!("robot-buddy-session-{}.json", self.play_time as u64);
+                        session::download_json(&json, &filename);
+                    }
                     SettingsResult::Close => {
                         self.settings_open = false;
                         self.parent_panel_open = false;

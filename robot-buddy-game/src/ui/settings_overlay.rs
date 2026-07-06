@@ -17,6 +17,9 @@ pub enum SettingsResult {
     ToggleParentPanel,
     /// Flip an experimental feature flag on the live `Game`.
     ToggleFeature(Feature),
+    /// Download the session JSON (event log + profile). Mouse-reachable so it
+    /// doesn't depend on the backtick/debug-overlay keybind.
+    ExportSession,
 }
 
 const PANEL_BG: Color = Color::new(0.086, 0.129, 0.243, 1.0);      // #16213E
@@ -37,6 +40,7 @@ enum RowAction {
     SetSpeed(TextSpeed),
     ToggleParentPanel,
     ToggleFeature(Feature),
+    ExportSession,
     BackToTitle,
     Done,
 }
@@ -65,7 +69,8 @@ fn layout(screen: (f32, f32), parent_open: bool) -> (f32, f32, f32, f32, Vec<Row
     // Panel height: base content + the parent section when expanded.
     let base_h = 540.0;
     let extra = if parent_open {
-        FEATURES.len() as f32 * (feature_h + feature_gap) + 24.0
+        // Feature toggles + the Export-session button.
+        (FEATURES.len() as f32 + 1.0) * (feature_h + feature_gap) + 24.0
     } else {
         0.0
     };
@@ -103,6 +108,9 @@ fn layout(screen: (f32, f32), parent_open: bool) -> (f32, f32, f32, f32, Vec<Row
             rows.push(Row { rect: (panel_x + pad, cursor, inner_w, feature_h), action: RowAction::ToggleFeature(feature) });
             cursor += feature_h + feature_gap;
         }
+        // Export the session data (parent dashboard action).
+        rows.push(Row { rect: (panel_x + pad, cursor, inner_w, feature_h), action: RowAction::ExportSession });
+        cursor += feature_h + feature_gap;
         cursor += 12.0;
     }
 
@@ -196,6 +204,12 @@ pub fn draw(screen: (f32, f32), features: FeatureFlags, parent_open: bool) {
                 let lw = measure_text(&label, None, 20, 1.0).width;
                 draw_text(&label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 7.0, 20.0, fg);
             }
+            RowAction::ExportSession => {
+                round_rect(x, y, w, h, 8.0, BTN_OFF);
+                let label = "Export session data";
+                let lw = measure_text(label, None, 20, 1.0).width;
+                draw_text(label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 7.0, 20.0, ACCENT);
+            }
             RowAction::BackToTitle => {
                 round_rect(x, y, w, h, 8.0, BTN_OFF);
                 let label = "Back to title screen";
@@ -253,6 +267,7 @@ pub fn handle_input(input: &FrameInput, screen: (f32, f32), parent_open: bool) -
                 }
                 RowAction::ToggleParentPanel => return Some(SettingsResult::ToggleParentPanel),
                 RowAction::ToggleFeature(f) => return Some(SettingsResult::ToggleFeature(f)),
+                RowAction::ExportSession => return Some(SettingsResult::ExportSession),
                 RowAction::BackToTitle => return Some(SettingsResult::BackToTitle),
                 RowAction::Done => return Some(SettingsResult::Close),
             }
