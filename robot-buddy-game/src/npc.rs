@@ -41,6 +41,9 @@ pub enum NpcKind {
     MarsGuardian,
     StarKeeper,
     StationAlien,
+    /// Blaster Bubbe — runs the arcade cabinet on the Goyish Map. Interacting
+    /// launches the number-bond space shooter (`GameState::Shooter`).
+    ArcadeAlien,
     CtrlBand,
     CtrlKenkenLevel,
     CtrlCraReset,
@@ -87,6 +90,7 @@ impl NpcKind {
             NpcKind::MarsGuardian => "mars_guardian",
             NpcKind::StarKeeper => "star_keeper",
             NpcKind::StationAlien => "station_alien",
+            NpcKind::ArcadeAlien => "arcade_alien",
             NpcKind::CtrlBand => "ctrl_band",
             NpcKind::CtrlKenkenLevel => "ctrl_kenken_level",
             NpcKind::CtrlCraReset => "ctrl_cra_reset",
@@ -130,6 +134,7 @@ impl NpcKind {
             NpcKind::MarsGuardian => "Rok",
             NpcKind::StarKeeper => "Cassi",
             NpcKind::StationAlien => "Bleep",
+            NpcKind::ArcadeAlien => "Blaster Bubbe",
             NpcKind::CtrlBand => "Band Knob",
             NpcKind::CtrlKenkenLevel => "KenKen Knob",
             NpcKind::CtrlCraReset => "CRA Reset",
@@ -156,6 +161,7 @@ impl NpcKind {
         NpcKind::ReefShark, NpcKind::SeaTurtle, NpcKind::Dolphin, NpcKind::Crab, NpcKind::Jelly,
         NpcKind::Octopus, NpcKind::Clam, NpcKind::Anglerfish, NpcKind::Eel, NpcKind::TurtleElder,
         NpcKind::MoonAlien, NpcKind::FuelBot, NpcKind::MarsGuardian, NpcKind::StarKeeper, NpcKind::StationAlien,
+        NpcKind::ArcadeAlien,
         NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
         NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerBalance, NpcKind::CtrlTriggerSudoku,
@@ -291,6 +297,10 @@ pub struct Npc {
     /// solved, refills the rocket's fuel. Like `gate`, it short-circuits the
     /// normal interaction menu.
     pub refuel: bool,
+    /// True for the arcade operator: interacting launches the number-bond space
+    /// shooter (`GameState::Shooter`) directly, short-circuiting the normal
+    /// interaction menu. Like `gate`/`refuel`, a reusable minigame-launch hook.
+    pub launch_shooter: bool,
     /// True while this NPC is strolling back to its home tile after being
     /// swapped out as the player's buddy (on the same map). It walks a
     /// precomputed route stored in `pathing` via `next_route_intent`; when the
@@ -459,6 +469,13 @@ impl Npc {
         self
     }
 
+    /// Builder: mark this NPC as the arcade operator — interacting launches the
+    /// number-bond space shooter instead of opening the normal menu.
+    pub fn launching_shooter(mut self) -> Self {
+        self.launch_shooter = true;
+        self
+    }
+
     pub fn draw(&self, time: f32) {
         let x = self.entity.x;
         let y = self.entity.y;
@@ -520,6 +537,7 @@ fn npc(home_map: &'static str, kind: NpcKind, tx: usize, ty: usize, sprite: Spri
         gate: false,
         gate_id: None,
         refuel: false,
+        launch_shooter: false,
         homing: false,
         leaving_map: false,
     }
@@ -616,6 +634,12 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
         "asteroid_base" => vec![
             n(StarKeeper,   6, 4, S::StarTerminal, true, false, true),
             n(StationAlien, 9, 5, S::AlienGreen,   true, true,  false).wandering(),
+        ],
+        // The Goyish Map — Blaster Bubbe runs the arcade cabinet. Walk up and
+        // interact to launch the number-bond space shooter. She stays put (she
+        // IS the cabinet), so she's never giftable and never challenges.
+        "goyish_map" => vec![
+            n(ArcadeAlien, 6, 3, S::AlienRed, false, true, false).launching_shooter(),
         ],
         "control" => vec![
             // Dev knob bay -- each NPC is one control. game.rs intercepts dev-control

@@ -1373,6 +1373,166 @@ fn riding_chompy_keeps_the_shark_on_the_players_tile() {
     }
 }
 
+/// The Goyish Map: walk to Blaster Bubbe, tap in, play the number-bond shooter
+/// to completion, and get paid. Exercises the launch hook, the real-time input
+/// path (move + fire), wave advancement, and resolution/reward.
+#[test]
+fn goyish_map_shooter_launches_plays_and_pays_out() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_domain::logic::shooter::ShooterPhase;
+
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+
+    // Warp onto the Goyish Map and respawn its roster (Blaster Bubbe at 6,3).
+    h.game.map = Map::goyish_map();
+    h.game.npcs = npc_mod::npcs_for_map("goyish_map");
+    h.game.npcs_offstage.clear();
+    h.game.sparky_parked = true;
+
+    // Stand just below the operator and face up toward her.
+    h.game.player.tile_x = 6;
+    h.game.player.tile_y = 4;
+    h.game.player.x = 6.0 * 48.0;
+    h.game.player.y = 4.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+    h.hold(KeyCode::Up); // face the operator (blocked by the NPC, so just turns)
+
+    // Interact → the shooter launches straight into its own state.
+    let mark = h.mark();
+    h.interact();
+    assert_eq!(h.game.state, GameState::Shooter,
+        "interacting with Blaster Bubbe should start the shooter");
+    assert!(h.game.active_shooter().is_some());
+    let events = h.events_since(mark);
+    assert!(events.iter().any(|e| matches!(e, GameEvent::ShooterStarted { .. })),
+        "expected ShooterStarted; got {:?}", events);
+
+    let dum_dums_before = h.game.dum_dums;
+    let mark = h.mark();
+
+    // Play the whole run: repeatedly aim at a summing pair and blast both.
+    let mut guard = 0;
+    while h.game.state == GameState::Shooter
+        && h.game.active_shooter().map_or(false, |a| a.session.phase != ShooterPhase::Complete)
+    {
+        guard += 1;
+        assert!(guard < 40, "shooter run took an implausible number of pairs");
+
+        let (id_a, id_b) = {
+            let s = &h.game.active_shooter().unwrap().session;
+            let mut pair = None;
+            'outer: for i in 0..s.aliens.len() {
+                for j in (i + 1)..s.aliens.len() {
+                    if s.aliens[i].value + s.aliens[j].value == s.target {
+                        pair = Some((s.aliens[i].id, s.aliens[j].id));
+                        break 'outer;
+                    }
+                }
+            }
+            pair.expect("every shooter wave must contain a summing pair")
+        };
+        aim_and_fire(&mut h, id_a);
+        aim_and_fire(&mut h, id_b);
+    }
+
+    // Run finished → the completion screen is up. A tap returns to Playing.
+    assert!(h.game.active_shooter().map_or(false, |a| a.session.phase == ShooterPhase::Complete),
+        "clearing every wave should end the run Complete");
+    h.press(KeyCode::Space);
+    assert_eq!(h.game.state, GameState::Playing);
+
+    let events = h.events_since(mark);
+    assert!(events.iter().any(|e| matches!(e, GameEvent::ShooterWaveCleared { .. })),
+        "expected at least one ShooterWaveCleared; got {:?}", events);
+    assert!(events.iter().any(|e| matches!(e, GameEvent::ShooterResolved { .. })),
+        "expected ShooterResolved; got {:?}", events);
+    assert!(h.game.dum_dums > dum_dums_before,
+        "finishing the run should award dum_dums");
+}
+
+/// Click-to-shoot: tapping a column snaps the ship there and fires a bolt.
+#[test]
+fn goyish_shooter_click_aims_and_fires() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_domain::logic::shooter::FIELD_W;
+
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = Map::goyish_map();
+    h.game.npcs = npc_mod::npcs_for_map("goyish_map");
+    h.game.npcs_offstage.clear();
+    h.game.sparky_parked = true;
+    h.game.player.tile_x = 6;
+    h.game.player.tile_y = 4;
+    h.game.player.x = 6.0 * 48.0;
+    h.game.player.y = 4.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+    h.hold(KeyCode::Up);
+    h.interact();
+    assert_eq!(h.game.state, GameState::Shooter);
+
+    // Tap the first alien's column (mapping mirrors ui::shooter::play_rect).
+    let ax = h.game.active_shooter().unwrap().session.aliens[0].x;
+    let (sw, _sh) = (960.0_f32, 720.0_f32); // common::SCREEN
+    let play_x = 24.0;
+    let play_w = sw - 48.0;
+    let click_x = play_x + ax / FIELD_W * play_w;
+    let click_y = 78.0 + 20.0; // inside the play rect
+    h.click(click_x, click_y);
+
+    let s = &h.game.active_shooter().unwrap().session;
+    assert!((s.ship_x - ax).abs() < 1.0,
+        "the ship snapped to the tapped column (ship_x={}, ax={})", s.ship_x, ax);
+    assert!(!s.shots.is_empty(), "the tap fired a bolt");
+}
+
+/// Slide the ship under alien `id` (by holding the correct arrow), fire, then
+/// wait for the bolt to travel up and land (the alien is tagged, or popped as
+/// part of a completed pair). Returns early if the alien is already gone.
+fn aim_and_fire(h: &mut Harness, id: u32) {
+    use macroquad::prelude::KeyCode;
+
+    // Align the ship under the alien.
+    let mut fired = false;
+    for _ in 0..300 {
+        let aim = {
+            let s = &h.game.active_shooter().expect("shooter should be active").session;
+            s.aliens.iter().find(|a| a.id == id).map(|a| (s.ship_x, a.x))
+        };
+        let Some((ship_x, ax)) = aim else { return };
+        if (ship_x - ax).abs() <= 2.0 {
+            h.press(KeyCode::Space);
+            fired = true;
+            break;
+        }
+        if ship_x < ax { h.hold(KeyCode::Right); } else { h.hold(KeyCode::Left); }
+    }
+    assert!(fired, "aim_and_fire: never aligned on alien {}", id);
+
+    // Idle-tick until the bolt lands: the alien is tagged, or gone.
+    for _ in 0..200 {
+        let landed = {
+            let s = &h.game.active_shooter().expect("shooter should be active").session;
+            match s.aliens.iter().find(|a| a.id == id) {
+                None => true,
+                Some(a) => a.selected,
+            }
+        };
+        if landed { return; }
+        h.idle();
+    }
+    panic!("aim_and_fire: bolt never landed on alien {}", id);
+}
+
 #[test]
 fn swapped_out_cross_map_buddy_walks_out_then_teleports_home() {
     use robot_buddy_game::tilemap::Map;

@@ -41,6 +41,9 @@ use robot_buddy_domain::logic::balance::{
 use robot_buddy_domain::logic::number_line::{
     NumberLineAction, NumberLineSession, generate_target, number_line_reducer,
 };
+use robot_buddy_domain::logic::shooter::{
+    ShooterSession, ShooterAction, ShooterPhase, shooter_reducer,
+};
 use robot_buddy_domain::logic::sudoku::{
     self, SudokuPhase, SudokuSession, generate_for_level as generate_sudoku_for_level,
 };
@@ -98,6 +101,8 @@ pub enum GameState {
     Sudoku,
     Shop,
     Quest,
+    /// The Goyish Map's number-bond space shooter (real-time minigame).
+    Shooter,
 }
 
 /// Opt-in toggles for in-development paths that aren't ready for default play.
@@ -182,6 +187,16 @@ pub struct ActiveBalance {
 pub struct ActiveSudoku {
     pub session: SudokuSession,
     pub selected: Option<(u8, u8)>,
+    pub complete_timer: f32,
+    pub start_time: f32,
+    pub source_npc: String,
+}
+
+/// The number-bond space shooter, live. The domain `ShooterSession` holds all
+/// the game state (ship, aliens, waves, shield); the rest is UI-only bookkeeping
+/// mirroring the other `Active*` structs.
+pub struct ActiveShooter {
+    pub session: ShooterSession,
     pub complete_timer: f32,
     pub start_time: f32,
     pub source_npc: String,
@@ -365,6 +380,13 @@ pub enum GameEvent {
         constraint_violations: u8,
         response_ms: f64,
     },
+    /// The number-bond space shooter launched from the Goyish Map.
+    ShooterStarted { band: u8, source: String },
+    /// A shooter wave was fully cleared; `wave` is the just-cleared wave index.
+    ShooterWaveCleared { wave: u8 },
+    /// The shooter run ended. `waves` is how many were cleared; `hits`/`misses`
+    /// are correct/incorrect number-bond pairings (stealth-assessment signal).
+    ShooterResolved { waves: u8, hits: u32, misses: u32, response_ms: f64 },
 }
 
 // ─── The Game ───────────────────────────────────────────
@@ -457,6 +479,7 @@ pub struct Game {
     active_pattern: Option<ActivePattern>,
     active_balance: Option<ActiveBalance>,
     active_sudoku: Option<ActiveSudoku>,
+    active_shooter: Option<ActiveShooter>,
     active_shop: Option<ActiveShop>,
     active_quest: Option<ActiveQuest>,
     /// Cosmetics bought from Bolt (persisted in the save).
@@ -575,6 +598,7 @@ impl Game {
             active_pattern: None,
             active_balance: None,
             active_sudoku: None,
+            active_shooter: None,
             active_shop: None,
             active_quest: None,
             shop_owned: std::collections::HashSet::new(),
@@ -700,6 +724,10 @@ impl Game {
         self.active_sudoku.as_ref()
     }
 
+    pub fn active_shooter(&self) -> Option<&ActiveShooter> {
+        self.active_shooter.as_ref()
+    }
+
     /// Read-only view of the active shop session (None if the shop is closed).
     pub fn active_shop(&self) -> Option<&ActiveShop> {
         self.active_shop.as_ref()
@@ -797,6 +825,7 @@ impl Game {
             self.active_pattern = None;
             self.active_balance = None;
             self.active_sudoku = None;
+            self.active_shooter = None;
             self.active_shop = None;
             self.active_quest = None;
             self.pending_challenge = false;
@@ -946,6 +975,7 @@ impl Game {
             GameState::Pattern => { self.step_pattern(input, dt, screen); false }
             GameState::Balance => { self.step_balance(input, dt, screen); false }
             GameState::Sudoku => { self.step_sudoku(input, dt, screen); false }
+            GameState::Shooter => { self.step_shooter(input, dt, screen); false }
             GameState::Shop => { self.step_shop(input, screen); false }
             GameState::Quest => { self.step_quest(input, screen); false }
         }
@@ -1557,8 +1587,8 @@ impl Game {
             } else if let Some(target) = npc::get_interact_target_with_companion(
                 self.player.tile_x, self.player.tile_y, self.player.dir,
                 &self.npcs, self.companion.as_ref(),
-            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n.gate, n.gate_id, n.refuel, n)) {
-                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, is_gate, gate_id, is_refuel, target_ref) = target;
+            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n.gate, n.gate_id, n.refuel, n.launch_shooter, n)) {
+                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, is_gate, gate_id, is_refuel, is_launch_shooter, target_ref) = target;
                 let target_id = target_kind.as_str().to_string();
                 let target_name = target_kind.display_name().to_string();
 
@@ -1599,6 +1629,14 @@ impl Game {
                         text: "BEEP BOOP! Solve a number puzzle and I'll fill the rocket right up to the top!".into(),
                     }]);
                     self.set_state(GameState::Dialogue);
+                    return;
+                }
+
+                // The arcade operator launches the number-bond shooter straight
+                // away — a self-contained minigame that never routes through the
+                // challenge/dialogue states and back.
+                if is_launch_shooter {
+                    self.start_shooter(target_name);
                     return;
                 }
 
@@ -2450,6 +2488,135 @@ impl Game {
         }
     }
 
+    /// Launch the number-bond space shooter. Difficulty rides the math band and
+    /// the numbers are drawn per the learner's NumberBond CRA stage — both picked
+    /// silently, the kid never sees them (Invariant 6).
+    fn start_shooter(&mut self, source: String) {
+        let cra_stage = self.profile.cra_stages
+            .get(&Operation::NumberBond).copied()
+            .unwrap_or(CraStage::Concrete);
+        let session = ShooterSession::new(self.profile.math_band, cra_stage, &mut self.rng);
+        self.events.push(GameEvent::ShooterStarted {
+            band: self.profile.math_band,
+            source: source.clone(),
+        });
+        self.active_shooter = Some(ActiveShooter {
+            session,
+            complete_timer: 0.0,
+            start_time: self.game_time,
+            source_npc: source,
+        });
+        self.set_state(GameState::Shooter);
+    }
+
+    fn step_shooter(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+        // Ship glide speed in logical field units/sec (the field is 100 wide).
+        const SHIP_SPEED: f32 = 70.0;
+
+        // Bail out any time — no reward, no penalty. The kid can just walk away.
+        if input.pressed(KeyCode::Escape) {
+            self.active_shooter = None;
+            self.set_state(GameState::Playing);
+            return;
+        }
+
+        let prev_wave = self.active_shooter.as_ref().map(|a| a.session.wave).unwrap_or(0);
+        let mut finished = false;
+
+        if let Some(a) = self.active_shooter.as_mut() {
+            if a.session.phase == ShooterPhase::Complete {
+                // Victory beat, then dismiss on a tap or after a short pause.
+                a.complete_timer += dt;
+                if a.complete_timer >= 2.5
+                    || input.pressed(KeyCode::Space)
+                    || input.pressed(KeyCode::Enter)
+                    || input.mouse_clicked
+                {
+                    finished = true;
+                }
+            } else {
+                // Reducers are pure (state in, state out); run the frame's
+                // actions through a detached session, then store the result.
+                let mut s = a.session.clone();
+                let left = input.down(KeyCode::Left) || input.down(KeyCode::A);
+                let right = input.down(KeyCode::Right) || input.down(KeyCode::D);
+                if left && !right {
+                    s = shooter_reducer(s, ShooterAction::MoveShip { dx: -SHIP_SPEED * dt });
+                } else if right && !left {
+                    s = shooter_reducer(s, ShooterAction::MoveShip { dx: SHIP_SPEED * dt });
+                }
+                if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) {
+                    s = shooter_reducer(s, ShooterAction::Fire);
+                }
+                // Click/tap to shoot: snap the ship to the tapped column and fire
+                // from there. Lets a kid aim by pointing instead of nudging.
+                if input.mouse_clicked {
+                    let (mx, my) = input.mouse_pos;
+                    if let Some(fx) = ui::shooter::field_x_at(screen, mx, my) {
+                        let dx = fx - s.ship_x;
+                        s = shooter_reducer(s, ShooterAction::MoveShip { dx });
+                        s = shooter_reducer(s, ShooterAction::Fire);
+                    }
+                }
+                s = shooter_reducer(s, ShooterAction::Tick { dt });
+                a.session = s;
+            }
+        }
+
+        // A wave just cleared (index advanced but the run isn't over yet).
+        if let Some(a) = self.active_shooter.as_ref() {
+            if a.session.wave > prev_wave && a.session.phase == ShooterPhase::Playing {
+                self.events.push(GameEvent::ShooterWaveCleared { wave: prev_wave as u8 });
+            }
+        }
+
+        if finished {
+            if let Some(a) = self.active_shooter.take() {
+                let waves = a.session.wave as u8;
+                let hits = a.session.hits;
+                let misses = a.session.misses;
+                let representation = a.session.representation;
+                let response_ms = ((self.game_time - a.start_time) as f64 * 1000.0).min(600000.0);
+
+                // Stealth assessment: every pairing is a NumberBond data point.
+                // The child never sees a score or "attempt" — this only feeds the
+                // adaptive system.
+                for i in 0..(hits + misses) {
+                    let correct = i < hits;
+                    self.profile = learner_reducer(self.profile.clone(), LearnerEvent::PuzzleAttempted {
+                        correct,
+                        operation: Operation::NumberBond,
+                        sub_skill: None,
+                        band: self.profile.math_band,
+                        center_band: None,
+                        response_time_ms: None,
+                        hint_used: false,
+                        told_me: false,
+                        cra_level_shown: Some(representation),
+                        timestamp: Some(self.game_time as f64 * 1000.0),
+                    });
+                }
+
+                // Finishing the run pays out. A number-bond hunt naturally
+                // involves trial-and-error, so misses don't void the reward.
+                if let Some(reward) = rewards::determine_reward(true, 0) {
+                    self.dum_dums += reward.amount;
+                    self.dum_dum_hud.flash();
+                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
+                }
+
+                self.events.push(GameEvent::ShooterResolved { waves, hits, misses, response_ms });
+            }
+            self.set_state(GameState::Playing);
+
+            if self.map.id != "dev" {
+                let save_data = self.gather_save_data();
+                self.save_backend.save_to(self.active_slot, &save_data);
+                self.auto_save_timer = 0.0;
+            }
+        }
+    }
+
     fn step_shop(&mut self, input: &FrameInput, screen: (f32, f32)) {
         let Some(ash) = self.active_shop.as_ref() else { return };
         let view = shop_view(ash, &self.color_choice);
@@ -2822,8 +2989,13 @@ impl Game {
             .remove(map_id)
             .unwrap_or_else(|| npc::npcs_for_map(map_id));
         if let Some(c) = self.companion.as_ref() {
-            let companion_kind = c.kind;
-            roster.retain(|n| n.kind != companion_kind);
+            // Drop only the companion's OWN home-roster entry so they don't also
+            // appear back home. A same-kind NPC that lives on a *different* map
+            // (e.g. the reef's Shelly vs. the trench's Shelly, both `Clam`) is a
+            // different creature and must stay — matching on kind alone made
+            // recruiting one erase the other.
+            let (kind, home) = (c.kind, c.home_map);
+            roster.retain(|n| !(n.kind == kind && n.home_map == home));
         }
         // A gate the kid already solved stays open: clear the guardian's `gate`
         // flag so it's pushable and won't re-pose its puzzle.
@@ -3549,7 +3721,10 @@ impl Game {
                 draw_circle(cx, cy, 4.0, gold);
             }
 
-            enum SpriteKind<'a> { Player, Sparky, Npc(&'a npc::Npc) }
+            // `Mount` is the rideable *companion* only — never a roster NPC, so a
+            // wild/gate shark that happens to be rideable still draws normally at
+            // its own tile instead of teleporting under the player.
+            enum SpriteKind<'a> { Player, Sparky, Npc(&'a npc::Npc), Mount(&'a npc::Npc) }
             struct Renderable<'a> { y: f32, kind: SpriteKind<'a> }
             let mut renderables: Vec<Renderable> = vec![];
 
@@ -3558,11 +3733,14 @@ impl Game {
                 renderables.push(Renderable { y: self.sparky.entity.y, kind: SpriteKind::Sparky });
             }
             if let Some(c) = self.companion.as_ref() {
-                // A rideable buddy (Chompy) sits on the player's tile as a
-                // mount — nudge its sort key just behind the player so the kid
-                // always draws on top, looking like they're riding it.
-                let y = if c.is_rideable() { self.player.y - 1.0 } else { c.entity.y };
-                renderables.push(Renderable { y, kind: SpriteKind::Npc(c) });
+                if c.is_rideable() {
+                    // A rideable buddy (Chompy) sits on the player's tile as a
+                    // mount — nudge its sort key just behind the player so the kid
+                    // always draws on top, looking like they're riding it.
+                    renderables.push(Renderable { y: self.player.y - 1.0, kind: SpriteKind::Mount(c) });
+                } else {
+                    renderables.push(Renderable { y: c.entity.y, kind: SpriteKind::Npc(c) });
+                }
             }
             // Skip roster NPCs outside the visible rect — pure draw-call
             // thrift; anywhere visible has tiles under it now.
@@ -3580,22 +3758,38 @@ impl Game {
                             // On the hub the kid pilots the rocket — that's the avatar.
                             sprites::player::draw_rocket(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time);
                         } else {
+                            // When riding Chompy, lift the kid onto the shark's back
+                            // and ride the shark's swim-bob so the two move as one.
+                            let riding = self.companion.as_ref().map_or(false, |c| c.is_rideable());
+                            let py = if riding {
+                                self.player.y - 14.0 + (self.game_time * 1.5).sin() * 1.5
+                            } else {
+                                self.player.y
+                            };
                             match self.player_gender {
-                                Gender::Boy => sprites::player::draw_player_boy(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
-                                Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
+                                Gender::Boy => sprites::player::draw_player_boy(self.player.x, py, self.player.dir, self.player.frame, self.game_time),
+                                Gender::Girl => sprites::player::draw_player_girl(self.player.x, py, self.player.dir, self.player.frame, self.game_time),
                             }
                             // Cosmetics bought from Bolt's shop ride on the kid.
-                            sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.dir, self.player.frame, &self.shop_owned, &self.color_choice);
+                            sprites::player::draw_player_cosmetics(self.player.x, py, self.player.dir, self.player.frame, &self.shop_owned, &self.color_choice);
                             // On planet surfaces the kid wears a space helmet.
                             if self.map.render_mode == tilemap::RenderMode::Cosmic {
-                                sprites::player::draw_spacesuit_overlay(self.player.x, self.player.y, self.player.frame);
+                                sprites::player::draw_spacesuit_overlay(self.player.x, py, self.player.frame);
                             }
                         }
                     }
                     SpriteKind::Sparky => {
                         sprites::robot::draw_robot(self.sparky.entity.x, self.sparky.entity.y, self.sparky.entity.dir, self.sparky.entity.frame, self.game_time);
                     }
-                    SpriteKind::Npc(n) => n.draw(self.game_time),
+                    SpriteKind::Npc(n) => {
+                        n.draw(self.game_time);
+                    }
+                    SpriteKind::Mount(n) => {
+                        // The mount is pinned under its rider: draw it at the
+                        // player's tile, facing the player's way, so the kid
+                        // sits astride its back instead of alongside a blob.
+                        sprites::npcs::draw_shark(self.player.x, self.player.y, self.player.dir, self.game_time, n.gate);
+                    }
                 }
             }
 
@@ -3761,6 +3955,11 @@ impl Game {
         if let Some(ref asd) = self.active_sudoku {
             let layout = ui::sudoku::layout(&asd.session, screen);
             ui::sudoku::draw_sudoku(&asd.session, &layout, asd.selected);
+        }
+
+        // Goyish Map shooter — a full-screen minigame.
+        if let Some(ref a) = self.active_shooter {
+            ui::shooter::draw(&a.session, screen, self.game_time);
         }
 
         // Shop overlay
@@ -4407,6 +4606,11 @@ fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
             "I keep the station tidy. Floating crumbs are a real problem.",
             "Did you know space has no up or down? My feet sure don't.",
         ],
+        // Blaster Bubbe normally launches the shooter on interact; this line is
+        // only a fallback so the match stays exhaustive.
+        ArcadeAlien => &[
+            "Bubeleh! Step right up to the cabinet and blast some number bonds!",
+        ],
         // Dev-control NPCs go through apply_dev_control, never this path.
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
         | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance
@@ -4721,6 +4925,31 @@ mod tests {
         assert!(g.player_path.is_empty(), "walk path must not survive into another state");
         assert_eq!(g.pending_interact, None, "pending auto-interact must be cancelled");
         assert_eq!(g.click_target, None, "walk marker must be cleared");
+    }
+
+    // ── Recruiting a same-kind NPC must not erase its twin on another map ──
+    #[test]
+    fn recruiting_the_reef_shelly_keeps_the_trench_shelly() {
+        let mut g = game();
+        let reef_shelly = npc::npcs_for_map("reef").into_iter()
+            .find(|n| n.kind == NpcKind::Clam)
+            .expect("reef roster has a Clam");
+        assert_eq!(reef_shelly.home_map, "reef");
+        g.companion = Some(reef_shelly);
+
+        // The trench's own Shelly (a different Clam, home_map "trench") stays.
+        let trench = g.load_map_roster("trench");
+        assert!(
+            trench.iter().any(|n| n.kind == NpcKind::Clam && n.home_map == "trench"),
+            "the trench's Shelly must survive recruiting the reef's Shelly",
+        );
+
+        // But the companion's own home roster (reef) still drops the duplicate.
+        let reef = g.load_map_roster("reef");
+        assert!(
+            !reef.iter().any(|n| n.kind == NpcKind::Clam),
+            "the reef's Shelly is the companion, so she isn't also in the reef roster",
+        );
     }
 
     // ── The visible-rect seam: what the camera shows is what gets drawn ──

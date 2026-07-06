@@ -46,6 +46,7 @@ pub enum Tile {
     MarsGround = 32,  // walkable red dust
     StationFloor = 33,// walkable metal station floor
     RiseSpot = 34,    // rising bubble column → surface from an underwater map
+    GoyishPad = 35,   // hub marker → the Goyish Map (arcade shooter)
     // Glitch-only tiles (doghouse)
     Glitch95 = 95,
     Glitch96 = 96,
@@ -132,6 +133,9 @@ pub fn all_portals() -> &'static [Portal] {
         Portal { from_map: "moon",          from_x: 6, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
         Portal { from_map: "mars",          from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
         Portal { from_map: "asteroid_base", from_x: 3, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        // Hub → the Goyish Map arcade deck (free, so the kid can replay it), and back.
+        Portal { from_map: "space_hub", from_x: 4, from_y: 5, to_map: "goyish_map", to_x: 6, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "goyish_map", from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
     ]
 }
 
@@ -569,7 +573,7 @@ impl Map {
     pub fn space_hub() -> Self {
         use Tile::*;
         let (SR, Sp, St, Lp) = (SpaceRock, Space, Star, Launchpad);
-        let (Mo, Ma, As) = (MoonPad, MarsPad, AsteroidPad);
+        let (Mo, Ma, As, Gy) = (MoonPad, MarsPad, AsteroidPad, GoyishPad);
         Map {
             id: "space_hub", width: 16, height: 12, render_mode: RenderMode::Cosmic,
             tiles: vec![
@@ -578,7 +582,7 @@ impl Map {
                 vec![SR,Sp,Sp,Mo,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Ma,Sp,Sp,Sp,SR],
                 vec![SR,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,St,Sp,Sp,Sp,Sp,Sp,SR],
                 vec![SR,Sp,Sp,Sp,Sp,Sp,Sp,Sp,As,Sp,Sp,Sp,Sp,Sp,Sp,SR],
-                vec![SR,Sp,St,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,SR],
+                vec![SR,Sp,St,Sp,Gy,Sp,Sp,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,SR],
                 vec![SR,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,SR],
                 vec![SR,Sp,Sp,Sp,St,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,Sp,Sp,SR],
                 vec![SR,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,SR],
@@ -654,6 +658,30 @@ impl Map {
         }
     }
 
+    /// The Goyish Map — a neon arcade deck in orbit. The kid walks to Blaster
+    /// Bubbe's cabinet and taps in to play the number-bond space shooter. A
+    /// launch pad in the corner drops back to the hub. Cosmic render mode floats
+    /// a starfield over the metal deck.
+    #[allow(non_snake_case)]
+    pub fn goyish_map() -> Self {
+        use Tile::*;
+        let (SR, ST, Lp) = (SpaceRock, StationFloor, Launchpad);
+        Map {
+            id: "goyish_map", width: 12, height: 9, render_mode: RenderMode::Cosmic,
+            tiles: vec![
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,Lp,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+            ],
+        }
+    }
+
     pub fn by_id(id: &str) -> Self {
         match id {
             "overworld" => Self::overworld(),
@@ -673,6 +701,7 @@ impl Map {
             "moon" => Self::moon(),
             "mars" => Self::mars(),
             "asteroid_base" => Self::asteroid_base(),
+            "goyish_map" => Self::goyish_map(),
             _ => Self::overworld(),
         }
     }
@@ -721,7 +750,7 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
             Tile::RiseSpot  => dream_water,
             Tile::Space | Tile::Star => dream_dark,
             Tile::SpaceRock => dream_dark,
-            Tile::Launchpad | Tile::MoonPad | Tile::MarsPad | Tile::AsteroidPad
+            Tile::Launchpad | Tile::MoonPad | Tile::MarsPad | Tile::AsteroidPad | Tile::GoyishPad
                             => dream_cream,
             Tile::MoonGround | Tile::MarsGround | Tile::StationFloor => dream_grass,
             Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98
@@ -753,6 +782,7 @@ fn tile_color_cosmic(tile: Tile) -> Color {
         Tile::MoonPad      => Color::from_rgba(40, 44, 70, 255),
         Tile::MarsPad      => Color::from_rgba(40, 44, 70, 255),
         Tile::AsteroidPad  => Color::from_rgba(40, 44, 70, 255),
+        Tile::GoyishPad    => Color::from_rgba(40, 44, 70, 255),
         Tile::MoonGround   => Color::from_rgba(120, 120, 130, 255), // lunar gray
         Tile::MarsGround   => Color::from_rgba(160, 78, 54, 255),   // rusty red
         Tile::StationFloor => Color::from_rgba(70, 78, 96, 255),    // metal deck
@@ -823,7 +853,7 @@ fn tile_color_normal(tile: Tile) -> Color {
         Tile::RiseSpot  => Color::from_rgba(64, 156, 176, 255),    // rise spot (lit water base)
         Tile::Space | Tile::Star => Color::from_rgba(10, 12, 28, 255),
         Tile::SpaceRock => Color::from_rgba(58, 54, 74, 255),
-        Tile::Launchpad | Tile::MoonPad | Tile::MarsPad | Tile::AsteroidPad
+        Tile::Launchpad | Tile::MoonPad | Tile::MarsPad | Tile::AsteroidPad | Tile::GoyishPad
                         => Color::from_rgba(40, 44, 70, 255),
         Tile::MoonGround => Color::from_rgba(120, 120, 130, 255),
         Tile::MarsGround => Color::from_rgba(160, 78, 54, 255),
@@ -944,6 +974,8 @@ fn draw_tile_detail(tile: Tile, x: f32, y: f32, time: f32, mode: RenderMode) {
         Tile::MoonPad   => draw_planet_pad_detail(x, y, time, Color::from_rgba(200, 200, 210, 255)),
         Tile::MarsPad   => draw_planet_pad_detail(x, y, time, Color::from_rgba(230, 110, 70, 255)),
         Tile::AsteroidPad => draw_planet_pad_detail(x, y, time, Color::from_rgba(150, 140, 120, 255)),
+        // The Goyish Map's marker floats a neon-purple arcade "world" over the pad.
+        Tile::GoyishPad => draw_planet_pad_detail(x, y, time, Color::from_rgba(190, 95, 210, 255)),
         Tile::MoonGround => draw_moon_ground_detail(x, y),
         Tile::MarsGround => draw_mars_ground_detail(x, y),
         Tile::StationFloor => draw_station_floor_detail(x, y),

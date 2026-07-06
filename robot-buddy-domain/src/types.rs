@@ -54,6 +54,15 @@ impl CraStage {
             CraStage::Abstract => CraStage::Abstract,
         }
     }
+
+    /// One stage more concrete (toward manipulatives). Saturates at Concrete.
+    pub fn prev(&self) -> CraStage {
+        match self {
+            CraStage::Abstract => CraStage::Representational,
+            CraStage::Representational => CraStage::Concrete,
+            CraStage::Concrete => CraStage::Concrete,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
