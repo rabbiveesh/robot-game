@@ -1,4 +1,5 @@
 pub mod balance;
+pub mod descent;
 pub mod base_ten;
 pub mod kenken;
 pub mod manipulate_concrete;
