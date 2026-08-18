@@ -353,6 +353,121 @@ fn shopkeeper_sells_a_cosmetic_via_embedded_subtraction() {
     assert_eq!(h.game.state, GameState::Playing);
 }
 
+/// Swag is bought once and worn by whoever you like: buy a hat at Bolt's, hand
+/// it to Tali, and it stays hers even after somebody else becomes the buddy.
+#[test]
+fn swag_bought_at_bolts_can_be_handed_to_a_buddy_and_stays_theirs() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(11);
+    h.start_dev_game();
+
+    // Buy a hat (the dev map's Bolt runs the same shop as the real one).
+    h.walk_to_npc(NpcKind::Shopkeeper);
+    h.interact();
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+    h.buy_shop_item("hat");
+    h.close_shop();
+    assert!(h.game.player_swag().contains("hat"), "the kid should be wearing the hat");
+
+    // Off to the house, where the kids accept presents.
+    h.game.map = Map::home();
+    h.game.npcs = npc_mod::npcs_for_map("home");
+    h.game.npcs_offstage.clear();
+    h.game.player.tile_x = 5;
+    h.game.player.tile_y = 3;
+    h.game.player.x = 5.0 * 48.0;
+    h.game.player.y = 3.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+
+    // Hand the hat to Tali.
+    h.walk_to_npc(NpcKind::Kid1);
+    h.interact();
+    let mark = h.mark();
+    h.select_option("swag");
+    h.wait_until(|g| g.state == GameState::Swag);
+    h.give_swag("hat");
+    h.close_swag();
+
+    let events = h.events_since(mark);
+    let given = events.iter().find_map(|e| match e {
+        GameEvent::SwagGiven { item, recipient } => Some((item.clone(), recipient.clone())),
+        _ => None,
+    }).unwrap_or_else(|| panic!("expected SwagGiven; got: {events:?}"));
+    assert_eq!(given, ("hat".to_string(), "kid_1".to_string()));
+    assert!(h.game.swag_worn_by("kid_1").contains("hat"), "Tali should be wearing the hat");
+    assert!(h.game.player_swag().is_empty(),
+        "the kid handed it over, so they aren't wearing it any more");
+
+    // Recruit Tali, then swap her out for Noa. The hat is Tali's for keeps.
+    h.walk_to_npc(NpcKind::Kid1);
+    h.interact();
+    h.select_option("give");
+    h.finish_dialogue();
+    assert_eq!(h.game.current_buddy_id(), "kid_1", "a Dum Dum recruits Tali");
+
+    h.walk_to_npc(NpcKind::Kid2);
+    h.interact();
+    h.select_option("give");
+    h.finish_dialogue();
+    assert_eq!(h.game.current_buddy_id(), "kid_2", "Noa takes over as buddy");
+    assert!(h.game.swag_worn_by("kid_1").contains("hat"),
+        "Tali keeps her hat after being swapped out");
+    assert!(h.game.swag_worn_by("kid_2").is_empty(), "Noa hasn't been given anything");
+}
+
+/// You can't stand next to a buddy you're sitting on, so reaching out over the
+/// mount's nose opens their menu — the only way to dress up Echo or Chompy.
+#[test]
+fn a_mount_can_be_dressed_up_from_its_own_saddle() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    let mut h = Harness::new(13);
+    h.start_dev_game();
+    h.game.map = Map::home();
+    h.game.npcs = npc_mod::npcs_for_map("home");
+    h.game.npcs.clear(); // nobody else in reach; the mount is the only target
+    h.game.npcs_offstage.clear();
+
+    let mut echo = npc_mod::npcs_for_map("reef").into_iter()
+        .find(|n| n.kind == NpcKind::Dolphin)
+        .expect("reef roster should contain Echo");
+    echo.start_following();
+    h.game.companion = Some(echo);
+    h.game.sparky_parked = true;
+
+    // Wearing something is what puts "Give Swag" on the menu.
+    h.game.wardrobe_mut().put_on(robot_buddy_domain::economy::wardrobe::PLAYER, "hat");
+
+    // Face a wall — no NPC, no Sparky — and reach out anyway.
+    h.press(KeyCode::Up);
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu,
+        "riding a buddy should let you talk to them");
+
+    // Talking works too — the mount isn't in the roster, so this only lands if
+    // the companion is consulted for dialogue.
+    h.select_option("talk");
+    assert!(h.game.is_dialogue_active(), "Echo should say something from under you");
+    h.finish_dialogue();
+
+    h.interact();
+    h.select_option("swag");
+    h.wait_until(|g| g.state == GameState::Swag);
+    assert_eq!(h.game.active_swag().unwrap().recipient_id, "dolphin",
+        "the menu should be aimed at the mount underneath");
+    h.give_swag("hat");
+    h.close_swag();
+    assert!(h.game.swag_worn_by("dolphin").contains("hat"),
+        "Echo should be wearing the hat she was handed from her own back");
+}
+
 #[test]
 fn click_to_walk_routes_the_player_toward_the_tapped_tile() {
     let mut h = Harness::new(7);
@@ -1333,44 +1448,82 @@ fn gifting_parked_sparky_brings_him_back_and_sends_the_npc_home() {
 }
 
 #[test]
-fn riding_chompy_keeps_the_shark_on_the_players_tile() {
+fn riding_a_sea_buddy_keeps_the_mount_on_the_players_tile() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
     use macroquad::prelude::KeyCode;
 
-    // Chompy the reef shark is a mount, not a trailing follower: while he's the
-    // buddy the kid rides him, so he should sit on the player's exact tile every
-    // frame rather than retracing a path queue behind them.
-    let mut h = Harness::new(5);
-    h.start_dev_game();
-    h.game.map = Map::home();
-    h.game.npcs = npc_mod::npcs_for_map("home");
-    h.game.npcs_offstage.clear();
+    // Chompy the shark and Echo the dolphin are mounts, not trailing followers:
+    // while one is the buddy the kid rides it, so it should sit on the player's
+    // exact tile every frame rather than retracing a path queue behind them.
+    for kind in [NpcKind::ReefShark, NpcKind::Dolphin] {
+        let mut h = Harness::new(5);
+        h.start_dev_game();
+        h.game.map = Map::home();
+        h.game.npcs = npc_mod::npcs_for_map("home");
+        h.game.npcs_offstage.clear();
 
-    let mut chompy = npc_mod::npcs_for_map("reef").into_iter()
-        .find(|n| n.kind == NpcKind::ReefShark)
-        .expect("reef roster should contain Chompy");
-    chompy.gate = false; // his gate state is irrelevant to riding
-    chompy.start_following();
-    h.game.companion = Some(chompy);
-    h.game.sparky_parked = true;
+        let mut mount = npc_mod::npcs_for_map("reef").into_iter()
+            .find(|n| n.kind == kind)
+            .expect("reef roster should contain this buddy");
+        mount.gate = false; // gate state is irrelevant to riding
+        mount.start_following();
+        h.game.companion = Some(mount);
+        h.game.sparky_parked = true;
 
-    assert!(h.game.companion.as_ref().unwrap().is_rideable(),
-        "Chompy should be a rideable buddy");
+        assert!(h.game.companion.as_ref().unwrap().is_rideable(),
+            "{:?} should be a rideable buddy", kind);
 
-    // Drive the player around; the shark must stay glued to the player's tile
-    // (whether or not a wall blocks the step, the mount tracks the player).
-    for dir in [KeyCode::Right, KeyCode::Down, KeyCode::Left, KeyCode::Up] {
-        for _ in 0..4 {
-            h.hold(dir);
-            let p = (h.game.player.tile_x, h.game.player.tile_y);
-            let c = h.game.companion.as_ref().unwrap();
-            assert_eq!((c.entity.tile_x, c.entity.tile_y), p,
-                "rideable shark should stay locked on the player's tile");
-            assert_eq!(c.entity.dir, h.game.player.dir,
-                "rideable shark should face the way the player faces");
+        // Drive the player around; the mount must stay glued to the player's
+        // tile (whether or not a wall blocks the step, it tracks the player).
+        for dir in [KeyCode::Right, KeyCode::Down, KeyCode::Left, KeyCode::Up] {
+            for _ in 0..4 {
+                h.hold(dir);
+                let p = (h.game.player.tile_x, h.game.player.tile_y);
+                let c = h.game.companion.as_ref().unwrap();
+                assert_eq!((c.entity.tile_x, c.entity.tile_y), p,
+                    "rideable {:?} should stay locked on the player's tile", kind);
+                assert_eq!(c.entity.dir, h.game.player.dir,
+                    "rideable {:?} should face the way the player faces", kind);
+            }
         }
     }
+}
+
+/// The reef arrival speech is a first-time thrill, not a toll on every dive:
+/// it plays the first time the kid splashes in and stays quiet after that.
+#[test]
+fn secret_map_intro_plays_only_on_the_first_visit() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    h.game.map = Map::overworld();
+    h.game.npcs = npc_mod::npcs_for_map("overworld");
+    h.game.npcs_offstage.clear();
+    h.game.dum_dums = 20; // the dive toll is paid out of pocket
+
+    // Stand just south of the dive spot (it's ringed by water otherwise) and
+    // splash in.
+    h.game.player.tile_x = 17;
+    h.game.player.tile_y = 16;
+    h.game.player.x = 17.0 * 48.0;
+    h.game.player.y = 16.0 * 48.0;
+    h.game.player.target_x = h.game.player.x;
+    h.game.player.target_y = h.game.player.y;
+    h.game.player.moving = false;
+    h.step_through_portal(KeyCode::Up, "reef");
+    assert!(h.game.is_dialogue_active(),
+        "the first dive into the reef should play the arrival speech");
+    h.finish_dialogue();
+
+    // Back up to the overworld, then dive again — no speech the second time.
+    h.step_through_portal(KeyCode::Down, "overworld");
+    h.step_through_portal(KeyCode::Up, "reef");
+    assert!(!h.game.is_dialogue_active(),
+        "a repeat dive should skip the arrival speech");
 }
 
 /// The Goyish Map: walk to Blaster Bubbe, tap in, play the number-bond shooter
@@ -1580,92 +1733,346 @@ fn swapped_out_cross_map_buddy_walks_out_then_teleports_home() {
     );
 }
 
+/// Shelly's pearls can't be strolled into. The stones sit a leap apart with
+/// rip current between them, and the pearl only pops for a trip made in leaps
+/// of the size the kid commits to before launching.
 #[test]
-fn finding_shellys_called_stone_collects_the_hidden_pearl() {
+fn shellys_pearl_takes_the_right_leap_size_not_a_stroll() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
 
-    // Shelly calls out stone 6 (the reef path's initial goal); her pearl hides
-    // UNDER that stone — no marker. Stepping on a wrong stone gives nothing;
-    // finding the called stone pops the pearl, and the event log records how
-    // many hops it took vs the straight count-on (stealth assessment).
     let mut h = Harness::new(9);
     h.start_dev_game();
+    h.game.profile.math_band = 3; // told the leap count; has to work out the size
     h.game.map = Map::reef();
     h.game.npcs = npc_mod::npcs_for_map("reef");
     h.game.npcs_offstage.clear();
     assert_eq!(h.game.pearls, 0, "no pearls to start");
 
-    // Stand the kid on stone 4 of the path (row 13 starts at x=5).
-    h.game.player.tile_x = 9;
-    h.game.player.tile_y = 13;
-    h.game.player.x = 9.0 * 48.0;
-    h.game.player.y = 13.0 * 48.0;
-    h.game.player.target_x = h.game.player.x;
-    h.game.player.target_y = h.game.player.y;
-    h.game.player.moving = false;
+    // The path is unwalkable by construction — that's the whole redesign.
+    assert!(h.game.map.is_solid(6, 13), "the gap between stones 0 and 1 is current");
+    assert!(!h.game.map.is_solid(5, 13), "the stones themselves are standable");
 
+    // Standing on the launch stone, Shelly sets up a trip.
     let mark = h.mark();
-    // Guess wrong twice: hop to stone 3, then all the way down to stone 1.
-    // Nothing happens — no pearl, no event, no buzzer (rule 7: wrong answers
-    // have natural consequences only).
-    h.walk_to(8, 13);
-    h.walk_to(6, 13);
-    assert_eq!(h.game.pearls, 0, "a wrong stone never pays out");
+    h.warp_to(5, 13);
+    let (pearl, size, count, choices) = {
+        let s = h.game.leap_session().expect("Shelly should offer a trip on stone 0");
+        (s.puzzle.pearl, s.puzzle.size, s.puzzle.count, s.puzzle.choices.clone())
+    };
     assert!(
-        !h.events_since(mark).iter().any(|e| matches!(e, GameEvent::NumberLineReached { .. })),
-        "a wrong stone must not log a find",
+        h.events_since(mark).iter().any(|e| matches!(e, GameEvent::LeapTripOffered { .. })),
+        "landing on the launch stone should log the trip: {:?}", h.events_since(mark),
     );
 
-    // Now walk to the called stone 6 at (11,13): the pearl pops out.
-    h.walk_to(11, 13);
+    // A wrong size sails past the pearl — and pays nothing.
+    let wrong = *choices.iter().find(|c| **c != size).expect("there are decoy sizes");
+    h.pick_leap_size(wrong);
+    for _ in 0..=count {
+        if h.game.leap_session().map(|s| s.position) >= Some(pearl) { break; }
+        h.leap();
+    }
+    assert_eq!(h.game.pearls, 0, "leaping the wrong size never pays out");
+    assert_ne!(h.game.player.tile_x, 5 + 2 * pearl as usize,
+        "the wrong size shouldn't land on the pearl stone");
+
+    // Swim back, pick the size that divides the stone, and leap it out.
+    h.swim_back();
+    assert_eq!((h.game.player.tile_x, h.game.player.tile_y), (5, 13), "back to the launch stone");
+    h.pick_leap_size(size);
+    for _ in 0..count {
+        h.leap();
+    }
+
     let events = h.events_since(mark);
-    assert!(
-        events.iter().any(|e| matches!(
-            e,
-            // The session opened on the first stone landed on (stone 3, one
-            // step into the walk), 3 hops from the goal — but the detour down
-            // to stone 1 and back cost 7. That gap is the silent signal.
-            GameEvent::NumberLineReached { mark: 6, jumps: 7, optimal: 3 }
-        )),
-        "finding the called stone should log the find with hop efficiency; got {:?}",
-        events,
-    );
-    assert_eq!(h.game.pearls, 1, "finding the pearl awards one pearl");
+    let found = events.iter().find_map(|e| match e {
+        GameEvent::PearlFound { stone, leaps, resets, pearls, .. } =>
+            Some((*stone, *leaps, *resets, *pearls)),
+        _ => None,
+    }).unwrap_or_else(|| panic!("expected PearlFound; got: {events:?}"));
+    assert_eq!(found.0, pearl, "the pearl was under the stone Shelly called");
+    assert_eq!(found.1, count, "reached in exactly the leaps she promised");
+    assert_eq!(found.2, 1, "one wrong size tried first — the silent read");
+    assert_eq!(h.game.pearls, found.3);
+    assert_eq!(h.game.pearls, 1, "a second-try find pays the plain reef rate");
 }
 
+/// Taps have to work as well as keys — this is a game for kids on tablets, and
+/// a tap on Shelly's panel must never double as a click-to-walk off the stones.
 #[test]
-fn diving_the_gauge_to_the_bottom_descends_to_the_trench() {
+fn shellys_panel_can_be_played_entirely_by_tapping() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::ui;
+
+    let mut h = Harness::new(21);
+    h.start_dev_game();
+    h.game.profile.math_band = 2;
+    h.game.map = Map::reef();
+    h.game.npcs.clear();
+    h.game.npcs_offstage.clear();
+    h.warp_to(5, 13);
+
+    let (size, count) = {
+        let s = h.game.leap_session().expect("a trip on the launch stone");
+        (s.puzzle.size, s.puzzle.count)
+    };
+
+    // Tap the right size tile.
+    let (x, y) = {
+        let s = h.game.leap_session().unwrap();
+        let layout = ui::leap::layout(s, (960.0, 720.0));
+        let (r, _) = layout.choices.iter().find(|(_, n)| *n == size)
+            .expect("the answer is on offer");
+        (r.x + r.w / 2.0, r.y + r.h / 2.0)
+    };
+    h.click(x, y);
+    assert_eq!(h.game.leap_session().unwrap().chosen, Some(size), "the tap committed the size");
+    assert_eq!((h.game.player.tile_x, h.game.player.tile_y), (5, 13),
+        "a tap on the panel must not send the kid walking");
+
+    // Tap Leap until the pearl turns up.
+    for _ in 0..count {
+        let (lx, ly) = {
+            let s = h.game.leap_session().expect("still on the trip");
+            let layout = ui::leap::layout(s, (960.0, 720.0));
+            let r = layout.leap_btn.expect("the Leap button is up once a size is locked in");
+            (r.x + r.w / 2.0, r.y + r.h / 2.0)
+        };
+        h.click(lx, ly);
+        h.run_until(|g| !g.player.moving, 120);
+    }
+    assert!(h.game.pearls > 0, "tapping through the trip should find the pearl");
+}
+
+/// Hermie's deep stall takes pearls, not Dum Dums — and what you buy there is
+/// wardrobe swag like anything else, so it can be handed to a buddy.
+#[test]
+fn hermies_deep_stall_sells_reef_swag_for_pearls() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
 
-    // The reef's dive gauge is a vertical shaft at col 36 (depths 0..5); the
-    // deepest stone (36,13) is the trench door. Hop down to it → descend.
+    let mut h = Harness::new(17);
+    h.start_dev_game();
+    h.game.map = Map::trench();
+    h.game.npcs = npc_mod::npcs_for_map("trench");
+    h.game.npcs_offstage.clear();
+    h.warp_to(22, 9);
+    h.game.pearls = 10;
+    let dum_dums = h.game.dum_dums;
+
+    h.walk_to_npc(NpcKind::HermitCrab);
+    h.interact();
+    assert_eq!(h.game.state, GameState::InteractionMenu, "Hermie should offer a menu");
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+
+    let mark = h.mark();
+    h.buy_shop_item("kelp_crown"); // 4 pearls → solve 10 - 4 = 6
+
+    assert_eq!(h.game.pearls, 6, "the crown is paid for in pearls");
+    assert_eq!(h.game.dum_dums, dum_dums, "and Dum Dums are untouched");
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e,
+            GameEvent::PearlsSpent { amount: 4, item } if item == "kelp_crown")),
+        "expected PearlsSpent; got: {events:?}",
+    );
+    h.close_shop();
+    assert!(h.game.player_swag().contains("kelp_crown"),
+        "reef swag goes into the wardrobe like anything else");
+}
+
+/// The trade desk is the division moment: three pearls make a Dum Dum, and the
+/// remainder comes straight back.
+#[test]
+fn the_trade_desk_turns_pearls_into_dum_dums_and_hands_back_the_remainder() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(23);
+    h.start_dev_game();
+    h.game.map = Map::trench();
+    h.game.npcs = npc_mod::npcs_for_map("trench");
+    h.game.npcs_offstage.clear();
+    h.warp_to(22, 9);
+    h.game.pearls = 14;
+    let dum_dums = h.game.dum_dums;
+
+    h.walk_to_npc(NpcKind::HermitCrab);
+    h.interact();
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+
+    let mark = h.mark();
+    h.buy_shop_item("trade_desk"); // "14 pearls, 3 to a Dum Dum — how many?" → 4
+
+    assert_eq!(h.game.dum_dums, dum_dums + 4, "four whole Dum Dums out of fourteen pearls");
+    assert_eq!(h.game.pearls, 2, "and the two left over stay in your pocket");
+    let events = h.events_since(mark);
+    assert!(
+        events.iter().any(|e| matches!(e,
+            GameEvent::PearlsTraded { pearls: 12, dum_dums: 4, left_over: 2 })),
+        "expected PearlsTraded; got: {events:?}",
+    );
+
+    // It's a standing offer, not a one-per-customer item — come back any time.
+    h.select_shop_item("trade_desk");
+    assert!(h.game.active_shop().unwrap().message.is_some(),
+        "two pearls can't make a Dum Dum yet, and Hermie says so kindly");
+    assert_eq!(h.game.pearls, 2, "a refused trade takes nothing");
+}
+
+/// The Diving Net is the grind rewarding the grind: every pearl found after
+/// buying it is worth one more.
+#[test]
+fn the_diving_net_pays_a_bonus_on_every_pearl() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(29);
+    h.start_dev_game();
+    h.game.profile.math_band = 2;
+    h.game.map = Map::trench();
+    h.game.npcs = npc_mod::npcs_for_map("trench");
+    h.game.npcs_offstage.clear();
+    h.warp_to(22, 9);
+    h.game.pearls = 25;
+
+    h.walk_to_npc(NpcKind::HermitCrab);
+    h.interact();
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+    h.buy_shop_item("diving_net"); // 20 pearls → 25 - 20 = 5
+    h.close_shop();
+
+    assert!(h.game.has_diving_net(), "the net is a permanent perk, not an outfit");
+    assert!(!h.game.player_swag().contains("diving_net"),
+        "an upgrade is never worn, so it can't be handed to a buddy");
+    assert_eq!(h.game.pearls, 5);
+
+    // Now go find a pearl on the deep path: 2 base + 1 first-try + 1 net.
+    h.game.npcs.clear();
+    h.warp_to(4, 8);
+    let (size, count) = {
+        let s = h.game.leap_session().expect("the trench pearl path");
+        (s.puzzle.size, s.puzzle.count)
+    };
+    h.pick_leap_size(size);
+    for _ in 0..count {
+        h.leap();
+    }
+    assert_eq!(h.game.pearls, 5 + 4, "the net adds a pearl to every find");
+}
+
+/// Getting the size right first time is worth an extra pearl — and the deep
+/// path pays better than the shallow one, which is what the descent is for.
+#[test]
+fn a_first_try_leap_pays_a_bonus_and_the_deep_path_pays_double() {
+    use robot_buddy_game::tilemap::Map;
+
+    let mut h = Harness::new(5);
+    h.start_dev_game();
+    h.game.profile.math_band = 2;
+    h.game.map = Map::trench();
+    h.game.npcs.clear();
+    h.game.npcs_offstage.clear();
+
+    h.warp_to(4, 8); // the trench path's launch stone
+    let (size, count) = {
+        let s = h.game.leap_session().expect("the trench has its own pearl path");
+        (s.puzzle.size, s.puzzle.count)
+    };
+    h.pick_leap_size(size);
+    for _ in 0..count {
+        h.leap();
+    }
+    // Deep pearls are worth 2, plus 1 for getting the size right first time.
+    assert_eq!(h.game.pearls, 3,
+        "a clean trip on the deep path pays double plus the first-try bonus");
+}
+
+#[test]
+fn talking_to_inkwell_opens_the_dive_and_landing_descends() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    // Inkwell IS the shaft: there's no tile to walk onto, you ask her for a
+    // dive and she sends you down. Landing on the door descends to the trench.
     let mut h = Harness::new(9);
     h.start_dev_game();
     h.game.map = Map::reef();
     h.game.npcs = npc_mod::npcs_for_map("reef");
     h.game.npcs_offstage.clear();
 
-    h.game.player.tile_x = 36;
-    h.game.player.tile_y = 10;
-    h.game.player.x = 36.0 * 48.0;
-    h.game.player.y = 10.0 * 48.0;
-    h.game.player.target_x = h.game.player.x;
-    h.game.player.target_y = h.game.player.y;
-    h.game.player.moving = false;
+    h.warp_to(36, 10);
+    h.walk_to_npc(NpcKind::Octopus);
+    h.interact();
+    // She's a reef buddy who also runs the shaft, so it's a menu choice —
+    // that's what keeps her giftable.
+    assert_eq!(h.game.state, GameState::InteractionMenu);
+    h.select_option("dive");
+    assert_eq!(h.game.state, GameState::Descent,
+        "asking Inkwell for a dive should open the descent");
+    assert_eq!(h.game.map.id, "reef", "no transfer until the dive lands");
 
-    // Hop down to depth 4, then step onto the deepest stone (the trench door).
-    h.walk_to(36, 12);
-    for _ in 0..60 {
-        if h.game.map.id == "trench" { break; }
-        h.hold(macroquad::prelude::KeyCode::Down);
-    }
-    assert_eq!(h.game.map.id, "trench", "reaching the deepest dive-stone descends to the trench");
+    let mark = h.mark();
+    h.dive_to_the_door();
+    assert_eq!(h.game.map.id, "trench", "landing on the door descends to the trench");
+
+    let events = h.events_since(mark);
+    let landed = events.iter().find_map(|e| match e {
+        GameEvent::DescentLanded { door, kicks, optimal } => Some((*door, *kicks, *optimal)),
+        _ => None,
+    }).unwrap_or_else(|| panic!("expected DescentLanded; got: {events:?}"));
+    assert_eq!(landed.1, landed.2, "the shortest route is a clean dive");
+    assert_eq!(h.game.pearls, 1, "a clean dive pays a pearl");
     assert!(
         robot_buddy_game::number_track::track_for_map("trench").is_some(),
         "the trench should have its own pearl path (the descent payoff)",
     );
+}
+
+/// Nothing about a dive can go wrong: swim up and you're back on the reef with
+/// everything you had, and a long scenic dive still opens the door — it just
+/// doesn't earn the clean-dive pearl.
+#[test]
+fn a_dive_can_be_abandoned_or_taken_the_long_way_round() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    let mut h = Harness::new(4);
+    h.start_dev_game();
+    h.game.profile.math_band = 1; // shallow shaft, kicks of 1 and 2, no ledges
+    h.game.map = Map::reef();
+    h.game.npcs = npc_mod::npcs_for_map("reef");
+    h.game.npcs_offstage.clear();
+    h.warp_to(36, 10);
+
+    // Ask Inkwell for a dive, then think better of it.
+    h.walk_to_npc(NpcKind::Octopus);
+    h.interact();
+    h.select_option("dive");
+    assert_eq!(h.game.state, GameState::Descent);
+    h.press(KeyCode::Escape);
+    assert_eq!(h.game.state, GameState::Playing, "swimming up is always allowed");
+    assert_eq!(h.game.map.id, "reef", "bailing leaves us right where we were");
+    assert_eq!(h.game.pearls, 0);
+
+    // Ask again — a fresh dive every trip — and take it one mark at a time.
+    h.interact();
+    h.select_option("dive");
+    assert_eq!(h.game.state, GameState::Descent, "Inkwell asks again next time");
+    let door = h.game.active_descent().unwrap().session.puzzle.door;
+    for _ in 0..door {
+        h.kick(1, true);
+    }
+    for _ in 0..30 {
+        if h.game.active_descent().is_none() { break; }
+        h.press(KeyCode::Space);
+    }
+    assert_eq!(h.game.map.id, "trench", "counting down by ones still opens the door");
+    assert_eq!(h.game.pearls, 0, "the scenic route costs nothing and earns no pearl");
 }
 
 #[test]

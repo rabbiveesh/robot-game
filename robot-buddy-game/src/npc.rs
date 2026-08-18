@@ -35,6 +35,9 @@ pub enum NpcKind {
     Eel,
     /// Grandma Myrtle, the reef village's cottage resident.
     TurtleElder,
+    /// Hermie, the hermit crab who runs the deep stall in the trench. Carries
+    /// his whole shop on his back and takes pearls, not Dum Dums.
+    HermitCrab,
     // Space creatures
     MoonAlien,
     FuelBot,
@@ -85,6 +88,7 @@ impl NpcKind {
             NpcKind::Anglerfish => "anglerfish",
             NpcKind::Eel => "eel",
             NpcKind::TurtleElder => "turtle_elder",
+            NpcKind::HermitCrab => "hermit_crab",
             NpcKind::MoonAlien => "moon_alien",
             NpcKind::FuelBot => "fuel_bot",
             NpcKind::MarsGuardian => "mars_guardian",
@@ -129,6 +133,7 @@ impl NpcKind {
             NpcKind::Anglerfish => "Glimmer",
             NpcKind::Eel => "Wiggles",
             NpcKind::TurtleElder => "Grandma Myrtle",
+            NpcKind::HermitCrab => "Hermie",
             NpcKind::MoonAlien => "Zorp",
             NpcKind::FuelBot => "Tank",
             NpcKind::MarsGuardian => "Rok",
@@ -160,6 +165,7 @@ impl NpcKind {
         NpcKind::GroveSpirit, NpcKind::Pip, NpcKind::Signpost,
         NpcKind::ReefShark, NpcKind::SeaTurtle, NpcKind::Dolphin, NpcKind::Crab, NpcKind::Jelly,
         NpcKind::Octopus, NpcKind::Clam, NpcKind::Anglerfish, NpcKind::Eel, NpcKind::TurtleElder,
+        NpcKind::HermitCrab,
         NpcKind::MoonAlien, NpcKind::FuelBot, NpcKind::MarsGuardian, NpcKind::StarKeeper, NpcKind::StationAlien,
         NpcKind::ArcadeAlien,
         NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
@@ -187,7 +193,7 @@ impl NpcKind {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum SpriteType {
     Mommy,
     Sage,
@@ -203,6 +209,7 @@ pub enum SpriteType {
     Jellyfish,
     Octopus,
     Clam,
+    HermitShell,
     Anglerfish,
     Eel,
     AlienGreen,
@@ -210,6 +217,40 @@ pub enum SpriteType {
     FuelDepot,
     StarTerminal,
     Signpost,
+}
+
+impl SpriteType {
+    /// Every sprite, so tests can sweep the lot. Add a variant and the
+    /// `swag_fit` match stops compiling until it's handled — this list is the
+    /// nudge to check the new body's anchors too.
+    pub const ALL: &'static [SpriteType] = &[
+        SpriteType::Mommy, SpriteType::Sage, SpriteType::Shopkeeper, SpriteType::Dog,
+        SpriteType::Kid1, SpriteType::Kid2, SpriteType::OldOak,
+        SpriteType::Shark, SpriteType::SeaTurtle, SpriteType::Dolphin, SpriteType::Crab,
+        SpriteType::Jellyfish, SpriteType::Octopus, SpriteType::Clam, SpriteType::HermitShell,
+        SpriteType::Anglerfish, SpriteType::Eel,
+        SpriteType::AlienGreen, SpriteType::AlienRed, SpriteType::FuelDepot,
+        SpriteType::StarTerminal, SpriteType::Signpost,
+    ];
+
+    /// Where this body's head, collar and ground line sit, so a piece of swag
+    /// lands on the wearer instead of near them. Measured off the sprite
+    /// functions themselves — see `sprites::swag`.
+    pub fn swag_fit(self) -> sprites::swag::SwagFit {
+        use sprites::swag::SwagFit;
+        match self {
+            SpriteType::Shark | SpriteType::Dolphin => SwagFit::SWIMMER,
+            SpriteType::SeaTurtle => SwagFit::TURTLE,
+            SpriteType::Octopus => SwagFit::OCTOPUS,
+            SpriteType::Anglerfish | SpriteType::Eel => SwagFit::DEEP_FISH,
+            SpriteType::Jellyfish => SwagFit::JELLY,
+            SpriteType::Crab => SwagFit::CRAB,
+            SpriteType::Clam => SwagFit::CLAM,
+            SpriteType::HermitShell => SwagFit::HERMIT,
+            // Everyone else stands upright in the tile like the kid does.
+            _ => SwagFit::KID,
+        }
+    }
 }
 
 /// Manhattan radius an NPC may wander away from its home tile. Keeps wanderers
@@ -297,6 +338,9 @@ pub struct Npc {
     /// solved, refills the rocket's fuel. Like `gate`, it short-circuits the
     /// normal interaction menu.
     pub refuel: bool,
+    /// True for the NPC who runs a dive shaft (Inkwell). Interacting opens the
+    /// descent minigame instead of the normal menu — she IS the way down.
+    pub dive: bool,
     /// True for the arcade operator: interacting launches the number-bond space
     /// shooter (`GameState::Shooter`) directly, short-circuiting the normal
     /// interaction menu. Like `gate`/`refuel`, a reusable minigame-launch hook.
@@ -331,11 +375,22 @@ impl Npc {
     /// path queue instead — see `next_follower_intent`.
     pub fn is_following(&self) -> bool { self.pathing.is_some() && !self.homing }
 
-    /// Chompy the reef shark is a mount, not a trailing follower: while he's the
-    /// buddy the kid rides him, so he locks onto the player's tile each frame
+    /// Some sea buddies are mounts, not trailing followers: while one is the
+    /// buddy the kid rides it, so it locks onto the player's tile each frame
     /// instead of retracing a path queue. See the rideable handling in game.rs.
     pub fn is_rideable(&self) -> bool {
-        matches!(self.kind, NpcKind::ReefShark)
+        matches!(self.kind, NpcKind::ReefShark | NpcKind::Dolphin)
+    }
+
+    /// Vertical offset for the rider sitting on this mount, including the
+    /// mount's own swim-bob so kid and buddy move as one body. Only meaningful
+    /// when `is_rideable()`.
+    pub fn rider_offset(&self, time: f32) -> f32 {
+        match self.sprite {
+            // Echo arcs harder than Chompy and rides a little lower.
+            SpriteType::Dolphin => -12.0 + (time * 2.0).sin() * 3.0,
+            _ => -14.0 + (time * 1.5).sin() * 1.5,
+        }
     }
 
     /// Mark this NPC as the player's companion. The path queue starts empty —
@@ -469,6 +524,13 @@ impl Npc {
         self
     }
 
+    /// Builder: mark this NPC as the keeper of a dive shaft — interacting
+    /// opens the descent instead of the normal menu.
+    pub fn diving(mut self) -> Self {
+        self.dive = true;
+        self
+    }
+
     /// Builder: mark this NPC as the arcade operator — interacting launches the
     /// number-bond space shooter instead of opening the normal menu.
     pub fn launching_shooter(mut self) -> Self {
@@ -477,9 +539,22 @@ impl Npc {
     }
 
     pub fn draw(&self, time: f32) {
-        let x = self.entity.x;
-        let y = self.entity.y;
-        match self.sprite {
+        self.draw_at(self.entity.x, self.entity.y, self.entity.dir, time);
+    }
+
+    /// Draw this NPC's sprite at an arbitrary position and facing. Used for
+    /// mounts, which render pinned under their rider rather than at their own
+    /// entity coordinates.
+    pub fn draw_at(&self, x: f32, y: f32, dir: Dir, time: f32) {
+        self.sprite.draw_sprite(x, y, dir, time, self.gate);
+    }
+}
+
+impl SpriteType {
+    /// Paint this sprite anywhere. `asleep` only means anything to the gate
+    /// shark (he naps until his puzzle is solved); everyone else ignores it.
+    pub fn draw_sprite(self, x: f32, y: f32, dir: Dir, time: f32, asleep: bool) {
+        match self {
             SpriteType::Mommy => sprites::npcs::draw_mommy(x, y, time),
             SpriteType::Sage => sprites::npcs::draw_sage(x, y, time),
             SpriteType::Shopkeeper => sprites::npcs::draw_shopkeeper(x, y, time),
@@ -495,15 +570,16 @@ impl Npc {
             SpriteType::OldOak => sprites::npcs::draw_old_oak(x, y, time),
             // A gate shark naps (eyes shut) until its puzzle is solved; once
             // satisfied (`gate` cleared) it wakes up and grins.
-            SpriteType::Shark => sprites::npcs::draw_shark(x, y, self.entity.dir, time, self.gate),
+            SpriteType::Shark => sprites::npcs::draw_shark(x, y, dir, time, asleep),
             SpriteType::SeaTurtle => sprites::npcs::draw_sea_turtle(x, y, time),
-            SpriteType::Dolphin => sprites::npcs::draw_dolphin(x, y, self.entity.dir, time),
+            SpriteType::Dolphin => sprites::npcs::draw_dolphin(x, y, dir, time),
             SpriteType::Crab => sprites::npcs::draw_crab(x, y, time),
             SpriteType::Jellyfish => sprites::npcs::draw_jellyfish(x, y, time),
             SpriteType::Octopus => sprites::npcs::draw_octopus(x, y, time),
             SpriteType::Clam => sprites::npcs::draw_clam(x, y, time),
-            SpriteType::Anglerfish => sprites::npcs::draw_anglerfish(x, y, self.entity.dir, time),
-            SpriteType::Eel => sprites::npcs::draw_eel(x, y, self.entity.dir, time),
+            SpriteType::HermitShell => sprites::npcs::draw_hermit_crab(x, y, dir, time),
+            SpriteType::Anglerfish => sprites::npcs::draw_anglerfish(x, y, dir, time),
+            SpriteType::Eel => sprites::npcs::draw_eel(x, y, dir, time),
             SpriteType::AlienGreen => sprites::npcs::draw_alien(x, y, time,
                 Color::from_rgba(124, 207, 120, 255)),
             SpriteType::AlienRed => sprites::npcs::draw_alien(x, y, time,
@@ -537,6 +613,7 @@ fn npc(home_map: &'static str, kind: NpcKind, tx: usize, ty: usize, sprite: Spri
         gate: false,
         gate_id: None,
         refuel: false,
+        dive: false,
         launch_shooter: false,
         homing: false,
         leaving_map: false,
@@ -599,9 +676,9 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             // her tile must match the track's `clam` in number_track.rs, and
             // she stays put (she IS the signpost of the counting game).
             n(Clam,      3, 13, S::Clam,     true, true,  false),
-            // Inkwell guards the dive gauge on the east edge — talk to her for
-            // the depth, then hop down the stones to the trench.
-            n(Octopus,  36, 7, S::Octopus,   true, true,  false),
+            // Inkwell runs the dive shaft on the east edge — ask her for a
+            // dive and the descent minigame opens. Still a giftable buddy.
+            n(Octopus,  36, 7, S::Octopus,   true, true,  false).diving(),
         ],
         // The trench — deeper and stranger: Glimmer lights the pearl basin,
         // Wiggles winds around the east pocket, a jelly drifts the ledge, and
@@ -610,7 +687,11 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(Jelly,      16, 3, S::Jellyfish, true, true,  false).wandering(),
             n(Anglerfish, 10, 10, S::Anglerfish, true, false, false).wandering(),
             n(Eel,        22, 8, S::Eel,       true, true,  false).wandering(),
-            n(Clam,       3, 8, S::Clam,       true, true,  false),
+            n(Clam,       2, 8, S::Clam,       true, true,  false),
+            // Hermie's deep stall, tucked in the walled east pocket — you have
+            // to find your way round the rock spur to spend a pearl. Never
+            // challenges; he's a shopkeeper, not a puzzler.
+            n(HermitCrab, 22, 6, S::HermitShell, true, true, false),
         ],
         // Myrtle's shell cottage, inside the reef village.
         "cove_home" => vec![

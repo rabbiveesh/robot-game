@@ -47,6 +47,10 @@ pub enum Tile {
     StationFloor = 33,// walkable metal station floor
     RiseSpot = 34,    // rising bubble column → surface from an underwater map
     GoyishPad = 35,   // hub marker → the Goyish Map (arcade shooter)
+    /// A rip current running between Shelly's pearl stones. Solid — you can't
+    /// swim across it, which is what forces the stones to be *leapt* rather
+    /// than strolled along. See `number_track` and `logic::leap`.
+    Current = 36,
     // Glitch-only tiles (doghouse)
     Glitch95 = 95,
     Glitch96 = 96,
@@ -56,6 +60,20 @@ pub enum Tile {
 }
 
 pub const TILE_SIZE: f32 = 48.0;
+
+/// Lay the rip current between Shelly's stones on a map that has a pearl path.
+/// The stones themselves stay walkable floor — they're drawn as stones by the
+/// path overlay — so this only fills the gaps a kid has to leap over.
+fn paint_pearl_current(map_id: &str, tiles: &mut [Vec<Tile>]) {
+    let Some(track) = crate::number_track::track_for_map(map_id) else { return };
+    for (x, y) in track.current_tiles() {
+        tiles[y][x] = Tile::Current;
+    }
+    // Clear the stones themselves in case map texture landed on one.
+    for &(x, y) in track.tiles {
+        tiles[y][x] = Tile::Sand;
+    }
+}
 
 // ─── PORTALS ────────────────────────────────────────────
 
@@ -75,67 +93,73 @@ pub struct Portal {
     /// Fuel spent each time the player takes this portal (0 = free). Unlike
     /// `cost` this is charged every trip — it's how rocket jumps burn fuel.
     pub fuel_cost: u32,
+    /// True when this portal is a dive shaft: stepping onto it opens the
+    /// descent minigame instead of transferring, and the transfer only happens
+    /// once the diver rests on the door. Charged every trip — the dive IS the
+    /// gate. Reusable for any "earn your way through" doorway.
+    pub dive: bool,
 }
 
 /// All portals in the game. Checked after each player move.
 pub fn all_portals() -> &'static [Portal] {
     &[
         // Home: overworld door → home interior, home door → overworld
-        Portal { from_map: "overworld", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "home", from_x: 4, from_y: 6, to_map: "overworld", to_x: 5, to_y: 8, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "home", from_x: 4, from_y: 6, to_map: "overworld", to_x: 5, to_y: 8, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Lab: overworld east house → lab interior
-        Portal { from_map: "overworld", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "lab", from_x: 5, from_y: 7, to_map: "overworld", to_x: 22, to_y: 6, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "lab", from_x: 5, from_y: 7, to_map: "overworld", to_x: 22, to_y: 6, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Shop: overworld south house → shop interior
-        Portal { from_map: "overworld", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "shop", from_x: 4, from_y: 6, to_map: "overworld", to_x: 24, to_y: 18, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "shop", from_x: 4, from_y: 6, to_map: "overworld", to_x: 24, to_y: 18, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // SECRET: Dream world — water tile past bridge
-        Portal { from_map: "overworld", from_x: 16, from_y: 14, to_map: "dream", to_x: 14, to_y: 13, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "dream", from_x: 16, from_y: 14, to_map: "overworld", to_x: 13, to_y: 14, dir: Dir::Left, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 16, from_y: 14, to_map: "dream", to_x: 14, to_y: 13, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream", from_x: 16, from_y: 14, to_map: "overworld", to_x: 13, to_y: 14, dir: Dir::Left, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Dream-mode mirrors of overworld portals (same doors work in dream)
-        Portal { from_map: "dream", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "dream", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "dream", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "dream", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // SECRET: Doghouse land — roof tile behind home
-        Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "dream", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // SECRET: Hidden grove — tree at top border
-        Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "dream", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "grove", from_x: 5, from_y: 8, to_map: "overworld", to_x: 15, to_y: 1, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "grove", from_x: 5, from_y: 8, to_map: "overworld", to_x: 15, to_y: 1, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Dev → Control Room (knob bay for testing puzzle parameters in isolation)
-        Portal { from_map: "dev", from_x: 1, from_y: 9, to_map: "control", to_x: 6, to_y: 1, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "control", from_x: 6, from_y: 7, to_map: "dev", to_x: 1, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "dev", from_x: 1, from_y: 9, to_map: "control", to_x: 6, to_y: 1, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "control", from_x: 6, from_y: 7, to_map: "dev", to_x: 1, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Dev → Annex (validation field for new-map genericity)
-        Portal { from_map: "dev", from_x: 13, from_y: 10, to_map: "annex", to_x: 4, to_y: 5, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "annex", from_x: 4, from_y: 6, to_map: "dev", to_x: 13, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "dev", from_x: 13, from_y: 10, to_map: "annex", to_x: 4, to_y: 5, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "annex", from_x: 4, from_y: 6, to_map: "dev", to_x: 13, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // SECRET: Coral reef — dive spot at the south edge of the pond. Costs a
         // few Dum Dums to dive in (the reef's toll); resurface for free.
-        Portal { from_map: "overworld", from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0 },
-        Portal { from_map: "dream",     from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0 },
-        Portal { from_map: "reef", from_x: 8, from_y: 10, to_map: "overworld", to_x: 17, to_y: 16, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
-        // Reef dive-gauge → the trench: hop down the depth-stones to the deepest
-        // (24,13) and the descent fires. Surface again at the shaft top (24,8).
-        Portal { from_map: "reef", from_x: 36, from_y: 13, to_map: "trench", to_x: 13, to_y: 2, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "trench", from_x: 10, from_y: 2, to_map: "reef", to_x: 36, to_y: 8, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream",     from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0, dive: false },
+        Portal { from_map: "reef", from_x: 8, from_y: 10, to_map: "overworld", to_x: 17, to_y: 16, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        // Reef → the trench. There's no tile to step on: Inkwell the octopus
+        // runs this shaft, and `from_x`/`from_y` are just her ledge so the
+        // portal has a home map. Opened from her menu — see `Npc::diving`.
+        Portal { from_map: "reef", from_x: 36, from_y: 7, to_map: "trench", to_x: 13, to_y: 2, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0, dive: true },
+        Portal { from_map: "trench", from_x: 10, from_y: 2, to_map: "reef", to_x: 36, to_y: 8, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Reef village: Myrtle's shell cottage door → cove_home interior
-        Portal { from_map: "reef", from_x: 27, from_y: 18, to_map: "cove_home", to_x: 5, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "cove_home", from_x: 5, from_y: 6, to_map: "reef", to_x: 27, to_y: 19, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "reef", from_x: 27, from_y: 18, to_map: "cove_home", to_x: 5, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "cove_home", from_x: 5, from_y: 6, to_map: "reef", to_x: 27, to_y: 19, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // SPACE: Gizmo's lab launchpad → the orbital hub, and back.
-        Portal { from_map: "lab", from_x: 10, from_y: 2, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "space_hub", from_x: 8, from_y: 10, to_map: "lab", to_x: 10, to_y: 3, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "lab", from_x: 10, from_y: 2, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "space_hub", from_x: 8, from_y: 10, to_map: "lab", to_x: 10, to_y: 3, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Hub → planets. The Moon is a free hop; deeper worlds burn fuel.
-        Portal { from_map: "space_hub", from_x: 3,  from_y: 2, to_map: "moon",          to_x: 6, to_y: 2, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "space_hub", from_x: 11, from_y: 2, to_map: "mars",          to_x: 6, to_y: 7, dir: Dir::Up,   secret: false, cost: 0, fuel_cost: 3 },
-        Portal { from_map: "space_hub", from_x: 8,  from_y: 4, to_map: "asteroid_base", to_x: 6, to_y: 2, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 4 },
+        Portal { from_map: "space_hub", from_x: 3,  from_y: 2, to_map: "moon",          to_x: 6, to_y: 2, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "space_hub", from_x: 11, from_y: 2, to_map: "mars",          to_x: 6, to_y: 7, dir: Dir::Up,   secret: false, cost: 0, fuel_cost: 3, dive: false },
+        Portal { from_map: "space_hub", from_x: 8,  from_y: 4, to_map: "asteroid_base", to_x: 6, to_y: 2, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 4, dive: false },
         // Planet return pads → back to the hub (free).
-        Portal { from_map: "moon",          from_x: 6, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "mars",          from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "asteroid_base", from_x: 3, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "moon",          from_x: 6, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "mars",          from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "asteroid_base", from_x: 3, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Hub → the Goyish Map arcade deck (free, so the kid can replay it), and back.
-        Portal { from_map: "space_hub", from_x: 4, from_y: 5, to_map: "goyish_map", to_x: 6, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "goyish_map", from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "space_hub", from_x: 4, from_y: 5, to_map: "goyish_map", to_x: 6, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "goyish_map", from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
     ]
 }
 
@@ -190,7 +214,7 @@ impl Map {
         if col >= self.width || row >= self.height { return true; }
         if is_secret_walkable(self.id, col, row) { return false; }
         let tile = self.tiles[row][col];
-        matches!(tile, Tile::Water | Tile::Wall | Tile::Tree | Tile::HouseWall | Tile::Roof | Tile::Window | Tile::Fence | Tile::Sign | Tile::Chest | Tile::Table | Tile::Bookshelf | Tile::GlitchWall | Tile::Coral | Tile::Kelp | Tile::SpaceRock)
+        matches!(tile, Tile::Water | Tile::Wall | Tile::Tree | Tile::HouseWall | Tile::Roof | Tile::Window | Tile::Fence | Tile::Sign | Tile::Chest | Tile::Table | Tile::Bookshelf | Tile::GlitchWall | Tile::Coral | Tile::Kelp | Tile::SpaceRock | Tile::Current)
     }
 
     #[allow(non_snake_case)]
@@ -412,7 +436,7 @@ impl Map {
 
     /// Coral reef — the first underwater map. A lower arrival lagoon, a coral
     /// wall with a single gap guarded by a napping shark, a treasure cove up
-    /// top, a shell-cottage village in the south-east, and the dive gauge down
+    /// top, a shell-cottage village in the south-east, and Inkwell's shaft down
     /// to the trench on the east edge. Border is solid kelp. `RenderMode::
     /// Aquatic` paints it teal and floats bubbles. Built as plain data so
     /// future water maps copy the shape.
@@ -423,7 +447,7 @@ impl Map {
         // coral wall (row 5) with a single gap at col 8 is the shark's gate to
         // the treasure cove above (chest at (7,2)). The wide middle basin holds
         // the ambient number-line stepping-stones (row 13, see number_track)
-        // plus the friendly sea folk; the dive gauge to the trench runs down
+        // plus the friendly sea folk; Inkwell's dive shaft down to the trench is
         // col 36. Entry lands at (8,9); the rise spot home is at (8,10).
         let (w, h) = (40usize, 26usize);
         let mut tiles = vec![vec![SeaFloor; w]; h];
@@ -456,7 +480,7 @@ impl Map {
         }
         // Scattered coral / sand beds / bubble vents for texture — kept clear of
         // the creatures' spots, the portals, the number-line row (13) and the
-        // dive gauge (col 36, rows 8–13).
+        // Inkwell's ledge (col 36, row 7).
         for &(x, y) in &[(22, 4), (3, 16), (20, 11), (30, 11), (33, 15), (18, 16), (12, 18), (6, 20), (15, 21)] {
             tiles[y][x] = Coral;
         }
@@ -481,12 +505,16 @@ impl Map {
         for &(x, y) in &[(27, 19), (27, 20), (28, 20), (29, 20), (30, 20), (31, 20), (33, 20), (29, 23), (30, 23)] {
             tiles[y][x] = Sand;
         }
+        // Shelly's pearl stones along row 13, with rip current in the gaps so
+        // the path can only be leapt. Painted from `number_track` itself, so
+        // the terrain and the marks can never drift apart.
+        paint_pearl_current("reef", &mut tiles);
         // The way home: the surface portal at (8,10) is a visible rise spot.
         tiles[10][8] = RiseSpot;
         Map { id: "reef", width: w, height: h, render_mode: RenderMode::Aquatic, tiles }
     }
 
-    /// The trench — the reef's deeper zone, reached by hopping the dive gauge
+    /// The trench — the reef's deeper zone, reached by diving Inkwell's shaft
     /// to the bottom. A winding canyon: an arrival ledge up top (with the rise
     /// spot home), a wide middle basin holding the richer pearl path, a walled
     /// east pocket, and a lower vent field hiding a treasure chest.
@@ -535,6 +563,9 @@ impl Map {
         for &(x, y) in &[(7, 3), (18, 9), (3, 7), (24, 10), (15, 16), (12, 3)] {
             tiles[y][x] = Coral;
         }
+        // The deep pearl path (row 8), currents and all — same rules as the
+        // reef's, and a deep pearl is worth double.
+        paint_pearl_current("trench", &mut tiles);
         // Treasure pocket: a chest deep in the south-east vent field.
         tiles[15][23] = Chest;
         // The way back up: a bright rise spot on the arrival ledge.
@@ -726,6 +757,7 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
             Tile::Grass     => dream_grass,
             Tile::Path      => Color::from_rgba(180, 160, 200, 255), // misty path
             Tile::Water     => dream_water,
+            Tile::Current   => dream_water,
             Tile::Tree      => dream_grass,
             Tile::Flower    => dream_grass,
             Tile::Fence     => dream_grass,
@@ -806,6 +838,9 @@ fn tile_color_aquatic(tile: Tile) -> Color {
         Tile::Coral     => coral,
         Tile::Kelp      => kelp,
         Tile::Bubble    => floor,
+        // The rip current between pearl stones: darker and colder than the
+        // floor, so the gap reads as "not for walking" at a glance.
+        Tile::Current   => Color::from_rgba(16, 82, 116, 255),
         // Sunlit shaft — brighter than the floor so it reads from far away.
         Tile::RiseSpot  => Color::from_rgba(64, 156, 176, 255),
         Tile::Water     => deep,
@@ -829,6 +864,7 @@ fn tile_color_normal(tile: Tile) -> Color {
         Tile::Grass     => Color::from_rgba(76, 175, 80, 255),     // grass
         Tile::Path      => Color::from_rgba(222, 184, 135, 255),   // path (sandy)
         Tile::Water     => Color::from_rgba(66, 165, 245, 255),    // water
+        Tile::Current   => Color::from_rgba(40, 120, 190, 255),    // rip current
         Tile::Wall      => Color::from_rgba(121, 85, 72, 255),     // wall
         Tile::Tree      => Color::from_rgba(76, 175, 80, 255),     // tree (grass base)
         Tile::Flower    => Color::from_rgba(76, 175, 80, 255),     // flower (grass base)
@@ -966,6 +1002,7 @@ fn draw_tile_detail(tile: Tile, x: f32, y: f32, time: f32, mode: RenderMode) {
         Tile::Coral     => draw_coral_detail(x, y, time),
         Tile::Kelp      => draw_kelp_detail(x, y, time),
         Tile::Bubble    => draw_bubble_vent_detail(x, y, time),
+        Tile::Current   => draw_current_detail(x, y, time),
         Tile::DiveSpot  => draw_dive_spot_detail(x, y, time),
         Tile::RiseSpot  => draw_rise_spot_detail(x, y, time),
         Tile::Star      => draw_star_detail(x, y, time),
@@ -1490,5 +1527,19 @@ fn draw_glitch_overlay(cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, time: f
         let shift = (time * 100.0).sin() * 8.0;
         draw_rectangle(cam_x + shift, tear_y, view_w, tear_h,
             Color::new(0.0, 1.0, 0.5, 0.15));
+    }
+}
+
+/// The rip current between Shelly's pearl stones: fast pale streaks sliding
+/// across the tile. Reads as moving water you'd be swept along by — the visual
+/// reason the stones have to be leapt instead of walked.
+fn draw_current_detail(x: f32, y: f32, time: f32) {
+    let streak = Color::new(0.62, 0.86, 0.95, 0.5);
+    for i in 0..3 {
+        let lane = y + 10.0 + i as f32 * 14.0;
+        // Each lane slides at its own speed and wraps within the tile.
+        let drift = ((time * (26.0 + i as f32 * 9.0) + i as f32 * 17.0) % (TILE_SIZE + 22.0)) - 22.0;
+        let w = 16.0 + i as f32 * 3.0;
+        draw_line(x + drift, lane, x + drift + w, lane, 2.5, streak);
     }
 }

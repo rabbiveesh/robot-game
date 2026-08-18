@@ -377,7 +377,7 @@ pub fn draw_jellyfish(x: f32, y: f32, time: f32) {
     draw_circle(cx + 3.0, cy, 1.3, eye);
 }
 
-/// Inkwell the octopus — the dive-gauge guardian. A round purple head, big
+/// Inkwell the octopus — she runs the trench dive. A round purple head, big
 /// friendly eyes, and a fan of wiggling tentacles.
 pub fn draw_octopus(x: f32, y: f32, time: f32) {
     let cx = x + TS / 2.0;
@@ -651,4 +651,52 @@ pub fn draw_eel(x: f32, y: f32, dir: Dir, time: f32) {
     draw_circle(mx(10.0), hy - 2.0, 2.5, WHITE);
     draw_circle(mx(10.5), hy - 2.0, 1.2, eye);
     draw_line(mx(6.0), hy + 3.0, mx(11.0), hy + 3.5, 1.5, eye);
+}
+
+/// Hermie the hermit crab: a spiral shell with a small crab peeking out the
+/// front, claws up in greeting. The shell is his shop — it's stacked with the
+/// odds and ends he trades, which is the visual joke.
+pub fn draw_hermit_crab(x: f32, y: f32, dir: Dir, time: f32) {
+    let cx = x + TS / 2.0;
+    let cy = y + TS / 2.0 + 6.0;
+    let sway = (time * 2.2).sin() * 1.2;
+    let shell = Color::from_rgba(206, 142, 92, 255);
+    let shell_dark = Color::from_rgba(158, 100, 62, 255);
+    let body = Color::from_rgba(232, 106, 84, 255);
+    // Faces right by default; mirror when he's turned the other way.
+    let f = if dir == Dir::Left { -1.0 } else { 1.0 };
+    let mx = |off: f32| cx + f * off;
+
+    draw_ellipse(cx, y + TS - 4.0, 12.0, 4.0, 0.0, Color::from_rgba(0, 0, 0, 45));
+
+    // Shell: a fat spiral, wound tighter toward the middle.
+    draw_circle(mx(-4.0), cy - 4.0 + sway, 12.0, shell);
+    draw_circle(mx(-7.0), cy - 7.0 + sway, 7.5, shell_dark);
+    draw_circle(mx(-9.0), cy - 9.0 + sway, 4.0, shell);
+    draw_circle_lines(mx(-4.0), cy - 4.0 + sway, 12.0, 1.5, shell_dark);
+
+    // Wares strapped to the shell — a pearl and a little bundle.
+    draw_circle(mx(-1.0), cy - 14.0 + sway, 2.6, Color::from_rgba(240, 246, 250, 255));
+    draw_rectangle(mx(2.0), cy - 15.0 + sway, 5.0, 5.0, Color::from_rgba(120, 170, 110, 255));
+
+    // Legs poking out under the shell.
+    for i in 0..3 {
+        let lx = mx(2.0 + i as f32 * 3.5);
+        let wiggle = (time * 5.0 + i as f32).sin() * 1.0;
+        draw_line(lx, cy + 5.0, lx + f * 3.0, cy + 10.0 + wiggle, 1.8, body);
+    }
+
+    // Head and claws out the front.
+    draw_circle(mx(8.0), cy + 1.0 + sway, 6.0, body);
+    let claw_lift = (time * 3.0).sin() * 1.5;
+    draw_circle(mx(14.0), cy - 4.0 + claw_lift, 3.6, body);
+    draw_circle(mx(13.0), cy + 6.0 - claw_lift, 3.0, body);
+
+    // Eyes on stalks, because he's a shopkeeper and he's watching your purse.
+    let eye = Color::from_rgba(33, 33, 33, 255);
+    for side in [-1.0f32, 1.0] {
+        let ex = mx(7.0 + side * 3.0);
+        draw_line(ex, cy - 3.0 + sway, ex, cy - 9.0 + sway, 1.4, body);
+        draw_circle(ex, cy - 10.0 + sway, 1.8, eye);
+    }
 }

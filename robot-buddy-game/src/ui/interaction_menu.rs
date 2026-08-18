@@ -27,25 +27,55 @@ pub struct Button {
     pub key: usize,
 }
 
+/// Buttons never shrink below this — smaller than a small thumb is useless.
+const MIN_BTN_W: f32 = 110.0;
+
 pub fn layout(options: &[MenuOption], screen: (f32, f32)) -> Layout {
     let (sw, sh) = screen;
     let btn_h = 56.0;
     let gap = 12.0;
-    let count = options.len() as f32;
-    // Shrink buttons to fit the screen width once a puzzler stacks several
-    // options (Talk + four puzzle types), so the strip never runs off-screen.
-    let btn_w = (((sw - 40.0) - (count - 1.0).max(0.0) * gap) / count).min(200.0).max(110.0);
-    let total_w = count * btn_w + (count - 1.0).max(0.0) * gap;
-    let start_x = sw / 2.0 - total_w / 2.0;
-    let y = sh - 220.0;
+    let count = options.len().max(1);
+    let avail = sw - 40.0;
 
-    let strip = (start_x - 12.0, y - 10.0, total_w + 24.0, btn_h + 20.0);
+    // Shrink buttons to fit the screen width once an NPC stacks several options
+    // (Talk + Give + Swag + four puzzle types). Past the point where they'd be
+    // thumb-hostile, wrap onto extra rows instead of running off-screen.
+    let mut rows = 1usize;
+    while rows < 3 {
+        let per_row = count.div_ceil(rows);
+        let needed = per_row as f32 * MIN_BTN_W + (per_row as f32 - 1.0) * gap;
+        if needed <= avail { break; }
+        rows += 1;
+    }
+    let per_row = count.div_ceil(rows);
+    let rows_used = count.div_ceil(per_row); // a wrap may leave the last row short
 
-    let buttons = options.iter().enumerate().map(|(i, opt)| Button {
-        rect: (start_x + i as f32 * (btn_w + gap), y, btn_w, btn_h),
-        option_type: opt.option_type.clone(),
-        label: opt.label.clone(),
-        key: opt.key,
+    let btn_w = ((avail - (per_row as f32 - 1.0) * gap) / per_row as f32)
+        .min(200.0).max(MIN_BTN_W);
+    let row_w = per_row as f32 * btn_w + (per_row as f32 - 1.0) * gap;
+    let start_x = sw / 2.0 - row_w / 2.0;
+    let block_h = rows_used as f32 * btn_h + (rows_used as f32 - 1.0) * gap;
+    let top_y = sh - 220.0 - (block_h - btn_h);
+
+    let strip = (start_x - 12.0, top_y - 10.0, row_w + 24.0, block_h + 20.0);
+
+    let buttons = options.iter().enumerate().map(|(i, opt)| {
+        let row = i / per_row;
+        let col = i % per_row;
+        // Center a short final row under the full ones.
+        let in_row = if row == rows_used - 1 { count - row * per_row } else { per_row };
+        let row_offset = (per_row - in_row) as f32 * (btn_w + gap) / 2.0;
+        Button {
+            rect: (
+                start_x + row_offset + col as f32 * (btn_w + gap),
+                top_y + row as f32 * (btn_h + gap),
+                btn_w,
+                btn_h,
+            ),
+            option_type: opt.option_type.clone(),
+            label: opt.label.clone(),
+            key: opt.key,
+        }
     }).collect();
 
     Layout { strip, buttons }
@@ -65,6 +95,10 @@ pub fn handle_input(layout: &Layout, input: &FrameInput) -> Option<MenuAction> {
             3 => Some(KeyCode::Key3),
             4 => Some(KeyCode::Key4),
             5 => Some(KeyCode::Key5),
+            6 => Some(KeyCode::Key6),
+            7 => Some(KeyCode::Key7),
+            8 => Some(KeyCode::Key8),
+            9 => Some(KeyCode::Key9),
             _ => None,
         };
         if let Some(kc) = kc {
@@ -117,5 +151,53 @@ pub fn draw(layout: &Layout, mouse_pos: (f32, f32)) {
             font as f32,
             WHITE,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(n: usize) -> Vec<MenuOption> {
+        (0..n).map(|i| MenuOption {
+            option_type: format!("opt{i}"),
+            label: "Balance the Scale".into(), // the longest real label
+            key: i + 1,
+        }).collect()
+    }
+
+    /// A puzzler who also takes gifts and swag stacks seven options. However
+    /// many there are, every button has to stay on screen and stay big enough
+    /// to hit — that's what the row wrapping is for.
+    #[test]
+    fn every_button_stays_on_screen_and_thumb_sized() {
+        for count in 1..=7 {
+            for screen in [(480.0, 800.0), (800.0, 600.0), (1280.0, 720.0)] {
+                let l = layout(&options(count), screen);
+                assert_eq!(l.buttons.len(), count);
+                for b in &l.buttons {
+                    let (x, y, w, h) = b.rect;
+                    assert!(x >= 0.0 && x + w <= screen.0,
+                        "{count} options at {screen:?}: button runs off screen ({x}..{})", x + w);
+                    assert!(w >= MIN_BTN_W, "{count} options at {screen:?}: button too small ({w})");
+                    assert!(y >= 0.0 && y + h <= screen.1,
+                        "{count} options at {screen:?}: button off the bottom");
+                }
+            }
+        }
+    }
+
+    /// Buttons must never overlap — a tap has to mean one thing.
+    #[test]
+    fn buttons_never_overlap() {
+        let l = layout(&options(7), (800.0, 600.0));
+        for (i, a) in l.buttons.iter().enumerate() {
+            for b in l.buttons.iter().skip(i + 1) {
+                let (ax, ay, aw, ah) = a.rect;
+                let (bx, by, bw, bh) = b.rect;
+                let overlaps = ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
+                assert!(!overlaps, "buttons {i} and its neighbour overlap: {:?} vs {:?}", a.rect, b.rect);
+            }
+        }
     }
 }
