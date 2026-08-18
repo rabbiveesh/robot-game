@@ -25,7 +25,7 @@
 //! mis-pairs scaffold that representation one step more concrete, mid-run.
 //!
 //! Public surface mirrors the other logic modules:
-//!   - `ShooterSession::new(band, cra_stage, &mut impl Rng)` → fresh session (all
+//!   - `ShooterSession::new(band, cra_stage, pace, &mut impl Rng)` → fresh session (all
 //!     waves pre-generated up front, so the reducer itself needs no RNG)
 //!   - `shooter_reducer(session, action)` → new session
 
@@ -33,7 +33,7 @@ use rand::Rng;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
-use crate::types::CraStage;
+use crate::types::{CraStage, GamePace};
 
 /// Logical play-field extent. Positions are in these units, independent of
 /// screen pixels — the renderer maps them to whatever the window is.
@@ -142,10 +142,10 @@ impl ShooterSession {
     /// numbers are drawn. Each wave rolls its own target within the band's range,
     /// so a run mixes (e.g.) "make 12" then "make 9". All waves are generated here
     /// so the reducer stays RNG-free.
-    pub fn new(band: u8, cra_stage: CraStage, rng: &mut impl Rng) -> Self {
+    pub fn new(band: u8, cra_stage: CraStage, pace: GamePace, rng: &mut impl Rng) -> Self {
         let (lo, hi) = bond_target_range(band);
         let count = alien_count(band);
-        let drift_speed = drift_speed(band);
+        let drift_speed = drift_speed(band, pace);
         // Clamp the learner's stage up to what this band's numbers can show as
         // dots — no Concrete when the bonds are big (per the band floor).
         let min_representation = representation_floor(band);
@@ -247,9 +247,10 @@ fn representation_floor(band: u8) -> CraStage {
 }
 
 /// Drift speed, logical units/sec. With FIELD_H≈100 a full descent takes
-/// ~11–14s — a slow drift, never a countdown.
-fn drift_speed(band: u8) -> f32 {
-    6.5 + band as f32 * 0.4
+/// ~11–14s at `GamePace::Steady` — a slow drift, never a countdown. `pace` is
+/// the parent's dial for kids who can do the maths but not at that speed.
+fn drift_speed(band: u8, pace: GamePace) -> f32 {
+    (6.5 + band as f32 * 0.4) * pace.drift_multiplier()
 }
 
 /// Build one fully-clearable wave: `count/2` pairs that each sum to `target`,
@@ -429,9 +430,24 @@ mod tests {
     }
 
     #[test]
+    fn a_relaxed_pace_gives_a_kid_roughly_twice_as_long_to_think() {
+        let steady = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
+        let relaxed = ShooterSession::new(3, CraStage::Abstract, GamePace::Relaxed, &mut rng());
+        let brisk = ShooterSession::new(3, CraStage::Abstract, GamePace::Brisk, &mut rng());
+        assert!(relaxed.drift_speed < steady.drift_speed);
+        assert!(brisk.drift_speed > steady.drift_speed);
+        // The dial only changes the clock, never the maths.
+        assert_eq!(relaxed.aliens.len(), steady.aliens.len());
+        assert_eq!(relaxed.target, steady.target,
+            "same seed, same band — pace must not touch the number bonds");
+        let ratio = steady.drift_speed / relaxed.drift_speed;
+        assert!((1.7..2.1).contains(&ratio), "expected ~2x longer, got {ratio}x");
+    }
+
+    #[test]
     fn generated_wave_is_all_pairs_summing_to_target() {
         for band in 1..=10u8 {
-            let s = ShooterSession::new(band, CraStage::Abstract, &mut rng());
+            let s = ShooterSession::new(band, CraStage::Abstract, GamePace::Steady, &mut rng());
             let sum: u32 = s.aliens.iter().map(|a| a.value).sum();
             assert_eq!(sum % s.target, 0, "band {band}: values must group into target-sums");
             // Every alien is pairable — the anti-freeze property.
@@ -445,11 +461,11 @@ mod tests {
         // band 4 → 10..=19, the youngest → 5..=8.
         let mut r = rng();
         for _ in 0..12 {
-            let s4 = ShooterSession::new(4, CraStage::Abstract, &mut r);
+            let s4 = ShooterSession::new(4, CraStage::Abstract, GamePace::Steady, &mut r);
             for w in &s4.waves {
                 assert!((10..=19).contains(&w.target), "band 4 target {} out of range", w.target);
             }
-            let s1 = ShooterSession::new(1, CraStage::Abstract, &mut r);
+            let s1 = ShooterSession::new(1, CraStage::Abstract, GamePace::Steady, &mut r);
             for w in &s1.waves {
                 assert!((5..=8).contains(&w.target), "band 1 target {} out of range", w.target);
             }
@@ -459,7 +475,7 @@ mod tests {
     #[test]
     fn low_band_respects_the_learner_stage() {
         // Band 1 bonds are tiny (≤8), so a concrete kid gets concrete numbers.
-        let s = ShooterSession::new(1, CraStage::Concrete, &mut rng());
+        let s = ShooterSession::new(1, CraStage::Concrete, GamePace::Steady, &mut rng());
         assert_eq!(s.representation, CraStage::Concrete);
         assert_eq!(s.min_representation, CraStage::Concrete);
     }
@@ -468,7 +484,7 @@ mod tests {
     fn mid_band_floors_concrete_to_representational() {
         // Band 3 bonds reach 14 — too big for pure dots, so Concrete is bumped
         // up to Representational (numerals always present).
-        let s = ShooterSession::new(3, CraStage::Concrete, &mut rng());
+        let s = ShooterSession::new(3, CraStage::Concrete, GamePace::Steady, &mut rng());
         assert_eq!(s.representation, CraStage::Representational);
     }
 
@@ -476,7 +492,7 @@ mod tests {
     fn high_band_never_uses_concrete() {
         // Band 5 bonds reach 20 — dots don't help; even a "concrete" learner
         // sees numerals.
-        let s = ShooterSession::new(5, CraStage::Concrete, &mut rng());
+        let s = ShooterSession::new(5, CraStage::Concrete, GamePace::Steady, &mut rng());
         assert_eq!(s.representation, CraStage::Abstract);
         assert_eq!(s.min_representation, CraStage::Abstract);
     }
@@ -485,7 +501,7 @@ mod tests {
     fn scaffold_never_drops_below_the_band_floor() {
         // Band 3 floors at Representational; a long miss streak can't reach
         // Concrete.
-        let mut s = ShooterSession::new(3, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
         s.target = 10;
         for _ in 0..12 {
             force_miss(&mut s);
@@ -514,7 +530,7 @@ mod tests {
     #[test]
     fn a_streak_of_misses_scaffolds_representation_down() {
         // Band 1 floors at Concrete, so the full ladder is reachable.
-        let mut s = ShooterSession::new(1, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(1, CraStage::Abstract, GamePace::Steady, &mut rng());
         s.target = 10;
         force_miss(&mut s);
         force_miss(&mut s);
@@ -529,7 +545,7 @@ mod tests {
 
     #[test]
     fn a_correct_pair_resets_the_struggle_streak() {
-        let mut s = ShooterSession::new(1, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(1, CraStage::Abstract, GamePace::Steady, &mut rng());
         s.target = 10;
         force_miss(&mut s);
         force_miss(&mut s);
@@ -543,7 +559,7 @@ mod tests {
 
     #[test]
     fn correct_pair_pops_both_and_scores() {
-        let s = ShooterSession::new(3, CraStage::Abstract, &mut rng());
+        let s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
         let start = s.aliens.len();
         let (a, b) = a_matching_pair(&s);
         let s = shoot(s, a);
@@ -555,7 +571,7 @@ mod tests {
 
     #[test]
     fn wrong_pair_just_deselects_no_removal() {
-        let mut s = ShooterSession::new(3, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
         // Force a known non-summing pair.
         s.target = 10;
         s.aliens = vec![
@@ -573,7 +589,7 @@ mod tests {
 
     #[test]
     fn firing_into_empty_space_does_nothing() {
-        let mut s = ShooterSession::new(1, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(1, CraStage::Abstract, GamePace::Steady, &mut rng());
         s.aliens = vec![Alien { id: 0, x: 10.0, y: 20.0, value: 2, selected: false }];
         s.ship_x = 90.0; // far from the only alien
         let mut s = shooter_reducer(s, ShooterAction::Fire);
@@ -588,7 +604,7 @@ mod tests {
 
     #[test]
     fn a_bolt_travels_before_it_tags_an_alien() {
-        let mut s = ShooterSession::new(3, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
         s.aliens = vec![Alien { id: 0, x: 30.0, y: 20.0, value: 4, selected: false }];
         s.ship_x = 30.0;
         s = shooter_reducer(s, ShooterAction::Fire);
@@ -608,7 +624,7 @@ mod tests {
 
     #[test]
     fn breach_dims_shield_and_retreats_alien() {
-        let mut s = ShooterSession::new(5, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(5, CraStage::Abstract, GamePace::Steady, &mut rng());
         let shield0 = s.shield;
         // Park one alien right at the line, the rest safely up top.
         for (i, a) in s.aliens.iter_mut().enumerate() {
@@ -622,7 +638,7 @@ mod tests {
 
     #[test]
     fn empty_shield_freezes_the_drift() {
-        let mut s = ShooterSession::new(5, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(5, CraStage::Abstract, GamePace::Steady, &mut rng());
         s.shield = 0;
         let y_before: Vec<f32> = s.aliens.iter().map(|a| a.y).collect();
         let s = shooter_reducer(s, ShooterAction::Tick { dt: 1.0 });
@@ -632,7 +648,7 @@ mod tests {
 
     #[test]
     fn correct_pair_refills_shield_up_to_max() {
-        let mut s = ShooterSession::new(3, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
         s.shield = 1;
         let (a, b) = a_matching_pair(&s);
         let s = shoot(s, a);
@@ -642,7 +658,7 @@ mod tests {
 
     #[test]
     fn clearing_a_wave_advances_to_the_next() {
-        let mut s = ShooterSession::new(3, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
         assert_eq!(s.wave, 0);
         // Clear every alien in wave 0 (stop as soon as the wave index advances).
         while s.wave == 0 {
@@ -657,7 +673,7 @@ mod tests {
 
     #[test]
     fn clearing_the_last_wave_completes_the_run() {
-        let mut s = ShooterSession::new(3, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
         while s.phase == ShooterPhase::Playing {
             let (a, b) = a_matching_pair(&s);
             s = shoot(s, a);
@@ -669,7 +685,7 @@ mod tests {
 
     #[test]
     fn completed_run_ignores_further_actions() {
-        let mut s = ShooterSession::new(3, CraStage::Abstract, &mut rng());
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
         while s.phase == ShooterPhase::Playing {
             let (a, b) = a_matching_pair(&s);
             s = shoot(s, a);
@@ -683,7 +699,7 @@ mod tests {
 
     #[test]
     fn move_ship_clamps_to_the_field() {
-        let s = ShooterSession::new(1, CraStage::Abstract, &mut rng());
+        let s = ShooterSession::new(1, CraStage::Abstract, GamePace::Steady, &mut rng());
         let s = shooter_reducer(s, ShooterAction::MoveShip { dx: -1000.0 });
         assert_eq!(s.ship_x, 0.0);
         let s = shooter_reducer(s, ShooterAction::MoveShip { dx: 1000.0 });

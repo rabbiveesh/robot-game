@@ -48,7 +48,8 @@ Cargo.toml                       # workspace root
 robot-buddy-domain/              # Pure Rust domain (no browser deps)
   src/
     lib.rs                       # pub mod types/learning/challenge/economy/logic/world/text/quest
-    types.rs                     # Shared enums (Operation, SubSkill, CraStage, Phase)
+    types.rs                     # Shared enums (Operation, SubSkill, CraStage, Phase,
+                                 #   GamePace — parent-set arcade speed)
     learning/                    # Profile reducer, challenge gen, frustration, intake
     challenge/                   # Lifecycle state machine
     economy/                     # Rewards, gifts, interaction options, shop, wardrobe

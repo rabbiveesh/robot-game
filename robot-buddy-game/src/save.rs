@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use crate::sprites::Dir;
 use robot_buddy_domain::learning::learner_profile::LearnerProfile;
 use robot_buddy_domain::economy::wardrobe::{self, Wardrobe};
+use robot_buddy_domain::types::GamePace;
 
 /// Persistent save data for one slot.
 #[derive(Clone, Serialize, Deserialize)]
@@ -71,6 +72,10 @@ pub struct SaveData {
     /// Unlike swag these are never worn or handed over. Older saves load empty.
     #[serde(default)]
     pub upgrades: Vec<String>,
+    /// Arcade pace, set by a parent. Older saves load at the pace the cabinet
+    /// shipped with, so nobody's game changes under them.
+    #[serde(default)]
+    pub game_pace: GamePace,
     /// Secret map ids whose arrival cutscene has already played. The long
     /// "we're UNDERWATER!" speech is a first-time thrill, not a toll on every
     /// dive. Older saves load empty and get one last replay (minus whatever

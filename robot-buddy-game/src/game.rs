@@ -54,7 +54,7 @@ use robot_buddy_domain::economy::shop::{self, Currency, ItemKind, ShopItem, Shop
 use robot_buddy_domain::economy::wardrobe::{self, HandOver, Wardrobe};
 use robot_buddy_domain::world::encounters::{self, EncounterConfig, EncounterKind};
 use robot_buddy_domain::quest::{self, Quest, QuestAction, QuestSession, QuestStatus, QuestStep};
-use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel, Operation};
+use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel, GamePace, Operation};
 use robot_buddy_domain::world::movement::{
     Direction, EntityId, EntityState, GridDims, MoveIntent, MoveResolution,
     Solidity, resolve_moves,
@@ -569,6 +569,10 @@ pub struct Game {
     /// the long "we're UNDERWATER!" speech is a first-time thrill instead of a
     /// toll paid on every dive.
     seen_intros: std::collections::HashSet<String>,
+    /// How fast the arcade cabinet runs. A parent dial, set in the parent
+    /// section of settings and persisted per save slot — the kid never sees a
+    /// label for it (Invariant 6). It changes the clock, never the numbers.
+    pub game_pace: GamePace,
     /// Permanent perks bought at a counter (currently Hermie's Diving Net).
     /// Not wearable and never given away — once bought, always on. Persisted.
     upgrades: std::collections::BTreeSet<String>,
@@ -679,6 +683,7 @@ impl Game {
             satisfied_gates: std::collections::HashSet::new(),
             paid_tolls: std::collections::HashSet::new(),
             seen_intros: std::collections::HashSet::new(),
+            game_pace: GamePace::default(),
             upgrades: std::collections::BTreeSet::new(),
             fuel: FUEL_MAX,
             pending_refuel: false,
@@ -2638,7 +2643,8 @@ impl Game {
         let cra_stage = self.profile.cra_stages
             .get(&Operation::NumberBond).copied()
             .unwrap_or(CraStage::Concrete);
-        let session = ShooterSession::new(self.profile.math_band, cra_stage, &mut self.rng);
+        let session = ShooterSession::new(
+            self.profile.math_band, cra_stage, self.game_pace, &mut self.rng);
         self.events.push(GameEvent::ShooterStarted {
             band: self.profile.math_band,
             source: source.clone(),
@@ -2653,8 +2659,9 @@ impl Game {
     }
 
     fn step_shooter(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
-        // Ship glide speed in logical field units/sec (the field is 100 wide).
-        const SHIP_SPEED: f32 = 70.0;
+        // Ship glide speed in logical field units/sec (the field is 100 wide),
+        // nudged up at a relaxed pace so aiming keeps up with thinking.
+        let ship_speed = 70.0 * self.game_pace.ship_multiplier();
 
         // Bail out any time — no reward, no penalty. The kid can just walk away.
         if input.pressed(KeyCode::Escape) {
@@ -2684,9 +2691,9 @@ impl Game {
                 let left = input.down(KeyCode::Left) || input.down(KeyCode::A);
                 let right = input.down(KeyCode::Right) || input.down(KeyCode::D);
                 if left && !right {
-                    s = shooter_reducer(s, ShooterAction::MoveShip { dx: -SHIP_SPEED * dt });
+                    s = shooter_reducer(s, ShooterAction::MoveShip { dx: -ship_speed * dt });
                 } else if right && !left {
-                    s = shooter_reducer(s, ShooterAction::MoveShip { dx: SHIP_SPEED * dt });
+                    s = shooter_reducer(s, ShooterAction::MoveShip { dx: ship_speed * dt });
                 }
                 if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) {
                     s = shooter_reducer(s, ShooterAction::Fire);
@@ -3322,6 +3329,15 @@ impl Game {
                     },
                     // Mouse-reachable session export (parent dashboard). Same
                     // payload as the debug overlay's Export button.
+                    // Parent dial: slow the arcade down (or speed it up) and
+                    // persist it, without touching which numbers get asked.
+                    SettingsResult::SetPace(pace) => {
+                        self.game_pace = pace;
+                        if self.map.id != "dev" {
+                            let save_data = self.gather_save_data();
+                            self.save_backend.save_to(self.active_slot, &save_data);
+                        }
+                    }
                     SettingsResult::ExportSession => {
                         let json = session::build_export(
                             &self.player_name, &self.session_log, &self.gifts_given,
@@ -4608,7 +4624,7 @@ impl Game {
         }
 
         if self.settings_open {
-            ui::settings_overlay::draw(screen, self.features, self.parent_panel_open);
+            ui::settings_overlay::draw(screen, self.features, self.parent_panel_open, self.game_pace);
         }
     }
 
@@ -4647,6 +4663,7 @@ impl Game {
             seen_intros: self.seen_intros.iter().cloned().collect(),
             fuel: self.fuel,
             upgrades: self.upgrades.iter().cloned().collect(),
+            game_pace: self.game_pace,
         }
     }
 
@@ -4665,6 +4682,7 @@ impl Game {
         self.seen_intros = save_data.seen_intros.iter().cloned().collect();
         self.fuel = save_data.fuel;
         self.upgrades = save_data.upgrades.iter().cloned().collect();
+        self.game_pace = save_data.game_pace;
 
         self.map = Map::by_id(&save_data.map_id);
         self.npcs_offstage.clear();
@@ -5717,6 +5735,35 @@ mod tests {
                 shop::PurchaseOutcome::Bought { .. }),
             "once the hat is Tali's, the kid can buy themselves another",
         );
+    }
+
+    // ── The arcade pace dial survives a save → load ──
+    #[test]
+    fn arcade_pace_persists_through_save_load() {
+        let mut g = game();
+        assert_eq!(g.game_pace, GamePace::Steady, "new games start at the shipped pace");
+        g.game_pace = GamePace::Relaxed;
+        let data = g.gather_save_data();
+
+        let mut g2 = game();
+        g2.load_from_save(&data);
+        assert_eq!(g2.game_pace, GamePace::Relaxed,
+            "a parent sets the pace once, not every session");
+    }
+
+    /// A save written before the dial existed opens at the pace the cabinet
+    /// shipped with, so nobody's game changes under them.
+    #[test]
+    fn a_legacy_save_opens_at_the_shipped_pace() {
+        let json = r#"{
+            "version": 1, "name": "Ari", "gender": "Boy",
+            "map_id": "overworld", "player_x": 3, "player_y": 4, "player_dir": "Down",
+            "sparky_x": 3, "sparky_y": 5,
+            "dum_dums": 7, "play_time": 120.0, "timestamp": 0
+        }"#;
+        let save: crate::save::SaveData =
+            serde_json::from_str(json).expect("legacy save should load");
+        assert_eq!(save.game_pace, GamePace::Steady);
     }
 
     // ── Color Change comes with a color picker ──

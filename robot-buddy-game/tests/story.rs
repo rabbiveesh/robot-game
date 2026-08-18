@@ -554,6 +554,61 @@ fn parent_overlay_toggles_feature_flags_in_game() {
     assert!(!h.game.features.encounters, "toggling again disables it");
 }
 
+/// A parent can slow the arcade down without changing what the kid is asked.
+/// The dial lives behind "Parent options" — the child never sees a speed label.
+#[test]
+fn the_parent_panel_sets_the_arcade_pace_and_it_sticks() {
+    use robot_buddy_domain::types::GamePace;
+
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    assert_eq!(h.game.game_pace, GamePace::Steady, "saves start at the shipped pace");
+
+    h.open_settings();
+    h.click_parent_options();
+    h.set_arcade_pace(GamePace::Relaxed);
+    assert_eq!(h.game.game_pace, GamePace::Relaxed, "the parent panel sets the pace");
+
+    // It's a picker, not a toggle — you can go back up again.
+    h.set_arcade_pace(GamePace::Brisk);
+    assert_eq!(h.game.game_pace, GamePace::Brisk);
+    h.set_arcade_pace(GamePace::Relaxed);
+
+    assert_eq!(h.game.game_pace, GamePace::Relaxed);
+}
+
+/// The pace dial changes how long a kid has to think, never which numbers they
+/// get — a kid who can do the maths but not at speed shouldn't be moved down.
+#[test]
+fn a_relaxed_arcade_is_slower_but_asks_the_same_maths() {
+    use robot_buddy_domain::types::GamePace;
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let launch = |pace: GamePace| {
+        let mut h = Harness::new(31);
+        h.start_dev_game();
+        h.game.game_pace = pace;
+        h.game.map = Map::goyish_map();
+        h.game.npcs = npc_mod::npcs_for_map("goyish_map");
+        h.game.npcs_offstage.clear();
+        h.game.sparky_parked = true;
+        h.warp_to(6, 4); // just below Blaster Bubbe's cabinet
+        h.walk_to_npc(NpcKind::ArcadeAlien);
+        h.interact();
+        h.wait_until(|g| g.state == GameState::Shooter);
+        let s = h.game.active_shooter().expect("the cabinet should be running");
+        (s.session.drift_speed, s.session.target, s.session.aliens.len())
+    };
+
+    let (steady_drift, steady_target, steady_count) = launch(GamePace::Steady);
+    let (relaxed_drift, relaxed_target, relaxed_count) = launch(GamePace::Relaxed);
+
+    assert!(relaxed_drift < steady_drift, "Relaxed has to actually be slower");
+    assert_eq!(relaxed_target, steady_target, "same bond total — the maths is untouched");
+    assert_eq!(relaxed_count, steady_count, "same number of aliens");
+}
+
 #[test]
 fn dev_toggle_flips_the_quest_flag() {
     use macroquad::prelude::KeyCode;

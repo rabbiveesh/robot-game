@@ -707,6 +707,12 @@ impl Harness {
         self.click(x, y);
     }
 
+    /// Click an arcade-pace button in the open parent panel.
+    pub fn set_arcade_pace(&mut self, pace: robot_buddy_domain::types::GamePace) {
+        let (x, y) = robot_buddy_game::ui::settings_overlay::pace_button_center(SCREEN, pace);
+        self.click(x, y);
+    }
+
     // ─── Quest helpers ───────────────────────────────────
 
     /// Play the active quest to completion: tap Continue through narrative /
