@@ -48,13 +48,20 @@ Cargo.toml                       # workspace root
 robot-buddy-domain/              # Pure Rust domain (no browser deps)
   src/
     lib.rs                       # pub mod types/learning/challenge/economy/logic/world/text/quest
-    types.rs                     # Shared enums (Operation, SubSkill, CraStage, Phase)
+    types.rs                     # Shared enums (Operation, SubSkill, CraStage, Phase,
+                                 #   GamePace — parent-set arcade speed)
     learning/                    # Profile reducer, challenge gen, frustration, intake
     challenge/                   # Lifecycle state machine
-    economy/                     # Rewards, gifts, interaction options, shop
+    economy/                     # Rewards, gifts, interaction options, shop, wardrobe
+                                 #   (wardrobe = who wears which shop swag; swag given to a
+                                 #    buddy leaves the kid and stays with that buddy)
+                                 #   (shop = two counters: Bolt takes Dum Dums, Hermie in the
+                                 #    trench takes pearls + runs a 3:1 trade desk)
     logic/                       # Puzzle + manipulative reducers (see ADR-003):
-                                 #   kenken, patterns, balance, sudoku,
-                                 #   manipulate_concrete, number_line, base_ten
+                                 #   kenken, patterns, balance, sudoku, shooter,
+                                 #   manipulate_concrete, number_line, base_ten,
+                                 #   descent (the dive shaft that gates the trench),
+                                 #   leap (Shelly's pearl stones — skip-counting)
     quest/                       # Quest data model + step reducer + micro-quest gen
     world/                       # movement resolver, random encounters
     text/                        # voice_parser (spoken-number → integer)
@@ -71,8 +78,8 @@ robot-buddy-game/                # Macroquad game (depends on domain)
     input.rs                     # FrameInput — single input boundary
     save.rs                      # SaveBackend trait + LocalStorageBackend (prod) + InMemoryBackend (tests)
     tilemap.rs, npc.rs, session.rs, settings.rs
-    sprites/                     # player, robot, npcs
-    ui/                          # challenge, dialogue, hud, interaction_menu, title_screen, settings_overlay, visuals
+    sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit)
+    ui/                          # challenge, descent, dialogue, hud, interaction_menu, leap, shop, swag, title_screen, settings_overlay, visuals
     visuals/                     # math visualization renderers
     audio/                       # TTS via miniquad plugin
     net/                         # AI dialogue fetch

@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use robot_buddy_domain::learning::learner_profile::LearnerProfile;
+use robot_buddy_domain::types::{CraStage, Operation};
 
 /// A single challenge attempt record for the session log.
 #[derive(Clone, Serialize)]
@@ -101,6 +102,10 @@ pub struct ExportMetadata {
     pub rolling_window_size: usize,
     pub intake_completed: bool,
     pub map_id: String,
+    /// Per-operation CRA stage (Concrete/Representational/Abstract), so a
+    /// downloaded session shows where the learner sits — including NumberBond,
+    /// which drives the shooter's number representation.
+    pub cra_stages: HashMap<Operation, CraStage>,
 }
 
 /// Build the export JSON string.
@@ -139,6 +144,7 @@ pub fn build_export(
             rolling_window_size: profile.rolling_window.entries.len(),
             intake_completed: profile.intake_completed,
             map_id: map_id.to_string(),
+            cra_stages: profile.cra_stages.clone(),
         },
     };
 

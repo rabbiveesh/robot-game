@@ -8,7 +8,7 @@
 //! recount (never a wrong-answer buzzer).
 
 use crate::prelude::*;
-use robot_buddy_domain::economy::shop::ShopItem;
+use robot_buddy_domain::economy::shop::{ItemKind, ShopItem, ShopKind, TradeQuote};
 
 use crate::input::FrameInput;
 
@@ -59,6 +59,9 @@ pub enum ShopView<'a> {
     /// Picking an outfit color for the Color Change cosmetic; `current` is the
     /// index of the color worn right now.
     PickingColor { colors: &'a [(&'static str, Color)], current: usize },
+    /// At Hermie's trade desk: so many pearls to a Dum Dum, how many Dum Dums
+    /// does this pile make? Tap the quotient.
+    Trading { quote: &'a TradeQuote, choices: &'a [u32] },
 }
 
 pub fn layout(catalog: &[ShopItem], view: &ShopView, screen: (f32, f32)) -> ShopLayout {
@@ -74,7 +77,8 @@ pub fn layout(catalog: &[ShopItem], view: &ShopView, screen: (f32, f32)) -> Shop
 
     match view {
         ShopView::Browsing => {
-            let row_h = 54.0;
+            // Tall enough for a name plus the one-line blurb underneath it.
+            let row_h = 62.0;
             let gap = 10.0;
             let row_w = panel_w - 64.0;
             let start_x = panel_x + 32.0;
@@ -86,7 +90,7 @@ pub fn layout(catalog: &[ShopItem], view: &ShopView, screen: (f32, f32)) -> Shop
                 });
             }
         }
-        ShopView::Buying { choices, .. } => {
+        ShopView::Buying { choices, .. } | ShopView::Trading { choices, .. } => {
             let tile = 90.0;
             let gap = 18.0;
             let n = choices.len();
@@ -193,11 +197,12 @@ const TILE_BG: Color = Color::new(0.129, 0.588, 0.953, 1.0);
 
 pub fn draw_shop(
     catalog: &[ShopItem],
-    owned: &std::collections::HashSet<String>,
+    owned: &std::collections::BTreeSet<String>,
     balance: u32,
     view: &ShopView,
     layout: &ShopLayout,
     message: Option<&str>,
+    shop: ShopKind,
 ) {
     let sw = screen_width();
     let sh = screen_height();
@@ -207,10 +212,10 @@ pub fn draw_shop(
     draw_rectangle(p.x, p.y, p.w, p.h, DARK_BG);
     draw_rectangle_lines(p.x, p.y, p.w, p.h, 4.0, GOLD);
 
-    let title = "Bolt's Shop";
+    let title = shop.title();
     let tw = measure_text(title, None, 30, 1.0).width;
     draw_text(title, p.x + p.w / 2.0 - tw / 2.0, p.y + 38.0, 30.0, GOLD);
-    let bal = format!("You have {balance} Dum Dums");
+    let bal = format!("You have {balance} {}", shop.currency().label());
     draw_text(&bal, p.x + 32.0, p.y + 64.0, 22.0, WHITE);
 
     match view {
@@ -223,15 +228,23 @@ pub fn draw_shop(
                 let r = row.rect;
                 draw_rectangle(r.x, r.y, r.w, r.h, bg);
                 draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.25));
-                let label = if is_owned {
-                    format!("{}  (owned)", item.name)
-                } else {
-                    format!("{}", item.name)
+                let label = match item.kind {
+                    // The trade desk is a standing offer, never "owned".
+                    ItemKind::Trade { rate } =>
+                        format!("{}  ({rate} pearls = 1 Dum Dum)", item.name),
+                    _ if is_owned => format!("{}  (owned)", item.name),
+                    _ => item.name.clone(),
                 };
-                draw_text(&label, r.x + 16.0, r.y + 34.0, 24.0, WHITE);
-                let price = format!("{} DD", item.cost);
+                let name_y = if item.blurb.is_empty() { r.y + 38.0 } else { r.y + 28.0 };
+                draw_text(&label, r.x + 16.0, name_y, 24.0, WHITE);
+                let price = format!("{} {}", item.cost, item.currency.tag());
                 let pw = measure_text(&price, None, 24, 1.0).width;
-                draw_text(&price, r.x + r.w - pw - 16.0, r.y + 34.0, 24.0, GOLD);
+                draw_text(&price, r.x + r.w - pw - 16.0, name_y, 24.0, GOLD);
+                // What it actually does, for anything whose name doesn't say.
+                if !item.blurb.is_empty() {
+                    draw_text(&item.blurb, r.x + 16.0, r.y + 50.0, 18.0,
+                        Color::new(1.0, 1.0, 1.0, 0.62));
+                }
             }
         }
         ShopView::Buying { item, balance, cost, .. } => {
@@ -239,6 +252,33 @@ pub fn draw_shop(
             let q2 = format!("You have {}. How many will you have left?", balance);
             draw_text(&q, p.x + 32.0, p.y + 120.0, 24.0, WHITE);
             draw_text(&q2, p.x + 32.0, p.y + 152.0, 24.0, WHITE);
+            for tile in &layout.answers {
+                let t = tile.rect;
+                draw_rectangle(t.x, t.y, t.w, t.h, TILE_BG);
+                draw_rectangle_lines(t.x, t.y, t.w, t.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.4));
+                let s = format!("{}", tile.value);
+                let size = 36u16;
+                let sw2 = measure_text(&s, None, size, 1.0).width;
+                draw_text(&s, t.x + t.w / 2.0 - sw2 / 2.0, t.y + t.h / 2.0 + 12.0, size as f32, WHITE);
+            }
+        }
+        ShopView::Trading { quote, .. } => {
+            let q = format!("{} pearls make one Dum Dum.", quote.rate);
+            let q2 = format!("You have {}. How many Dum Dums is that?", quote.offered);
+            draw_text(&q, p.x + 32.0, p.y + 120.0, 24.0, WHITE);
+            draw_text(&q2, p.x + 32.0, p.y + 152.0, 24.0, WHITE);
+            // Lay the pile out in rows of `rate` — the grouping IS the
+            // division, so a kid can count the rows instead of dividing.
+            let per_row = quote.rate.max(1) as usize;
+            let pearl = Color::new(0.93, 0.96, 0.99, 1.0);
+            for i in 0..quote.offered.min(30) as usize {
+                let col = (i % per_row) as f32;
+                let row = (i / per_row) as f32;
+                let cx = p.x + 44.0 + col * 26.0 + row * 4.0;
+                let cy = p.y + 196.0 + row * 24.0;
+                draw_circle(cx, cy, 8.0, pearl);
+                draw_circle(cx - 2.0, cy - 2.0, 3.0, Color::new(1.0, 1.0, 1.0, 0.9));
+            }
             for tile in &layout.answers {
                 let t = tile.rect;
                 draw_rectangle(t.x, t.y, t.w, t.h, TILE_BG);

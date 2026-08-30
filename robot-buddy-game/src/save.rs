@@ -3,6 +3,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use crate::sprites::Dir;
 use robot_buddy_domain::learning::learner_profile::LearnerProfile;
+use robot_buddy_domain::economy::wardrobe::{self, Wardrobe};
+use robot_buddy_domain::types::GamePace;
 
 /// Persistent save data for one slot.
 #[derive(Clone, Serialize, Deserialize)]
@@ -40,9 +42,17 @@ pub struct SaveData {
     /// kind's home map. Older saves without this field deserialize as None.
     #[serde(default)]
     pub companion: Option<CompanionSave>,
-    /// Cosmetics bought from Bolt's shop (item ids). Older saves load as empty.
+    /// Legacy field — cosmetics the kid owned, back when only the kid could
+    /// wear them. Migrated into `wardrobe` on load. Kept for deserializing old
+    /// saves only.
     #[serde(default)]
+    #[serde(skip_serializing)]
     pub shop_owned: Vec<String>,
+    /// Who's wearing which piece of shop swag — the kid under
+    /// `wardrobe::PLAYER`, buddies under their NPC ids. A buddy keeps their
+    /// swag while swapped out, so this outlives any one companion.
+    #[serde(default)]
+    pub wardrobe: Wardrobe,
     /// Outfit color picked for the Color Change cosmetic. Older saves load as
     /// the default (the tint Color Change shipped with before the picker).
     #[serde(default = "default_color_choice")]
@@ -58,6 +68,20 @@ pub struct SaveData {
     /// Rocket fuel for space jumps. Older saves load with a full tank.
     #[serde(default = "default_fuel")]
     pub fuel: u32,
+    /// Permanent perks bought at a shop counter (e.g. Hermie's Diving Net).
+    /// Unlike swag these are never worn or handed over. Older saves load empty.
+    #[serde(default)]
+    pub upgrades: Vec<String>,
+    /// Arcade pace, set by a parent. Older saves load at the pace the cabinet
+    /// shipped with, so nobody's game changes under them.
+    #[serde(default)]
+    pub game_pace: GamePace,
+    /// Secret map ids whose arrival cutscene has already played. The long
+    /// "we're UNDERWATER!" speech is a first-time thrill, not a toll on every
+    /// dive. Older saves load empty and get one last replay (minus whatever
+    /// `migrate_legacy` can infer they've already seen).
+    #[serde(default)]
+    pub seen_intros: Vec<String>,
 }
 
 fn default_fuel() -> u32 { 10 }
@@ -80,6 +104,24 @@ impl SaveData {
         if let Some(band) = self.math_band.take() {
             if self.profile.math_band == 1 && band != 1 {
                 self.profile.math_band = band;
+            }
+        }
+        // Saves from before swag could change hands: everything the kid owned
+        // was, by definition, worn by the kid.
+        if !self.shop_owned.is_empty() {
+            let mut items = std::mem::take(&mut self.shop_owned);
+            for item in items.drain(..) {
+                self.wardrobe.put_on(wardrobe::PLAYER, &item);
+            }
+        }
+        // Saves from before intros were tracked: infer what's already been
+        // seen so a veteran diver doesn't sit through the reef speech again.
+        // A paid toll means they've been there; so does standing there now.
+        if self.seen_intros.is_empty() {
+            for map in self.paid_tolls.iter().chain(std::iter::once(&self.map_id)) {
+                if !self.seen_intros.contains(map) {
+                    self.seen_intros.push(map.clone());
+                }
             }
         }
     }
@@ -269,4 +311,31 @@ fn current_timestamp() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A save written before intros were tracked still shouldn't replay the
+    /// reef speech: a paid dive toll (and the map you're standing on) prove
+    /// you've already been there.
+    #[test]
+    fn legacy_save_infers_which_intros_were_already_seen() {
+        let json = r#"{
+            "version": 1, "name": "Ari", "gender": "Girl",
+            "map_id": "trench", "player_x": 3, "player_y": 4, "player_dir": "Down",
+            "sparky_x": 3, "sparky_y": 5,
+            "dum_dums": 7, "play_time": 120.0, "timestamp": 0,
+            "paid_tolls": ["reef"]
+        }"#;
+        let mut save: SaveData = serde_json::from_str(json).expect("legacy save should load");
+        assert!(save.seen_intros.is_empty(), "old saves have no intro list");
+
+        save.migrate_legacy();
+        assert!(save.seen_intros.contains(&"reef".to_string()),
+            "a paid dive toll means the reef intro already played");
+        assert!(save.seen_intros.contains(&"trench".to_string()),
+            "standing in the trench means its intro already played");
+    }
 }

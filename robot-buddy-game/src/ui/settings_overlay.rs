@@ -1,5 +1,6 @@
 use crate::prelude::*;
 use crate::settings::{self, TextSpeed};
+use robot_buddy_domain::types::GamePace;
 use crate::game::FeatureFlags;
 use crate::input::FrameInput;
 
@@ -17,6 +18,12 @@ pub enum SettingsResult {
     ToggleParentPanel,
     /// Flip an experimental feature flag on the live `Game`.
     ToggleFeature(Feature),
+    /// Download the session JSON (event log + profile). Mouse-reachable so it
+    /// doesn't depend on the backtick/debug-overlay keybind.
+    ExportSession,
+    /// Set how fast the arcade cabinet runs. Parent-only: it changes how long
+    /// a kid has to think, never which numbers they're asked for.
+    SetPace(GamePace),
 }
 
 const PANEL_BG: Color = Color::new(0.086, 0.129, 0.243, 1.0);      // #16213E
@@ -37,6 +44,8 @@ enum RowAction {
     SetSpeed(TextSpeed),
     ToggleParentPanel,
     ToggleFeature(Feature),
+    ExportSession,
+    SetPace(GamePace),
     BackToTitle,
     Done,
 }
@@ -65,7 +74,10 @@ fn layout(screen: (f32, f32), parent_open: bool) -> (f32, f32, f32, f32, Vec<Row
     // Panel height: base content + the parent section when expanded.
     let base_h = 540.0;
     let extra = if parent_open {
-        FEATURES.len() as f32 * (feature_h + feature_gap) + 24.0
+        // Feature toggles + the Export-session button + the arcade-pace row
+        // (which carries a section label above it).
+        (FEATURES.len() as f32 + 1.0) * (feature_h + feature_gap) + 24.0
+            + feature_h + feature_gap + 26.0
     } else {
         0.0
     };
@@ -103,6 +115,19 @@ fn layout(screen: (f32, f32), parent_open: bool) -> (f32, f32, f32, f32, Vec<Row
             rows.push(Row { rect: (panel_x + pad, cursor, inner_w, feature_h), action: RowAction::ToggleFeature(feature) });
             cursor += feature_h + feature_gap;
         }
+        // Export the session data (parent dashboard action).
+        rows.push(Row { rect: (panel_x + pad, cursor, inner_w, feature_h), action: RowAction::ExportSession });
+        cursor += feature_h + feature_gap;
+
+        // Arcade pace — three side-by-side buttons under their own label.
+        cursor += 26.0; // room for the "Arcade speed" label
+        let pace_gap = 10.0;
+        let pace_w = (inner_w - pace_gap * 2.0) / 3.0;
+        for (i, p) in GamePace::ALL.iter().enumerate() {
+            let x = panel_x + pad + i as f32 * (pace_w + pace_gap);
+            rows.push(Row { rect: (x, cursor, pace_w, feature_h), action: RowAction::SetPace(*p) });
+        }
+        cursor += feature_h + feature_gap;
         cursor += 12.0;
     }
 
@@ -130,6 +155,17 @@ pub fn parent_toggle_center(screen: (f32, f32)) -> (f32, f32) {
         .expect("parent toggle row always present")
 }
 
+/// Center of an arcade-pace button (the parent panel must be open).
+pub fn pace_button_center(screen: (f32, f32), pace: GamePace) -> (f32, f32) {
+    let (_, _, _, _, rows) = layout(screen, true);
+    rows.iter()
+        .find_map(|r| match r.action {
+            RowAction::SetPace(p) if p == pace => Some(center(r.rect)),
+            _ => None,
+        })
+        .expect("pace buttons present when parent panel open")
+}
+
 /// Center of a feature toggle row (the parent panel must be open to show them).
 pub fn feature_toggle_center(screen: (f32, f32), feature: Feature) -> (f32, f32) {
     let (_, _, _, _, rows) = layout(screen, true);
@@ -141,7 +177,7 @@ pub fn feature_toggle_center(screen: (f32, f32), feature: Feature) -> (f32, f32)
         .expect("feature toggle row present when parent panel open")
 }
 
-pub fn draw(screen: (f32, f32), features: FeatureFlags, parent_open: bool) {
+pub fn draw(screen: (f32, f32), features: FeatureFlags, parent_open: bool, pace: GamePace) {
     let (sw, sh) = screen;
     draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.75));
 
@@ -196,6 +232,26 @@ pub fn draw(screen: (f32, f32), features: FeatureFlags, parent_open: bool) {
                 let lw = measure_text(&label, None, 20, 1.0).width;
                 draw_text(&label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 7.0, 20.0, fg);
             }
+            RowAction::SetPace(p) => {
+                // The first button carries the section label — parents need to
+                // know this is the arcade's speed, not the child's level.
+                if p == GamePace::ALL[0] {
+                    draw_text("Arcade speed", x, y - 8.0, 18.0, LABEL_GRAY);
+                }
+                let active = pace == p;
+                let bg = if active { ACCENT } else { BTN_OFF };
+                let fg = if active { Color::from_rgba(26, 26, 46, 255) } else { BTN_TXT_OFF };
+                round_rect(x, y, w, h, 8.0, bg);
+                let label = p.label();
+                let lw = measure_text(label, None, 20, 1.0).width;
+                draw_text(label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 7.0, 20.0, fg);
+            }
+            RowAction::ExportSession => {
+                round_rect(x, y, w, h, 8.0, BTN_OFF);
+                let label = "Export session data";
+                let lw = measure_text(label, None, 20, 1.0).width;
+                draw_text(label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 7.0, 20.0, ACCENT);
+            }
             RowAction::BackToTitle => {
                 round_rect(x, y, w, h, 8.0, BTN_OFF);
                 let label = "Back to title screen";
@@ -247,12 +303,14 @@ pub fn handle_input(input: &FrameInput, screen: (f32, f32), parent_open: bool) -
                     }
                     return None;
                 }
+                RowAction::SetPace(p) => return Some(SettingsResult::SetPace(p)),
                 RowAction::SetSpeed(ts) => {
                     settings::set_text_speed(ts);
                     return None;
                 }
                 RowAction::ToggleParentPanel => return Some(SettingsResult::ToggleParentPanel),
                 RowAction::ToggleFeature(f) => return Some(SettingsResult::ToggleFeature(f)),
+                RowAction::ExportSession => return Some(SettingsResult::ExportSession),
                 RowAction::BackToTitle => return Some(SettingsResult::BackToTitle),
                 RowAction::Done => return Some(SettingsResult::Close),
             }

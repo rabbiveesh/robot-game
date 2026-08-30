@@ -282,6 +282,10 @@ impl Harness {
             3 => KeyCode::Key3,
             4 => KeyCode::Key4,
             5 => KeyCode::Key5,
+            6 => KeyCode::Key6,
+            7 => KeyCode::Key7,
+            8 => KeyCode::Key8,
+            9 => KeyCode::Key9,
             n => panic!("unsupported option key {}", n),
         };
         self.press(key);
@@ -566,6 +570,115 @@ impl Harness {
         self.wait_until(|g| g.state == GameState::Playing);
     }
 
+    // ─── Shelly's pearl-leap helpers ─────────────────────
+
+    /// Commit to a leap size by pressing the number key Shelly's bubble lists
+    /// it under. Panics if the size isn't on offer.
+    pub fn pick_leap_size(&mut self, size: u8) {
+        let key_no = {
+            let s = self.game.leap_session().expect("pick_leap_size: no pearl trip going");
+            s.puzzle.choices.iter().position(|c| *c == size)
+                .unwrap_or_else(|| panic!("{size} isn't on offer (choices: {:?})", s.puzzle.choices))
+        };
+        let key = match key_no {
+            0 => KeyCode::Key1,
+            1 => KeyCode::Key2,
+            2 => KeyCode::Key3,
+            _ => KeyCode::Key4,
+        };
+        self.press(key);
+    }
+
+    /// One leap east, waiting out the slide.
+    pub fn leap(&mut self) {
+        self.press(KeyCode::Right);
+        self.run_until(|g| !g.player.moving, 120);
+    }
+
+    /// Swim back to the launch stone, waiting out the slide.
+    pub fn swim_back(&mut self) {
+        self.press(KeyCode::Left);
+        self.run_until(|g| !g.player.moving, 120);
+    }
+
+    /// Stand the player on a tile outright (for setting up on a far-off map).
+    pub fn warp_to(&mut self, col: usize, row: usize) {
+        self.game.player.tile_x = col;
+        self.game.player.tile_y = row;
+        self.game.player.x = col as f32 * 48.0;
+        self.game.player.y = row as f32 * 48.0;
+        self.game.player.target_x = self.game.player.x;
+        self.game.player.target_y = self.game.player.y;
+        self.game.player.moving = false;
+        self.idle();
+    }
+
+    // ─── Descent helpers ─────────────────────────────────
+
+    /// Click one kick button in the open descent. `down` sinks, else rises.
+    pub fn kick(&mut self, n: u8, down: bool) {
+        let (x, y) = {
+            let ad = self.game.active_descent().expect("kick: not diving");
+            let layout = ui::descent::layout(&ad.session, SCREEN);
+            let b = layout.kicks.iter().find(|b| b.n == n && b.down == down)
+                .unwrap_or_else(|| panic!("no {} kick of {n} in this shaft",
+                    if down { "sink" } else { "rise" }));
+            (b.rect.x + b.rect.w / 2.0, b.rect.y + b.rect.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Play the shaft's shortest route by tapping the real kick buttons, then
+    /// dismiss the landing beat. Leaves the game wherever the door led.
+    pub fn dive_to_the_door(&mut self) {
+        use robot_buddy_domain::logic::descent::DiveAction;
+        let route = {
+            let ad = self.game.active_descent().expect("dive_to_the_door: not diving");
+            ad.session.puzzle.best_route().expect("the shaft should be divable")
+        };
+        for action in route {
+            match action {
+                DiveAction::Sink { n } => self.kick(n, true),
+                DiveAction::Rise { n } => self.kick(n, false),
+            }
+        }
+        // Landing holds a short beat; a tap skips it.
+        for _ in 0..30 {
+            if self.game.active_descent().is_none() { return; }
+            self.press(KeyCode::Space);
+        }
+        panic!("the descent never resolved after landing on the door");
+    }
+
+    // ─── Give-Swag helpers ───────────────────────────────
+
+    /// Click the row for `item_id` in the open "Give Swag" picker, handing it
+    /// to whoever the kid is talking to.
+    pub fn give_swag(&mut self, item_id: &str) {
+        let (x, y) = {
+            let asw = self.game.active_swag().expect("give_swag: picker not open");
+            let layout = ui::swag::layout(&asw.items, SCREEN);
+            let idx = asw.items.iter().position(|i| i.id == item_id)
+                .unwrap_or_else(|| panic!("the kid isn't wearing {item_id} (has: {:?})",
+                    asw.items.iter().map(|i| &i.id).collect::<Vec<_>>()));
+            let row = layout.items[idx].rect;
+            (row.x + row.w / 2.0, row.y + row.h / 2.0)
+        };
+        self.click(x, y);
+    }
+
+    /// Click the swag picker's "Done" button and return to Playing.
+    pub fn close_swag(&mut self) {
+        let (x, y) = {
+            let asw = self.game.active_swag().expect("close_swag: picker not open");
+            let layout = ui::swag::layout(&asw.items, SCREEN);
+            (layout.close_btn.x + layout.close_btn.w / 2.0,
+             layout.close_btn.y + layout.close_btn.h / 2.0)
+        };
+        self.click(x, y);
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
     // ─── Settings / parent overlay helpers ──────────────
 
     /// Open the settings overlay (the in-game gear; T key).
@@ -591,6 +704,12 @@ impl Harness {
     /// Click a feature toggle in the (revealed) parent section.
     pub fn toggle_feature_in_settings(&mut self, feature: robot_buddy_game::ui::settings_overlay::Feature) {
         let (x, y) = robot_buddy_game::ui::settings_overlay::feature_toggle_center(SCREEN, feature);
+        self.click(x, y);
+    }
+
+    /// Click an arcade-pace button in the open parent panel.
+    pub fn set_arcade_pace(&mut self, pace: robot_buddy_domain::types::GamePace) {
+        let (x, y) = robot_buddy_game::ui::settings_overlay::pace_button_center(SCREEN, pace);
         self.click(x, y);
     }
 
