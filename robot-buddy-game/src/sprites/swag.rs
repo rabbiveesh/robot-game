@@ -58,6 +58,70 @@ impl SwagFit {
     pub const HERMIT: SwagFit = SwagFit { head: 14.0, chest: 31.0, ground: 45.0, scale: 0.75 };
 }
 
+/// Paint the *gear* a wearer owns — permanent perks from a shop counter, which
+/// live in their own set because they can't be taken off or handed to a buddy.
+/// Drawn after the body, same as swag, and hung off the same anchor lines.
+///
+/// Kept separate from [`draw_swag`] deliberately: mixing the two sets would
+/// make it possible to gift away a perk.
+pub fn draw_gear(
+    x: f32,
+    y: f32,
+    dir: Dir,
+    bob: f32,
+    gear: &BTreeSet<String>,
+    fit: SwagFit,
+) {
+    if gear.is_empty() {
+        return;
+    }
+    let s = fit.scale;
+    let cx = x + TS / 2.0;
+    let time = get_time() as f32;
+    let chest = y + fit.chest + bob;
+    let ground = y + fit.ground;
+
+    // Diving Net: a mesh pouch slung at the hip with a couple of pearls
+    // glinting in it. Sits to the side rather than the back so it reads from
+    // every facing — and swaps sides when the kid turns, so it never covers
+    // their face.
+    if gear.contains("diving_net") {
+        let side = if dir == Dir::Right { -1.0 } else { 1.0 };
+        let px = |dx: f32| cx + side * dx * s;
+        let hip = (chest + ground) / 2.0 + 1.0 * s;
+        let sway = (time * 2.0).sin() * 0.8 * s;
+
+        let rope = Color::from_rgba(226, 214, 180, 235);
+        let mesh = Color::new(0.90, 0.94, 0.86, 0.85);
+
+        // Strap over the shoulder down to the pouch.
+        draw_line(px(-3.0), chest - 2.0 * s, px(10.0), hip - 4.0 * s + sway, 1.6, rope);
+        // Hoop mouth, then the bag hanging off it.
+        let bag_x = px(11.0);
+        let bag_y = hip + sway;
+        draw_ellipse(bag_x, bag_y - 4.0 * s, 5.0 * s, 2.0 * s, 0.0, rope);
+        draw_ellipse(bag_x, bag_y + 1.0 * s, 5.5 * s, 6.0 * s, 0.0,
+            Color::new(0.85, 0.92, 0.85, 0.35));
+        // Crosshatch so it reads as netting rather than a sack.
+        for i in 0..3 {
+            let o = (i as f32 - 1.0) * 3.2 * s;
+            draw_line(bag_x + o, bag_y - 3.0 * s, bag_x + o * 0.4, bag_y + 6.0 * s, 0.9, mesh);
+        }
+        for i in 0..2 {
+            let o = bag_y + i as f32 * 3.4 * s;
+            draw_line(bag_x - 5.0 * s, o, bag_x + 5.0 * s, o, 0.9, mesh);
+        }
+        // The catch: two pearls, one catching the light.
+        draw_circle(bag_x - 1.6 * s, bag_y + 1.6 * s, 1.9 * s,
+            Color::from_rgba(245, 250, 252, 255));
+        draw_circle(bag_x + 1.9 * s, bag_y + 3.4 * s, 1.5 * s,
+            Color::from_rgba(226, 238, 245, 255));
+        let glint = (time * 3.0).sin() * 0.5 + 0.5;
+        draw_circle(bag_x - 2.2 * s, bag_y + 0.9 * s, 0.7 * s,
+            Color::new(1.0, 1.0, 1.0, 0.4 + 0.5 * glint));
+    }
+}
+
 /// Paint everything in `worn` over a sprite already drawn at (`x`, `y`).
 ///
 /// `bob` is the wearer's current vertical wobble (the kid's walk cycle), so the

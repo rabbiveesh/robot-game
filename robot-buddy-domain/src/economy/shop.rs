@@ -65,6 +65,11 @@ pub struct ShopItem {
     pub cost: u32,
     pub currency: Currency,
     pub kind: ItemKind,
+    /// One kid-readable line about what this actually does, shown under the
+    /// name on the shelf. Empty for anything whose name says it all — a hat is
+    /// a hat. A perk that quietly changes the rules has to earn its 20 pearls
+    /// in words BEFORE the kid spends them.
+    pub blurb: String,
 }
 
 /// Which counter a catalog belongs to.
@@ -106,7 +111,13 @@ impl ShopKind {
 pub const TRADE_RATE: u32 = 3;
 
 fn item(id: &str, name: &str, cost: u32, currency: Currency, kind: ItemKind) -> ShopItem {
-    ShopItem { id: id.into(), name: name.into(), cost, currency, kind }
+    ShopItem { id: id.into(), name: name.into(), cost, currency, kind, blurb: String::new() }
+}
+
+fn described(
+    id: &str, name: &str, cost: u32, currency: Currency, kind: ItemKind, blurb: &str,
+) -> ShopItem {
+    ShopItem { blurb: blurb.into(), ..item(id, name, cost, currency, kind) }
 }
 
 /// Bolt's cosmetic catalog, cheapest first. Costs match the dum-dum-economy spec.
@@ -132,9 +143,11 @@ pub fn pearl_catalog() -> Vec<ShopItem> {
         item("shell_necklace", "Shell Necklace", 6, Currency::Pearls, ItemKind::Swag),
         item("starfish_badge", "Starfish Badge", 9, Currency::Pearls, ItemKind::Swag),
         item("glow_lantern", "Glow Lantern", 12, Currency::Pearls, ItemKind::Swag),
-        item("diving_net", "Diving Net", 20, Currency::Pearls, ItemKind::Upgrade),
-        item("trade_desk", "Trade for Dum Dums", TRADE_RATE, Currency::Pearls,
-             ItemKind::Trade { rate: TRADE_RATE }),
+        described("diving_net", "Diving Net", 20, Currency::Pearls, ItemKind::Upgrade,
+            "Catches 1 extra pearl every time you find one"),
+        described("trade_desk", "Trade for Dum Dums", TRADE_RATE, Currency::Pearls,
+            ItemKind::Trade { rate: TRADE_RATE },
+            "Swap a pile of pearls for Dum Dums"),
     ]
 }
 
@@ -364,6 +377,18 @@ mod tests {
             assert_eq!(q.spent + q.left_over, pearls, "pearls must balance at {pearls}");
             assert_eq!(q.spent, q.gain * TRADE_RATE);
             assert!(q.left_over < TRADE_RATE, "a whole trade was left on the table at {pearls}");
+        }
+    }
+
+    #[test]
+    fn anything_that_changes_the_rules_says_so_on_the_shelf() {
+        // A hat needs no explanation. A perk that quietly alters what every
+        // future pearl is worth has to say what it does before it's bought —
+        // twenty pearls with no visible effect is a mystery, not a reward.
+        for i in all_items() {
+            if matches!(i.kind, ItemKind::Upgrade | ItemKind::Trade { .. }) {
+                assert!(!i.blurb.is_empty(), "{} must explain itself on the shelf", i.id);
+            }
         }
     }
 

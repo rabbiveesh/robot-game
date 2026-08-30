@@ -2019,6 +2019,64 @@ fn the_diving_net_pays_a_bonus_on_every_pearl() {
     assert_eq!(h.game.pearls, 5 + 4, "the net adds a pearl to every find");
 }
 
+/// Twenty pearls is the most expensive thing in the game, and it used to buy
+/// something with no visible effect at all. The perk has to explain itself on
+/// the shelf, show up on the kid, and say so every time it pays.
+#[test]
+fn the_diving_net_explains_itself_and_shows_on_the_kid() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use robot_buddy_domain::economy::shop;
+
+    // It says what it does before a single pearl is spent.
+    let net = shop::pearl_catalog().into_iter().find(|i| i.id == shop::DIVING_NET)
+        .expect("Hermie stocks the net");
+    assert!(net.blurb.contains("pearl"),
+        "the shelf has to say what it does, got: {:?}", net.blurb);
+
+    let mut h = Harness::new(41);
+    h.start_dev_game();
+    h.game.map = Map::trench();
+    h.game.npcs = npc_mod::npcs_for_map("trench");
+    h.game.npcs_offstage.clear();
+    h.warp_to(22, 9);
+    h.game.pearls = 25;
+
+    h.walk_to_npc(NpcKind::HermitCrab);
+    h.interact();
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+    h.buy_shop_item("diving_net");
+
+    // Hermie says what it now does, rather than just "sold".
+    let msg = h.game.active_shop().unwrap().message.clone().unwrap_or_default();
+    assert!(msg.contains("pearl"), "the sale should explain the perk, got: {msg:?}");
+    h.close_shop();
+
+    // It's gear, not swag: worn by nobody, so it can't be handed to a buddy...
+    assert!(h.game.has_diving_net());
+    assert!(!h.game.player_swag().contains("diving_net"),
+        "a perk must never land in the wardrobe, or it could be given away");
+    // ...but the kid is still visibly carrying it.
+    assert!(h.game.gear_worn().contains("diving_net"),
+        "the kid should be drawn with the net they just bought");
+
+    // And every pearl it earns says so.
+    h.game.npcs.clear();
+    h.warp_to(4, 8);
+    let (size, count) = {
+        let s = h.game.leap_session().expect("the trench pearl path");
+        (s.puzzle.size, s.puzzle.count)
+    };
+    h.pick_leap_size(size);
+    for _ in 0..count {
+        h.leap();
+    }
+    let toast = h.game.track_toast_text().unwrap_or_default();
+    assert!(toast.contains("net"),
+        "the payout should name the net that earned it, got: {toast:?}");
+}
+
 /// Getting the size right first time is worth an extra pearl — and the deep
 /// path pays better than the shallow one, which is what the descent is for.
 #[test]

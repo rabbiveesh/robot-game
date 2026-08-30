@@ -77,7 +77,8 @@ pub fn layout(catalog: &[ShopItem], view: &ShopView, screen: (f32, f32)) -> Shop
 
     match view {
         ShopView::Browsing => {
-            let row_h = 54.0;
+            // Tall enough for a name plus the one-line blurb underneath it.
+            let row_h = 62.0;
             let gap = 10.0;
             let row_w = panel_w - 64.0;
             let start_x = panel_x + 32.0;
@@ -234,10 +235,16 @@ pub fn draw_shop(
                     _ if is_owned => format!("{}  (owned)", item.name),
                     _ => item.name.clone(),
                 };
-                draw_text(&label, r.x + 16.0, r.y + 34.0, 24.0, WHITE);
+                let name_y = if item.blurb.is_empty() { r.y + 38.0 } else { r.y + 28.0 };
+                draw_text(&label, r.x + 16.0, name_y, 24.0, WHITE);
                 let price = format!("{} {}", item.cost, item.currency.tag());
                 let pw = measure_text(&price, None, 24, 1.0).width;
-                draw_text(&price, r.x + r.w - pw - 16.0, r.y + 34.0, 24.0, GOLD);
+                draw_text(&price, r.x + r.w - pw - 16.0, name_y, 24.0, GOLD);
+                // What it actually does, for anything whose name doesn't say.
+                if !item.blurb.is_empty() {
+                    draw_text(&item.blurb, r.x + 16.0, r.y + 50.0, 18.0,
+                        Color::new(1.0, 1.0, 1.0, 0.62));
+                }
             }
         }
         ShopView::Buying { item, balance, cost, .. } => {

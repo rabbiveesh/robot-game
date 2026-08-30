@@ -2865,9 +2865,13 @@ impl Game {
             // A tidy decomposition is worth a pearl. A scenic one costs
             // nothing — it still opened the door.
             let bonus = if self.has_diving_net() { shop::DIVING_NET_BONUS } else { 0 };
-            self.pearls = self.pearls.saturating_add(1 + bonus);
+            let payout = 1 + bonus;
+            self.pearls = self.pearls.saturating_add(payout);
             self.pearl_hud.flash();
-            self.track_toast = Some(("Perfect dive!  +1 pearl".to_string(), 2.0));
+            let mut cheer = format!("Perfect dive!  +{payout} pearl");
+            if payout > 1 { cheer.push('s'); }
+            if bonus > 0 { cheer.push_str("  (your net caught one!)"); }
+            self.track_toast = Some((cheer, 2.0));
         }
         self.set_state(GameState::Playing);
         if let Some(portal) = self.dive_portal() {
@@ -3066,7 +3070,13 @@ impl Game {
                             ash.picking_color = true;
                             ash.message = Some("You got it! Pick your color!".into());
                         } else if matches!(item.kind, ItemKind::Upgrade) {
-                            ash.message = Some(format!("The {} is yours for keeps!", item.name));
+                            // Say what it DOES, not just that it's bought — a
+                            // perk with no visible effect is a mystery.
+                            ash.message = Some(if item.blurb.is_empty() {
+                                format!("The {} is yours for keeps!", item.name)
+                            } else {
+                                format!("{} — {}!", item.name, item.blurb)
+                            });
                         } else {
                             ash.message = Some(format!("You look GREAT in the {}!", item.name));
                         }
@@ -3402,6 +3412,18 @@ impl Game {
             Currency::DumDums => self.dum_dums,
             Currency::Pearls => self.pearls,
         }
+    }
+
+    /// The permanent perks the kid is carrying — drawn on them, but never in
+    /// the wardrobe, so they can't be handed to a buddy.
+    pub fn gear_worn(&self) -> &std::collections::BTreeSet<String> {
+        &self.upgrades
+    }
+
+    /// The floating cheer currently on screen, if any. Lets tests read the
+    /// feedback a kid would actually see.
+    pub fn track_toast_text(&self) -> Option<&str> {
+        self.track_toast.as_ref().map(|(msg, _)| msg.as_str())
     }
 
     /// True once the kid owns Hermie's Diving Net, which pays a bonus pearl on
@@ -3831,11 +3853,16 @@ impl Game {
                     resets: after.resets,
                     pearls: payout,
                 });
-                let cheer = if after.was_clean() {
+                let mut cheer = if after.was_clean() {
                     format!("Right on it! The pearl was under stone {}!  +{payout} pearls", after.puzzle.pearl)
                 } else {
                     format!("You found it! Stone {}.  +{payout} pearl", after.puzzle.pearl)
                 };
+                // Name the net every time it pays, so the kid can see the
+                // twenty pearls still working for them.
+                if self.has_diving_net() {
+                    cheer.push_str("  (your net caught one!)");
+                }
                 audio::tts::speak("Shelly", "You found my pearl!");
                 self.track_toast = Some((cheer, 2.4));
                 // Shelly hides it again — a fresh trip next time they launch.
@@ -4360,6 +4387,12 @@ impl Game {
                             }
                             // Cosmetics bought from Bolt's shop ride on the kid.
                             sprites::player::draw_player_cosmetics(self.player.x, py, self.player.dir, self.player.frame, self.player_swag(), &self.color_choice);
+                            // Perks from Hermie's stall ride along too — they're
+                            // not wearable swag, but the kid should be able to
+                            // SEE what twenty pearls bought them.
+                            let bob = if self.player.frame % 2 == 1 { -2.0 } else { 0.0 };
+                            sprites::swag::draw_gear(self.player.x, py, self.player.dir, bob,
+                                &self.upgrades, sprites::swag::SwagFit::KID);
                             // On planet surfaces the kid wears a space helmet.
                             if self.map.render_mode == tilemap::RenderMode::Cosmic {
                                 sprites::player::draw_spacesuit_overlay(self.player.x, py, self.player.frame);
