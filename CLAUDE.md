@@ -89,8 +89,9 @@ robot-buddy-game/                # Macroquad game (depends on domain)
   tests/                         # headless integration tests — plain `cargo test`, no window
     common/mod.rs                # Harness + story helpers (walk_to_npc, interact, answer_correctly)
     headless.rs, story.rs        # 7 player-flow tests; assertions read GameEvent log
-    layout_sweep.rs              # assert_sane over migrated panels × 5 screens (360×640 phone up) × awkward data
-    layout_discipline.rs         # migrated panels may not call raw macroquad draw/measure fns
+    layout_sweep.rs, sweep/      # assert_sane over migrated panels × 5 screens (360×640 phone up) × awkward data
+    layout_taffy.rs              # same sweep, every layout cross-checked against taffy (FlowEngine == taffy to 0.01px)
+    layout_discipline.rs         # migrated panels may not call raw draw/measure fns or hand-make rects
   www/                           # build output (gitignored except index.html)
 ```
 
@@ -101,7 +102,7 @@ ADRs document key design decisions, their context, and consequences. Read these 
 - **[ADR-001: Band Blending](docs/adr/001-band-blending.md)** — Bands are distribution centers, not hard levels. Accuracy-based promotion replaces streaks. Spread width tightens on frustration, widens on confidence. Streak is display-only.
 - **[ADR-002: Headless Test Harness](docs/adr/002-headless-test-harness.md)** — `Game::step` (pure) / `Game::render` (macroquad) split, `FrameInput` boundary, `SaveBackend` trait with `InMemoryBackend` for tests, `GameEvent` log as the assertion surface. Story-style integration tests run as plain `cargo test` with no window.
 - **[ADR-003: Logic-Puzzle, Manipulative & Quest Domain Layer](docs/adr/003-logic-puzzle-and-manipulative-domain-layer.md)** — Every new feature (extra logic puzzles, CRA manipulatives, quests, shop, encounters, voice parser) is built as a pure, headlessly-tested domain module first; the conflict-prone `game.rs` wiring is the only serial step. The ADR lists what's wired end-to-end vs. domain-only and gives the turnkey wiring recipe.
-- **[ADR-004: UI Layout](docs/adr/004-ui-layout.md)** — Panels describe a flexbox-shaped node tree; a swappable `LayoutEngine` (in-house `FlowEngine`, taffy-ready) produces a `Frame` that both drawing and hit-testing read, so overlap and hit-rect drift are impossible by construction. Text needs an explicit `Fit` policy; `assert_sane` sweeps panels × screens; migrated panels paint only through `ui::layout::paint`.
+- **[ADR-004: UI Layout](docs/adr/004-ui-layout.md)** — Panels describe a flexbox-shaped node tree; a swappable `LayoutEngine` (in-house `FlowEngine`, exact CSS flexbox, checked against taffy) produces a `Frame` that both drawing and hit-testing read, so overlap and hit-rect drift are impossible by construction. Overflow overflows (then clips): panels fit with `.w_pct(1.0).max_w(W)` and `min_h(0.0)`, never by relying on the engine to squeeze. Text needs an explicit `Fit` policy; `assert_sane` sweeps panels × screens; migrated panels paint only through `ui::layout::paint`. The ADR lists exactly what each check catches and misses, and the taffy swap recipe.
 
 ## Key Domain Concepts
 
