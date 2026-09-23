@@ -91,9 +91,14 @@ impl LeapSession {
         self.phase == LeapPhase::Found && self.resets == 0
     }
 
-    /// Stone the next leap would land on, or `None` before a size is locked in.
+    /// Stone the next leap would land on. `None` before a size is locked in,
+    /// and `None` when the next leap would sail clean off the end of the path
+    /// — there's no stone to point at, and pointing at the last one would
+    /// suggest a landing that can't happen.
     pub fn next_stone(&self) -> Option<u8> {
-        self.chosen.map(|s| self.position.saturating_add(s).min(self.puzzle.max))
+        let size = self.chosen?;
+        let to = self.position as u16 + size as u16;
+        (to <= self.puzzle.max as u16).then_some(to as u8)
     }
 }
 
@@ -140,11 +145,16 @@ pub fn leap_reducer(state: LeapSession, action: LeapAction) -> LeapSession {
             if next.phase != LeapPhase::Leaping {
                 return next;
             }
-            next.position = next.position.saturating_add(size).min(next.puzzle.max);
+            // Where the leap really goes, before any clamping. A leap past
+            // the end of the path parks you on the last stone for display,
+            // but it went PAST the pearl — it can never count as a landing,
+            // even when the pearl sits on that last stone.
+            let to = next.position as u16 + size as u16;
+            next.position = to.min(next.puzzle.max as u16) as u8;
             next.leaps = next.leaps.saturating_add(1);
-            if next.position == next.puzzle.pearl {
+            if to == next.puzzle.pearl as u16 {
                 next.phase = LeapPhase::Found;
-            } else if next.position > next.puzzle.pearl {
+            } else if to > next.puzzle.pearl as u16 {
                 next.phase = LeapPhase::Overshot;
             }
         }
@@ -170,22 +180,27 @@ fn leap_shape(band: u8) -> (Vec<u8>, u8, u8) {
 pub fn generate_leap(band: u8, max: u8, rng: &mut impl Rng) -> LeapPuzzle {
     let (pool, min_count, max_count) = leap_shape(band);
 
-    // Only sizes that can make at least `min_count` leaps inside the path.
+    // The pearl stays at least one stone short of the end, so a wrong size
+    // always visibly lands on a stone PAST it (or sails off the end) instead
+    // of parking on the pearl's own stone.
+    let room = max.saturating_sub(1).max(1);
+
+    // Only sizes that can make at least `min_count` leaps inside that room.
     let usable: Vec<u8> = pool.iter().copied()
-        .filter(|s| (*s as u16) * (min_count as u16) <= max as u16)
+        .filter(|s| (*s as u16) * (min_count as u16) <= room as u16)
         .collect();
     let size = if usable.is_empty() {
         // A path too short for this band's leaps still gets a real trip.
-        2.min(max.max(1))
+        2.min(room)
     } else {
         usable[rng.gen_range(0..usable.len())]
     };
 
-    let ceiling = (max / size.max(1)).max(1);
+    let ceiling = (room / size.max(1)).max(1);
     let hi = max_count.min(ceiling);
     let lo = min_count.min(hi);
     let count = if hi > lo { rng.gen_range(lo..=hi) } else { lo };
-    let pearl = size.saturating_mul(count).min(max);
+    let pearl = size.saturating_mul(count).min(room);
 
     // Decoys: sizes that DON'T divide the pearl, so choosing one overshoots.
     let mut decoys: Vec<u8> = (2..=9u8)
@@ -352,6 +367,76 @@ mod tests {
                 }
                 assert_eq!(s.phase, LeapPhase::Found,
                     "band {band} seed {seed}: {count} leaps of {} should land: {p:?}", p.size);
+            }
+        }
+    }
+
+    /// Leap one size out until the trip stops moving; returns the end state.
+    fn leap_it_out(p: &LeapPuzzle, size: u8) -> LeapSession {
+        let mut s = leap_reducer(LeapSession::new(p.clone()), LeapAction::Choose { size });
+        for _ in 0..=p.max {
+            s = leap_reducer(s, LeapAction::Leap);
+            if s.phase != LeapPhase::Leaping {
+                break;
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn every_decoy_overshoots_and_only_the_true_size_finds_the_pearl() {
+        for band in 0..=10u8 {
+            for max in [7u8, 12] {
+                for seed in 0..500u64 {
+                    let mut rng = SmallRng::seed_from_u64(seed);
+                    let p = generate_leap(band, max, &mut rng);
+                    for &c in &p.choices {
+                        let s = leap_it_out(&p, c);
+                        let want = if c == p.size { LeapPhase::Found } else { LeapPhase::Overshot };
+                        assert_eq!(s.phase, want,
+                            "band {band} max {max} seed {seed} size {c}: {p:?} -> {s:?}");
+                        assert!(s.position <= p.max, "position stays on the path: {s:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn sailing_off_the_end_is_never_a_landing_even_on_a_last_stone_pearl() {
+        // Hand-built: pearl on the very last stone. 5, 10, then 15 is off the
+        // end — it parks on stone 12, but it went PAST the pearl.
+        let p = LeapPuzzle {
+            max: 12, pearl: 12, size: 4, count: 3, choices: vec![4, 5], clue: Clue::Size { n: 4 },
+        };
+        let s = leap_it_out(&p, 5);
+        assert_eq!(s.phase, LeapPhase::Overshot);
+        assert!(!s.was_clean());
+        assert_eq!(leap_it_out(&p, 4).phase, LeapPhase::Found);
+    }
+
+    #[test]
+    fn next_stone_is_none_when_the_next_leap_leaves_the_path() {
+        let p = LeapPuzzle {
+            max: 12, pearl: 8, size: 4, count: 2, choices: vec![4, 5], clue: Clue::Size { n: 4 },
+        };
+        let mut s = leap_reducer(LeapSession::new(p), LeapAction::Choose { size: 5 });
+        assert_eq!(s.next_stone(), Some(5));
+        s = leap_reducer(s, LeapAction::Leap);
+        s = leap_reducer(s, LeapAction::Leap);
+        assert_eq!(s.position, 10);
+        assert_eq!(s.next_stone(), None, "15 is off the end — nothing to point at");
+    }
+
+    #[test]
+    fn the_pearl_is_never_on_the_last_stone() {
+        for band in 0..=10u8 {
+            for max in [6u8, 7, 12, 20] {
+                for seed in 0..100u64 {
+                    let mut rng = SmallRng::seed_from_u64(seed);
+                    let p = generate_leap(band, max, &mut rng);
+                    assert!(p.pearl < p.max, "band {band} max {max} seed {seed}: {p:?}");
+                }
             }
         }
     }
