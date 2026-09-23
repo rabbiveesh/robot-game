@@ -2020,9 +2020,7 @@ impl Game {
                 }
 
                 if let Some(ref reward) = ac.state.reward {
-                    self.dum_dums += reward.amount;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
+                    self.award_dum_dums(reward.amount);
                 }
 
                 self.events.push(GameEvent::ChallengeResolved {
@@ -2207,9 +2205,7 @@ impl Game {
                 self.set_state(GameState::Dialogue);
             }
             EncounterKind::FoundDumDum => {
-                self.dum_dums += 1;
-                self.dum_dum_hud.flash();
-                self.events.push(GameEvent::DumDumsAwarded { amount: 1 });
+                self.award_dum_dums(1);
                 self.start_dialogue(vec![DialogueLine {
                     speaker: self.current_buddy_name(),
                     text: "Ooh! A shiny Dum Dum, just sitting here!".into(),
@@ -2293,9 +2289,7 @@ impl Game {
                     act = Some(QuestAction::ArriveAt { map: map.clone(), x: *x, y: *y })
                 }
                 QuestStep::Reward { dum_dums } => {
-                    self.dum_dums += *dum_dums;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: *dum_dums });
+                    self.award_dum_dums(*dum_dums);
                     act = Some(QuestAction::AdvanceStep);
                 }
                 // A normal Choice is made via Choose; an empty (degenerate)
@@ -2428,9 +2422,7 @@ impl Game {
                 // solve. Violations = mistakes; hints stay reward-neutral
                 // (asking for help is a behavior we want, not a grind).
                 if let Some(reward) = rewards::determine_reward(was_correct, violations as u32) {
-                    self.dum_dums += reward.amount;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
+                    self.award_dum_dums(reward.amount);
                 }
 
                 self.events.push(GameEvent::KenKenResolved {
@@ -2498,9 +2490,7 @@ impl Game {
                 // mistakes = attempts - 1. Guess-grinding pays nothing.
                 let mistakes = attempts.saturating_sub(1) as u32;
                 if let Some(reward) = rewards::determine_reward(was_correct, mistakes) {
-                    self.dum_dums += reward.amount;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
+                    self.award_dum_dums(reward.amount);
                 }
 
                 self.events.push(GameEvent::PatternResolved {
@@ -2559,9 +2549,7 @@ impl Game {
                 // until it levels. Only a first-guess balance pays.
                 let mistakes = attempts.saturating_sub(1) as u32;
                 if let Some(reward) = rewards::determine_reward(was_correct, mistakes) {
-                    self.dum_dums += reward.amount;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
+                    self.award_dum_dums(reward.amount);
                 }
 
                 self.events.push(GameEvent::BalanceResolved {
@@ -2614,9 +2602,7 @@ impl Game {
                 let violations = asd.session.constraint_violations;
 
                 if let Some(reward) = rewards::determine_reward(was_correct, violations as u32) {
-                    self.dum_dums += reward.amount;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
+                    self.award_dum_dums(reward.amount);
                 }
 
                 self.events.push(GameEvent::SudokuResolved {
@@ -2750,9 +2736,7 @@ impl Game {
                 // Finishing the run pays out. A number-bond hunt naturally
                 // involves trial-and-error, so misses don't void the reward.
                 if let Some(reward) = rewards::determine_reward(true, 0) {
-                    self.dum_dums += reward.amount;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
+                    self.award_dum_dums(reward.amount);
                 }
 
                 self.events.push(GameEvent::ShooterResolved { waves, hits, misses, response_ms });
@@ -2935,7 +2919,7 @@ impl Game {
     /// picker rows are stable between openings.
     fn swag_catalog_for(&self, who: &str) -> Vec<ShopItem> {
         let worn = self.wardrobe.worn_by(who);
-        shop::shop_catalog().into_iter().filter(|i| worn.contains(&i.id)).collect()
+        shop::swag_items().into_iter().filter(|i| worn.contains(&i.id)).collect()
     }
 
     fn step_shop(&mut self, input: &FrameInput, screen: (f32, f32)) {
@@ -2978,7 +2962,10 @@ impl Game {
                     let shop = self.active_shop.as_ref().unwrap().shop;
                     self.balance_for(shop.currency())
                 };
-                let pearls = self.pearls;
+                let trade_purse = match self.active_shop.as_ref().unwrap().catalog[i].kind {
+                    ItemKind::Trade { .. } => purse,
+                    _ => 0,
+                };
                 let ash = self.active_shop.as_mut().unwrap();
                 if ash.selected.is_some() || ash.picking_color {
                     return; // already solving a purchase or picking a color
@@ -2993,12 +2980,12 @@ impl Game {
                 }
                 // The trade desk isn't a purchase, it's a conversion: hand
                 // over the pile and work out what it's worth.
-                if let ItemKind::Trade { rate } = item.kind {
-                    let quote = shop::quote_trade(pearls, rate);
+                if let ItemKind::Trade { rate, into } = item.kind {
+                    let quote = shop::quote_trade(trade_purse, item.currency, rate, into);
                     if quote.gain == 0 {
-                        let need = rate - pearls;
                         ash.message = Some(format!(
-                            "Not enough for a Dum Dum yet — you need {need} more pearls!",
+                            "Not enough for a {} yet — you need {} more {}!",
+                            into.singular(), quote.short_by(), item.currency.noun(quote.short_by()),
                         ));
                         return;
                     }
@@ -3022,7 +3009,7 @@ impl Game {
                     }
                     shop::PurchaseOutcome::CantAfford { shortfall } => {
                         ash.message = Some(format!(
-                            "You need {shortfall} more {}!", item.currency.label(),
+                            "You need {shortfall} more {}!", item.currency.noun(shortfall),
                         ));
                     }
                     shop::PurchaseOutcome::AlreadyOwned => {
@@ -3052,11 +3039,11 @@ impl Game {
                         ash.choices.clear();
                         ash.message = Some(if quote.left_over > 0 {
                             format!(
-                                "{} Dum Dums, and {} pearls back in your pocket!",
-                                quote.gain, quote.left_over,
+                                "{}, and {} back in your pocket!",
+                                quote.into.count(quote.gain), quote.from.count(quote.left_over),
                             )
                         } else {
-                            format!("{} Dum Dums, spot on!", quote.gain)
+                            format!("{}, spot on!", quote.into.count(quote.gain))
                         });
                         Some(Settled::Traded(quote))
                     } else {
@@ -3089,22 +3076,8 @@ impl Game {
                 let Some(settled) = settled else { return };
                 match settled {
                     Settled::Bought { item, spent, left } => {
-                        match item.currency {
-                            Currency::DumDums => {
-                                self.dum_dums = left;
-                                self.dum_dum_hud.flash();
-                                self.events.push(GameEvent::DumDumsSpent {
-                                    amount: spent, item: item.id.clone(),
-                                });
-                            }
-                            Currency::Pearls => {
-                                self.pearls = left;
-                                self.pearl_hud.flash();
-                                self.events.push(GameEvent::PearlsSpent {
-                                    amount: spent, item: item.id.clone(),
-                                });
-                            }
-                        }
+                        debug_assert_eq!(self.balance_for(item.currency), left + spent);
+                        self.spend(item.currency, spent, item.id.clone());
                         // Upgrades are banked here rather than worn — they're
                         // perks, not outfits, and can't be handed to a buddy.
                         if matches!(item.kind, ItemKind::Upgrade) {
@@ -3115,10 +3088,12 @@ impl Game {
                         }
                     }
                     Settled::Traded(quote) => {
-                        self.pearls = self.pearls.saturating_sub(quote.spent);
-                        self.dum_dums = self.dum_dums.saturating_add(quote.gain);
-                        self.pearl_hud.flash();
-                        self.dum_dum_hud.flash();
+                        let from = self.purse_mut(quote.from);
+                        *from = from.saturating_sub(quote.spent);
+                        let into = self.purse_mut(quote.into);
+                        *into = into.saturating_add(quote.gain);
+                        self.flash_purse(quote.from);
+                        self.flash_purse(quote.into);
                         self.events.push(GameEvent::PearlsTraded {
                             pearls: quote.spent,
                             dum_dums: quote.gain,
@@ -3414,6 +3389,40 @@ impl Game {
         }
     }
 
+    /// The one place a currency maps onto its field — every debit and credit
+    /// goes through here, so nothing pays in pearls and debits Dum Dums.
+    fn purse_mut(&mut self, currency: Currency) -> &mut u32 {
+        match currency {
+            Currency::DumDums => &mut self.dum_dums,
+            Currency::Pearls => &mut self.pearls,
+        }
+    }
+
+    fn flash_purse(&mut self, currency: Currency) {
+        match currency {
+            Currency::DumDums => self.dum_dum_hud.flash(),
+            Currency::Pearls => self.pearl_hud.flash(),
+        }
+    }
+
+    /// Pay `amount` for `item`: debit, flash the counter, log the spend.
+    fn spend(&mut self, currency: Currency, amount: u32, item: String) {
+        let purse = self.purse_mut(currency);
+        *purse = purse.saturating_sub(amount);
+        self.flash_purse(currency);
+        self.events.push(match currency {
+            Currency::DumDums => GameEvent::DumDumsSpent { amount, item },
+            Currency::Pearls => GameEvent::PearlsSpent { amount, item },
+        });
+    }
+
+    /// Hand the kid Dum Dums they earned: credit, flash, log.
+    fn award_dum_dums(&mut self, amount: u32) {
+        self.dum_dums = self.dum_dums.saturating_add(amount);
+        self.dum_dum_hud.flash();
+        self.events.push(GameEvent::DumDumsAwarded { amount });
+    }
+
     /// The permanent perks the kid is carrying — drawn on them, but never in
     /// the wardrobe, so they can't be handed to a buddy.
     pub fn gear_worn(&self) -> &std::collections::BTreeSet<String> {
@@ -3510,7 +3519,7 @@ impl Game {
     fn load_map_roster(&mut self, map_id: &'static str) -> Vec<npc::Npc> {
         let mut roster = self.npcs_offstage
             .remove(map_id)
-            .unwrap_or_else(|| npc::npcs_for_map(map_id));
+            .unwrap_or_else(|| self.fresh_roster(map_id));
         if let Some(c) = self.companion.as_ref() {
             // Drop only the companion's OWN home-roster entry so they don't also
             // appear back home. A same-kind NPC that lives on a *different* map
@@ -3520,16 +3529,31 @@ impl Game {
             let (kind, home) = (c.kind, c.home_map);
             roster.retain(|n| !(n.kind == kind && n.home_map == home));
         }
-        // A gate the kid already solved stays open: clear the guardian's `gate`
-        // flag so it's pushable and won't re-pose its puzzle.
         for n in roster.iter_mut() {
-            if let Some(id) = n.gate_id {
-                if self.satisfied_gates.contains(id) {
-                    n.gate = false;
-                }
-            }
+            self.settle_gate(n);
         }
         roster
+    }
+
+    /// `map_id`'s residents as the template spawns them, with the kid's
+    /// progress applied. Every NPC built from a template goes through here —
+    /// the map roster, the rehydrated companion, a stash seeded for a portal
+    /// push — so a tamed guardian can't come back gated (and asleep) just
+    /// because one path forgot to check.
+    fn fresh_roster(&self, map_id: &'static str) -> Vec<npc::Npc> {
+        let mut roster = npc::npcs_for_map(map_id);
+        for n in roster.iter_mut() {
+            self.settle_gate(n);
+        }
+        roster
+    }
+
+    /// A gate the kid already solved stays open: clear the guardian's `gate`
+    /// flag so it's pushable, awake, and won't re-pose its puzzle.
+    fn settle_gate(&self, n: &mut npc::Npc) {
+        if n.gate_id.is_some_and(|id| self.satisfied_gates.contains(id)) {
+            n.gate = false;
+        }
     }
 
     /// Resolve the gift recipient (held in `self.menu_target_id`) into a
@@ -4096,10 +4120,11 @@ impl Game {
             // the pushed NPC, and `load_map_roster` (which prefers an existing
             // stash over `npcs_for_map`) would spawn the map with its regular
             // residents missing.
-            self.npcs_offstage
-                .entry(dest_map.to_string())
-                .or_insert_with(|| npc::npcs_for_map(dest_map))
-                .push(npc_obj);
+            if !self.npcs_offstage.contains_key(dest_map) {
+                let roster = self.fresh_roster(dest_map);
+                self.npcs_offstage.insert(dest_map.to_string(), roster);
+            }
+            self.npcs_offstage.get_mut(dest_map).unwrap().push(npc_obj);
         }
     }
 
@@ -4190,20 +4215,16 @@ impl Game {
             self.start_dialogue(vec![DialogueLine {
                 speaker: self.current_buddy_name(),
                 text: format!(
-                    "Ooh, a dive spot! The first splash in costs {cost} Dum Dums. We need {need} more — let's go find some, boss!"
+                    "Ooh, a dive spot! The first splash in costs {}. We need {need} more — let's go find some, boss!",
+                    Currency::DumDums.count(cost),
                 ),
             }]);
             self.set_state(GameState::Dialogue);
             return;
         }
         if toll_due {
-            self.dum_dums -= cost;
             self.paid_tolls.insert(toll_id);
-            self.dum_dum_hud.flash();
-            self.events.push(GameEvent::DumDumsSpent {
-                amount: cost,
-                item: format!("dive:{dest_map}"),
-            });
+            self.spend(Currency::DumDums, cost, format!("dive:{dest_map}"));
         }
 
         if dest_map == "dream" {
@@ -4726,7 +4747,7 @@ impl Game {
         // silently drop the companion rather than panic on load.
         self.companion = save_data.companion.as_ref().and_then(|cs| {
             let home_map = Map::by_id(&cs.home_map);
-            let mut template = npc::npcs_for_map(home_map.id)
+            let mut template = self.fresh_roster(home_map.id)
                 .into_iter()
                 .find(|n| n.id_str() == cs.kind)?;
             template.entity.tile_x = cs.tile_x;
@@ -5719,6 +5740,25 @@ mod tests {
         g2.load_from_save(&data);
         assert!(g2.player_swag().contains("hat"), "hat should persist");
         assert!(g2.player_swag().contains("bow_tie"), "bow tie should persist");
+    }
+
+    // ── A gate guardian you've tamed and recruited stays awake on resume ──
+    #[test]
+    fn a_recruited_gate_shark_wakes_up_awake_after_load() {
+        let mut g = game();
+        g.satisfied_gates.insert("reef_gate_1".into());
+        let mut data = g.gather_save_data();
+        data.companion = Some(CompanionSave {
+            kind: npc::NpcKind::ReefShark.as_str().into(),
+            home_map: "reef".into(),
+            tile_x: 3,
+            tile_y: 3,
+        });
+
+        let mut g2 = game();
+        g2.load_from_save(&data);
+        let chompy = g2.companion.as_ref().expect("Chompy should still be the buddy");
+        assert!(!chompy.gate, "a solved gate shark must not come back asleep");
     }
 
     // ── Swag given to a buddy stays theirs across a save → load ──

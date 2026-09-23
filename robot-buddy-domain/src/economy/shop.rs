@@ -34,6 +34,26 @@ impl Currency {
         }
     }
 
+    /// Singular name — "one Dum Dum", "a pearl".
+    pub fn singular(self) -> &'static str {
+        match self {
+            Currency::DumDums => "Dum Dum",
+            Currency::Pearls => "pearl",
+        }
+    }
+
+    /// The name that agrees with `n`: 1 pearl, 3 pearls, 0 Dum Dums.
+    pub fn noun(self, n: u32) -> &'static str {
+        if n == 1 { self.singular() } else { self.label() }
+    }
+
+    /// `n` of this currency, counted in words a kid reads: "1 pearl", "3 Dum Dums".
+    /// Every line of shop copy that names an amount goes through here, so a
+    /// counter never quotes pearls in Dum Dums.
+    pub fn count(self, n: u32) -> String {
+        format!("{n} {}", self.noun(n))
+    }
+
     /// Short form for a price tag.
     pub fn tag(self) -> &'static str {
         match self {
@@ -52,9 +72,9 @@ pub enum ItemKind {
     Swag,
     /// A permanent perk. Bought once, kept forever, never worn or given away.
     Upgrade,
-    /// The trade desk: `rate` pearls become one Dum Dum, as many times over as
-    /// the kid can afford. Never "owned"; it's a standing offer.
-    Trade { rate: u32 },
+    /// The trade desk: `rate` of the item's currency become one of `into`, as
+    /// many times over as the kid can afford. Never "owned"; it's a standing offer.
+    Trade { rate: u32, into: Currency },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,7 +166,7 @@ pub fn pearl_catalog() -> Vec<ShopItem> {
         described("diving_net", "Diving Net", 20, Currency::Pearls, ItemKind::Upgrade,
             "Catches 1 extra pearl every time you find one"),
         described("trade_desk", "Trade for Dum Dums", TRADE_RATE, Currency::Pearls,
-            ItemKind::Trade { rate: TRADE_RATE },
+            ItemKind::Trade { rate: TRADE_RATE, into: Currency::DumDums },
             "Swap a pile of pearls for Dum Dums"),
     ]
 }
@@ -156,6 +176,13 @@ pub fn all_items() -> Vec<ShopItem> {
     let mut all = shop_catalog();
     all.extend(pearl_catalog());
     all
+}
+
+/// Every wearable either counter sells, in catalog order. Anything that asks
+/// "what swag exists?" (the give-swag picker, the wardrobe) reads this rather
+/// than one counter's shelf, so a new counter's swag shows up everywhere.
+pub fn swag_items() -> Vec<ShopItem> {
+    all_items().into_iter().filter(|i| i.kind == ItemKind::Swag).collect()
 }
 
 /// Extra pearls the Diving Net adds to every find, once it's bought.
@@ -173,7 +200,7 @@ pub fn can_afford(balance: u32, cost: u32) -> bool {
     balance >= cost
 }
 
-/// How many more Dum Dums are needed to afford `cost` (the number-bond moment).
+/// How many more of the counter's currency are needed to afford `cost` (the number-bond moment).
 /// Zero when already affordable.
 pub fn shortfall(balance: u32, cost: u32) -> u32 {
     cost.saturating_sub(balance)
@@ -195,7 +222,7 @@ pub enum PurchaseOutcome {
     Bought { result: PurchaseResult },
     /// Cosmetics are one-per-customer; this item is already owned.
     AlreadyOwned,
-    /// Not enough Dum Dums — `shortfall` is the "how many more?" number bond.
+    /// Not enough to pay — `shortfall` is the "how many more?" number bond.
     CantAfford { shortfall: u32 },
     /// No such item id in the catalog.
     UnknownItem,
@@ -233,24 +260,36 @@ pub fn process_purchase(balance: u32, item_id: &str, owned: &BTreeSet<String>) -
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TradeQuote {
+    /// What the kid hands over.
+    pub from: Currency,
+    /// What comes back.
+    pub into: Currency,
+    /// `from` per one `into`.
     pub rate: u32,
-    /// Pearls the kid brought to the counter.
+    /// `from` the kid brought to the counter.
     pub offered: u32,
-    /// Pearls actually spent (`gain * rate`).
+    /// `from` actually spent (`gain * rate`).
     pub spent: u32,
-    /// Dum Dums handed back.
+    /// `into` handed back.
     pub gain: u32,
-    /// Pearls that don't make a whole Dum Dum, kept by the kid.
+    /// `from` that doesn't make a whole `into`, kept by the kid.
     pub left_over: u32,
 }
 
-/// Quote a trade of every pearl the kid is carrying. Zero `gain` means they
-/// can't make even one Dum Dum yet — that's a number bond, not a refusal.
-pub fn quote_trade(pearls: u32, rate: u32) -> TradeQuote {
+impl TradeQuote {
+    /// How many more `from` it takes to make even one `into` (zero once they can).
+    pub fn short_by(&self) -> u32 {
+        self.rate.saturating_sub(self.offered)
+    }
+}
+
+/// Quote a trade of everything the kid is carrying. Zero `gain` means they
+/// can't make even one yet — that's a number bond, not a refusal.
+pub fn quote_trade(offered: u32, from: Currency, rate: u32, into: Currency) -> TradeQuote {
     let rate = rate.max(1);
-    let gain = pearls / rate;
+    let gain = offered / rate;
     let spent = gain * rate;
-    TradeQuote { rate, offered: pearls, spent, gain, left_over: pearls - spent }
+    TradeQuote { from, into, rate, offered, spent, gain, left_over: offered - spent }
 }
 
 #[cfg(test)]
@@ -351,20 +390,20 @@ mod tests {
     fn a_trade_hands_back_the_remainder() {
         // "Three pearls make a Dum Dum. You have fourteen — how many?" Four,
         // with two pearls left in your hand.
-        let q = quote_trade(14, TRADE_RATE);
+        let q = quote_trade(14, Currency::Pearls, TRADE_RATE, Currency::DumDums);
         assert_eq!((q.gain, q.spent, q.left_over), (4, 12, 2));
         assert_eq!(q.offered, 14);
     }
 
     #[test]
     fn an_exact_pile_trades_clean() {
-        let q = quote_trade(12, 3);
+        let q = quote_trade(12, Currency::Pearls, 3, Currency::DumDums);
         assert_eq!((q.gain, q.spent, q.left_over), (4, 12, 0));
     }
 
     #[test]
     fn too_few_pearls_to_trade_is_a_number_bond_not_a_refusal() {
-        let q = quote_trade(2, 3);
+        let q = quote_trade(2, Currency::Pearls, 3, Currency::DumDums);
         assert_eq!(q.gain, 0, "not enough for one Dum Dum yet");
         assert_eq!(q.left_over, 2, "and nothing is taken");
         assert_eq!(shortfall(2, 3), 1, "...they need one more pearl");
@@ -373,7 +412,7 @@ mod tests {
     #[test]
     fn trading_never_invents_or_loses_pearls() {
         for pearls in 0..40u32 {
-            let q = quote_trade(pearls, TRADE_RATE);
+            let q = quote_trade(pearls, Currency::Pearls, TRADE_RATE, Currency::DumDums);
             assert_eq!(q.spent + q.left_over, pearls, "pearls must balance at {pearls}");
             assert_eq!(q.spent, q.gain * TRADE_RATE);
             assert!(q.left_over < TRADE_RATE, "a whole trade was left on the table at {pearls}");
@@ -390,6 +429,22 @@ mod tests {
                 assert!(!i.blurb.is_empty(), "{} must explain itself on the shelf", i.id);
             }
         }
+    }
+
+    #[test]
+    fn swag_comes_from_every_counter() {
+        let ids: Vec<String> = swag_items().into_iter().map(|i| i.id).collect();
+        assert!(ids.contains(&"hat".to_string()), "{ids:?}");
+        assert!(ids.contains(&"kelp_crown".to_string()), "{ids:?}");
+        assert!(!ids.contains(&DIVING_NET.to_string()), "upgrades aren't swag: {ids:?}");
+    }
+
+    #[test]
+    fn amounts_agree_with_their_number() {
+        assert_eq!(Currency::Pearls.count(1), "1 pearl");
+        assert_eq!(Currency::Pearls.count(3), "3 pearls");
+        assert_eq!(Currency::DumDums.count(1), "1 Dum Dum");
+        assert_eq!(Currency::DumDums.count(0), "0 Dum Dums");
     }
 
     #[test]

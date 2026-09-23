@@ -59,8 +59,8 @@ pub enum ShopView<'a> {
     /// Picking an outfit color for the Color Change cosmetic; `current` is the
     /// index of the color worn right now.
     PickingColor { colors: &'a [(&'static str, Color)], current: usize },
-    /// At Hermie's trade desk: so many pearls to a Dum Dum, how many Dum Dums
-    /// does this pile make? Tap the quotient.
+    /// At a trade desk: so many of one currency make one of another — how
+    /// many does this pile make? Tap the quotient.
     Trading { quote: &'a TradeQuote, choices: &'a [u32] },
 }
 
@@ -215,7 +215,7 @@ pub fn draw_shop(
     let title = shop.title();
     let tw = measure_text(title, None, 30, 1.0).width;
     draw_text(title, p.x + p.w / 2.0 - tw / 2.0, p.y + 38.0, 30.0, GOLD);
-    let bal = format!("You have {balance} {}", shop.currency().label());
+    let bal = format!("You have {}", shop.currency().count(balance));
     draw_text(&bal, p.x + 32.0, p.y + 64.0, 22.0, WHITE);
 
     match view {
@@ -230,8 +230,8 @@ pub fn draw_shop(
                 draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.25));
                 let label = match item.kind {
                     // The trade desk is a standing offer, never "owned".
-                    ItemKind::Trade { rate } =>
-                        format!("{}  ({rate} pearls = 1 Dum Dum)", item.name),
+                    ItemKind::Trade { rate, into } =>
+                        format!("{}  ({} = {})", item.name, item.currency.count(rate), into.count(1)),
                     _ if is_owned => format!("{}  (owned)", item.name),
                     _ => item.name.clone(),
                 };
@@ -248,7 +248,7 @@ pub fn draw_shop(
             }
         }
         ShopView::Buying { item, balance, cost, .. } => {
-            let q = format!("{} costs {} Dum Dums.", item.name, cost);
+            let q = format!("{} costs {}.", item.name, item.currency.count(*cost));
             let q2 = format!("You have {}. How many will you have left?", balance);
             draw_text(&q, p.x + 32.0, p.y + 120.0, 24.0, WHITE);
             draw_text(&q2, p.x + 32.0, p.y + 152.0, 24.0, WHITE);
@@ -263,8 +263,8 @@ pub fn draw_shop(
             }
         }
         ShopView::Trading { quote, .. } => {
-            let q = format!("{} pearls make one Dum Dum.", quote.rate);
-            let q2 = format!("You have {}. How many Dum Dums is that?", quote.offered);
+            let q = format!("{} make one {}.", quote.from.count(quote.rate), quote.into.singular());
+            let q2 = format!("You have {}. How many {} is that?", quote.offered, quote.into.label());
             draw_text(&q, p.x + 32.0, p.y + 120.0, 24.0, WHITE);
             draw_text(&q2, p.x + 32.0, p.y + 152.0, 24.0, WHITE);
             // Lay the pile out in rows of `rate` — the grouping IS the

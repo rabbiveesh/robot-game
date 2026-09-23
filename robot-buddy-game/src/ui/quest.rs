@@ -10,6 +10,7 @@
 use crate::prelude::*;
 
 use crate::input::FrameInput;
+use robot_buddy_domain::economy::shop::Currency;
 
 #[derive(Clone, Copy)]
 pub struct UiRect {
@@ -204,7 +205,7 @@ pub fn draw(view: &QuestView, title: &str, message: Option<&str>, layout: &Quest
         QuestView::Travel { label } => label.clone(),
         QuestView::Puzzle { prompt, .. } => prompt.to_string(),
         QuestView::Choice { prompt, .. } => prompt.to_string(),
-        QuestView::Reward { dum_dums } => format!("You earned {dum_dums} Dum Dums!"),
+        QuestView::Reward { dum_dums } => format!("You earned {}!", Currency::DumDums.count(*dum_dums)),
     };
     let mut y = p.y + 86.0;
     for line in wrap_text(&body, p.w - 56.0, 24) {

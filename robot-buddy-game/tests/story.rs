@@ -1935,6 +1935,48 @@ fn hermies_deep_stall_sells_reef_swag_for_pearls() {
     h.close_shop();
     assert!(h.game.player_swag().contains("kelp_crown"),
         "reef swag goes into the wardrobe like anything else");
+
+    // ...and it shows up in the give-swag picker, same as a hat from Bolt's.
+    h.game.map = Map::home();
+    h.game.npcs = npc_mod::npcs_for_map("home");
+    h.game.npcs_offstage.clear();
+    h.warp_to(5, 3);
+    h.walk_to_npc(NpcKind::Kid1);
+    h.interact();
+    h.select_option("swag");
+    h.wait_until(|g| g.state == GameState::Swag);
+    h.give_swag("kelp_crown");
+    h.close_swag();
+    assert!(h.game.swag_worn_by("kid_1").contains("kelp_crown"),
+        "Tali should be wearing the kelp crown");
+}
+
+/// A counter talks in its own money: Hermie never quotes pearls as Dum Dums.
+#[test]
+fn hermie_counts_in_pearls() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(17);
+    h.start_dev_game();
+    h.game.map = Map::trench();
+    h.game.npcs = npc_mod::npcs_for_map("trench");
+    h.game.npcs_offstage.clear();
+    h.warp_to(22, 9);
+    h.game.pearls = 2;
+
+    h.walk_to_npc(NpcKind::HermitCrab);
+    h.interact();
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+
+    h.select_shop_item("trade_desk");
+    let msg = h.game.active_shop().unwrap().message.clone().unwrap_or_default();
+    assert!(msg.contains("1 more pearl!"), "one pearl short, in pearls: {msg:?}");
+
+    h.select_shop_item("glow_lantern");
+    let msg = h.game.active_shop().unwrap().message.clone().unwrap_or_default();
+    assert!(msg.contains("10 more pearls"), "short in pearls, not Dum Dums: {msg:?}");
 }
 
 /// The trade desk is the division moment: three pearls make a Dum Dum, and the
