@@ -1,5 +1,5 @@
 use crate::prelude::*;
-use crate::save::{SaveSlots, Gender};
+use crate::save::{SaveSlots, Gender, UnreadableSlot};
 use crate::input::FrameInput;
 
 // ─── TITLE SCREEN ───────────────────────────────────────
@@ -35,10 +35,29 @@ pub struct SlotLayout {
     pub delete_btn: Option<(f32, f32, f32, f32)>, // X button (only for filled slots)
 }
 
-#[derive(Clone, Copy)]
-pub enum TitleActionKind { NewGame, LoadGame }
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum TitleActionKind {
+    NewGame,
+    LoadGame,
+    /// The slot holds a save this build can't read. It isn't free — starting
+    /// a new game there would bury a kid's adventure — so it offers nothing:
+    /// no LOAD, no NEW, no delete. A parent (or a later fix) brings it back.
+    Resting,
+}
+
+/// Which slots hold a save this build can't read (see `SaveBackend::unreadable_slots`).
+pub type RestingSlots = [Option<UnreadableSlot>; 3];
+
+/// No resting slots — for callers that haven't wired `unreadable_slots` yet.
+pub const NO_RESTING_SLOTS: RestingSlots = [None, None, None];
 
 pub fn layout_title(slots: &SaveSlots, screen: (f32, f32)) -> TitleLayout {
+    layout_title_guarded(slots, &NO_RESTING_SLOTS, screen)
+}
+
+/// Title layout that keeps unreadable ("resting") slots from being offered
+/// as free.
+pub fn layout_title_guarded(slots: &SaveSlots, resting: &RestingSlots, screen: (f32, f32)) -> TitleLayout {
     let (sw, _) = screen;
     let slot_w = 400.0;
     let slot_h = 70.0;
@@ -55,7 +74,13 @@ pub fn layout_title(slots: &SaveSlots, screen: (f32, f32)) -> TitleLayout {
         let btn_y = sy + (slot_h - btn_h) / 2.0;
 
         let filled = slot.is_some();
-        let primary_action = if filled { TitleActionKind::LoadGame } else { TitleActionKind::NewGame };
+        let primary_action = if filled {
+            TitleActionKind::LoadGame
+        } else if resting[i].is_some() {
+            TitleActionKind::Resting
+        } else {
+            TitleActionKind::NewGame
+        };
 
         let delete_btn = if filled {
             let del_x = btn_x - 30.0;
@@ -92,10 +117,11 @@ pub fn handle_title_input(layout: &TitleLayout, input: &FrameInput) -> Option<Ti
             }
             let (bx, by, bw, bh) = slot.primary_btn;
             if mx >= bx && mx <= bx + bw && my >= by && my <= by + bh {
-                return Some(match slot.primary_action {
-                    TitleActionKind::LoadGame => TitleAction::LoadGame(slot.idx),
-                    TitleActionKind::NewGame => TitleAction::NewGame(slot.idx),
-                });
+                return match slot.primary_action {
+                    TitleActionKind::LoadGame => Some(TitleAction::LoadGame(slot.idx)),
+                    TitleActionKind::NewGame => Some(TitleAction::NewGame(slot.idx)),
+                    TitleActionKind::Resting => None,
+                };
             }
         }
     }
@@ -105,10 +131,11 @@ pub fn handle_title_input(layout: &TitleLayout, input: &FrameInput) -> Option<Ti
     for (i, k) in keys.iter().enumerate() {
         if input.pressed(*k) {
             if let Some(slot) = layout.slots.get(i) {
-                return Some(match slot.primary_action {
-                    TitleActionKind::LoadGame => TitleAction::LoadGame(i),
-                    TitleActionKind::NewGame => TitleAction::NewGame(i),
-                });
+                return match slot.primary_action {
+                    TitleActionKind::LoadGame => Some(TitleAction::LoadGame(i)),
+                    TitleActionKind::NewGame => Some(TitleAction::NewGame(i)),
+                    TitleActionKind::Resting => None,
+                };
             }
         }
     }
@@ -117,6 +144,17 @@ pub fn handle_title_input(layout: &TitleLayout, input: &FrameInput) -> Option<Ti
 }
 
 pub fn draw_title(layout: &TitleLayout, slots: &SaveSlots, time: f32, mouse_pos: (f32, f32)) {
+    draw_title_guarded(layout, slots, &NO_RESTING_SLOTS, time, mouse_pos)
+}
+
+/// Title screen that draws unreadable slots as "resting" rather than empty.
+pub fn draw_title_guarded(
+    layout: &TitleLayout,
+    slots: &SaveSlots,
+    resting: &RestingSlots,
+    time: f32,
+    mouse_pos: (f32, f32),
+) {
     let (sw, sh) = layout.screen;
     let (mx, my) = mouse_pos;
 
@@ -150,7 +188,7 @@ pub fn draw_title(layout: &TitleLayout, slots: &SaveSlots, time: f32, mouse_pos:
     let hw = measure_text(header, None, 20, 1.0).width;
     draw_text(header, sw / 2.0 - hw / 2.0, 210.0, 20.0, Color::from_rgba(150, 150, 150, 255));
 
-    for (slot_l, save) in layout.slots.iter().zip(slots.iter()) {
+    for ((slot_l, save), rest) in layout.slots.iter().zip(slots.iter()).zip(resting.iter()) {
         let (sx, sy, sw_, sh_) = slot_l.rect;
 
         // Slot background
@@ -196,6 +234,19 @@ pub fn draw_title(layout: &TitleLayout, slots: &SaveSlots, time: f32, mouse_pos:
                     Color::from_rgba(120, 80, 80, 255)
                 });
             }
+        } else if let Some(rest) = rest.as_ref().filter(|_| slot_l.primary_action == TitleActionKind::Resting) {
+            // A save this build can't read. Nothing alarming for the kid — the
+            // file is just napping — and nothing to click that could bury it.
+            // It's backed up in storage for a grown-up to recover.
+            let who = rest.name.as_deref().unwrap_or("Someone");
+            draw_text(who, sx + 12.0, sy + 50.0, 22.0, Color::from_rgba(170, 170, 190, 255));
+            let note = "is napping - ask a grown-up";
+            let who_w = measure_text(who, None, 22, 1.0).width;
+            draw_text(note, sx + 20.0 + who_w, sy + 50.0, 14.0,
+                Color::from_rgba(120, 120, 150, 255));
+            let bob = (time * 2.0).sin() * 3.0;
+            draw_text("z Z", bx + 18.0, by + 22.0 + bob, 20.0,
+                Color::from_rgba(100, 149, 237, 255));
         } else {
             // Empty slot
             draw_text("- empty -", sx + 12.0, sy + 50.0, 18.0,

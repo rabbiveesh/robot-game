@@ -35,6 +35,15 @@ impl Harness {
         }
     }
 
+    /// Start on the title screen over existing storage, as if a browser
+    /// already held saves. Keep a clone of `backend` to inspect what's
+    /// written — clones share one store.
+    pub fn with_backend(seed: u64, backend: InMemoryBackend) -> Self {
+        let mut game = Game::with_backend(seed, Box::new(backend));
+        game.refresh_save_slots();
+        Harness { game }
+    }
+
     // ─── Primitive frame drivers ─────────────────────────
 
     /// One frame with the given input.
