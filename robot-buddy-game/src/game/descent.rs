@@ -100,7 +100,7 @@ impl Game {
         if ad.session.was_clean() {
             // A tidy decomposition is worth a pearl. A scenic one costs
             // nothing — it still opened the door.
-            let bonus = if self.has_diving_net() { shop::DIVING_NET_BONUS } else { 0 };
+            let bonus = if self.has_diving_net() { domain_shop::DIVING_NET_BONUS } else { 0 };
             let payout = 1 + bonus;
             self.pearls = self.pearls.saturating_add(payout);
             self.pearl_hud.flash();

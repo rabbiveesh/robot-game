@@ -147,7 +147,7 @@ impl Game {
                 // first try, +1 more if they've bought Hermie's Diving Net.
                 let payout = track.payout
                     + if after.was_clean() { 1 } else { 0 }
-                    + if self.has_diving_net() { shop::DIVING_NET_BONUS } else { 0 };
+                    + if self.has_diving_net() { domain_shop::DIVING_NET_BONUS } else { 0 };
                 self.pearls = self.pearls.saturating_add(payout);
                 self.pearl_hud.flash();
                 self.events.push(GameEvent::PearlFound {

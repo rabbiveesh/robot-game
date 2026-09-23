@@ -50,7 +50,7 @@ use robot_buddy_domain::logic::shooter::{
 use robot_buddy_domain::logic::sudoku::{
     self, SudokuPhase, SudokuSession, generate_for_level as generate_sudoku_for_level,
 };
-use robot_buddy_domain::economy::shop::{self, Currency, ItemKind, ShopItem, ShopKind};
+use robot_buddy_domain::economy::shop::{self as domain_shop, Currency, ItemKind, ShopItem, ShopKind};
 use robot_buddy_domain::economy::wardrobe::{self, HandOver, Wardrobe};
 use robot_buddy_domain::world::encounters::{self, EncounterConfig, EncounterKind};
 use robot_buddy_domain::quest::{self, Quest, QuestAction, QuestSession, QuestStatus, QuestStep};
@@ -249,7 +249,7 @@ pub struct ActiveShop {
     /// Change, or re-opened from its catalog row).
     pub picking_color: bool,
     /// The quote on the counter while the kid works out a pearl trade.
-    pub trading: Option<shop::TradeQuote>,
+    pub trading: Option<domain_shop::TradeQuote>,
     /// Catalog page on screen, when the window is too short for the shelf.
     pub page: usize,
 }
@@ -2405,7 +2405,7 @@ impl Game {
     /// picker rows are stable between openings.
     fn swag_catalog_for(&self, who: &str) -> Vec<ShopItem> {
         let worn = self.wardrobe.worn_by(who);
-        shop::swag_items().into_iter().filter(|i| worn.contains(&i.id)).collect()
+        domain_shop::swag_items().into_iter().filter(|i| worn.contains(&i.id)).collect()
     }
 
     /// What the settings overlay shows.
@@ -2501,7 +2501,7 @@ impl Game {
                 // The trade desk isn't a purchase, it's a conversion: hand
                 // over the pile and work out what it's worth.
                 if let ItemKind::Trade { rate, into } = item.kind {
-                    let quote = shop::quote_trade(trade_purse, item.currency, rate, into);
+                    let quote = domain_shop::quote_trade(trade_purse, item.currency, rate, into);
                     if quote.gain == 0 {
                         ash.message = Some(format!(
                             "Not enough for a {} yet — you need {} more {}!",
@@ -2517,8 +2517,8 @@ impl Game {
                     return;
                 }
                 let balance = purse;
-                match shop::process_purchase(balance, &item.id, &ash.owned) {
-                    shop::PurchaseOutcome::Bought { result } => {
+                match domain_shop::process_purchase(balance, &item.id, &ash.owned) {
+                    domain_shop::PurchaseOutcome::Bought { result } => {
                         ash.selected = Some(i);
                         ash.cost = result.spent;
                         ash.answer = result.new_balance;
@@ -2527,17 +2527,17 @@ impl Game {
                         let choices = subtraction_choices(balance, result.spent, &mut self.rng);
                         ash.choices = choices;
                     }
-                    shop::PurchaseOutcome::CantAfford { shortfall } => {
+                    domain_shop::PurchaseOutcome::CantAfford { shortfall } => {
                         ash.message = Some(format!(
                             "You need {shortfall} more {}!", item.currency.noun(shortfall),
                         ));
                     }
-                    shop::PurchaseOutcome::AlreadyOwned => {
+                    domain_shop::PurchaseOutcome::AlreadyOwned => {
                         // You can only wear one of each — but give it to a
                         // buddy and Bolt will happily sell you another.
                         ash.message = Some("You're already wearing that one!".into());
                     }
-                    shop::PurchaseOutcome::UnknownItem => {}
+                    domain_shop::PurchaseOutcome::UnknownItem => {}
                 }
             }
             ui::shop::ShopInput::Answer(v) => {
@@ -2545,7 +2545,7 @@ impl Game {
                 // before touching `self` (balances, events, save).
                 enum Settled {
                     Bought { item: ShopItem, spent: u32, left: u32 },
-                    Traded(shop::TradeQuote),
+                    Traded(domain_shop::TradeQuote),
                 }
                 let settled = {
                     let ash = self.active_shop.as_mut().unwrap();
@@ -2951,7 +2951,7 @@ impl Game {
     /// True once the kid owns Hermie's Diving Net, which pays a bonus pearl on
     /// every find from then on — the grind rewarding the grind.
     pub fn has_diving_net(&self) -> bool {
-        self.upgrades.contains(shop::DIVING_NET)
+        self.upgrades.contains(domain_shop::DIVING_NET)
     }
 
     /// Everything the kid is wearing right now. Swag they've handed to a
@@ -4963,15 +4963,15 @@ mod tests {
         let mut g = game();
         g.wardrobe.put_on(wardrobe::PLAYER, "hat");
         assert_eq!(
-            shop::process_purchase(20, "hat", g.player_swag()),
-            shop::PurchaseOutcome::AlreadyOwned,
+            domain_shop::process_purchase(20, "hat", g.player_swag()),
+            domain_shop::PurchaseOutcome::AlreadyOwned,
             "no buying a second hat while you're wearing one",
         );
 
         g.wardrobe.hand_over(wardrobe::PLAYER, "kid_1", "hat");
         assert!(
-            matches!(shop::process_purchase(20, "hat", g.player_swag()),
-                shop::PurchaseOutcome::Bought { .. }),
+            matches!(domain_shop::process_purchase(20, "hat", g.player_swag()),
+                domain_shop::PurchaseOutcome::Bought { .. }),
             "once the hat is Tali's, the kid can buy themselves another",
         );
     }
@@ -5014,7 +5014,7 @@ mod tests {
         g.active_shop = Some(ActiveShop {
             shop: ShopKind::Bolt,
             trading: None,
-            catalog: shop::shop_catalog(),
+            catalog: domain_shop::shop_catalog(),
             owned: g.player_swag().clone(),
             selected: None,
             choices: Vec::new(),
