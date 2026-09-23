@@ -164,3 +164,46 @@ fn empty_swag_picker_is_sane() {
         assert_sane(&l.frame, screen_rect(screen));
     }
 }
+
+// ─── Quest ───────────────────────────────────────────────
+
+#[test]
+fn quest_beats_are_sane_everywhere() {
+    use robot_buddy_game::ui::quest::{self, QuestView};
+    let lines: Vec<String> = [
+        "The old lighthouse keeper lost count of his lanterns again.",
+        "He had twelve on the shelf, but the storm knocked some into the sea, and now the harbour is dark.",
+        "Can you help him figure out how many are left before the ships come in tonight?",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let options: Vec<String> = [
+        "Row out to the rocks and look for the lanterns that fell",
+        "Ask the seagulls",
+        "Count what's left on the shelf first",
+        "Go and find Professor Gizmo for a brand-new lantern design",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    let choices = [7, 8, 9, 6];
+    let prompt = "The keeper had 12 lanterns. The storm knocked 5 into the sea. How many are still on the shelf?";
+    for &screen in &SWEEP_SCREENS {
+        for message in [None, Some("Hmm, let's count those again together!")] {
+            let views = [
+                QuestView::Narrative { speaker: "Lighthouse Keeper", lines: &lines },
+                QuestView::Travel { label: "Head to harbour at (12, 30)...".into() },
+                QuestView::Puzzle { prompt, choices: &choices },
+                QuestView::Choice { prompt: "What should we do first?", options: &options },
+                QuestView::Choice { prompt: "Nothing to pick here.", options: &[] },
+                QuestView::Reward { dum_dums: 5 },
+            ];
+            for view in views {
+                let l = quest::layout(&view, "The Case of the Missing Lanterns", message, screen);
+                assert_sane(&l.frame, screen_rect(screen));
+                assert_eq!(l.continue_btn().is_some(), view.has_continue());
+            }
+        }
+    }
+}

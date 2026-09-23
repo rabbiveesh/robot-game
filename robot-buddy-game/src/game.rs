@@ -2274,12 +2274,12 @@ impl Game {
         let intent = {
             let aq = self.active_quest.as_ref().unwrap();
             let Some(view) = quest_view(aq) else { return };
-            let layout = ui::quest::layout(&view, screen);
             if input.mouse_clicked {
                 let (mx, my) = input.mouse_pos;
-                ui::quest::handle_click(mx, my, &layout)
+                let layout = ui::quest::layout(&view, &aq.session.quest.title, aq.message.as_deref(), screen);
+                ui::quest::handle_click(mx, my, &layout, &view)
             } else {
-                ui::quest::handle_key(input, &layout)
+                ui::quest::handle_key(input, &view)
             }
         };
         let Some(intent) = intent else { return };
@@ -4721,9 +4721,8 @@ impl Game {
         // Quest overlay
         if let Some(ref aq) = self.active_quest {
             if let Some(view) = quest_view(aq) {
-                let layout = ui::quest::layout(&view, screen);
-                let title = aq.session.quest.title.clone();
-                ui::quest::draw(&view, &title, aq.message.as_deref(), &layout);
+                let layout = ui::quest::layout(&view, &aq.session.quest.title, aq.message.as_deref(), screen);
+                ui::quest::draw(&layout);
             }
         }
 
