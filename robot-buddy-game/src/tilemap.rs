@@ -47,10 +47,6 @@ pub enum Tile {
     StationFloor = 33,// walkable metal station floor
     RiseSpot = 34,    // rising bubble column → surface from an underwater map
     GoyishPad = 35,   // hub marker → the Goyish Map (arcade shooter)
-    /// A rip current running between Shelly's pearl stones. Solid — you can't
-    /// swim across it, which is what forces the stones to be *leapt* rather
-    /// than strolled along. See `number_track` and `logic::leap`.
-    Current = 36,
     // Glitch-only tiles (doghouse)
     Glitch95 = 95,
     Glitch96 = 96,
@@ -60,20 +56,6 @@ pub enum Tile {
 }
 
 pub const TILE_SIZE: f32 = 48.0;
-
-/// Lay the rip current between Shelly's stones on a map that has a pearl path.
-/// The stones themselves stay walkable floor — they're drawn as stones by the
-/// path overlay — so this only fills the gaps a kid has to leap over.
-fn paint_pearl_current(map_id: &str, tiles: &mut [Vec<Tile>]) {
-    let Some(track) = crate::number_track::track_for_map(map_id) else { return };
-    for (x, y) in track.current_tiles() {
-        tiles[y][x] = Tile::Current;
-    }
-    // Clear the stones themselves in case map texture landed on one.
-    for &(x, y) in track.tiles {
-        tiles[y][x] = Tile::Sand;
-    }
-}
 
 // ─── PORTALS ────────────────────────────────────────────
 
@@ -244,7 +226,7 @@ impl Map {
         if col >= self.width || row >= self.height { return true; }
         if is_secret_walkable(self.id, col, row) { return false; }
         let tile = self.tiles[row][col];
-        matches!(tile, Tile::Water | Tile::Wall | Tile::Tree | Tile::HouseWall | Tile::Roof | Tile::Window | Tile::Fence | Tile::Sign | Tile::Chest | Tile::Table | Tile::Bookshelf | Tile::GlitchWall | Tile::Coral | Tile::Kelp | Tile::SpaceRock | Tile::Current)
+        matches!(tile, Tile::Water | Tile::Wall | Tile::Tree | Tile::HouseWall | Tile::Roof | Tile::Window | Tile::Fence | Tile::Sign | Tile::Chest | Tile::Table | Tile::Bookshelf | Tile::GlitchWall | Tile::Coral | Tile::Kelp | Tile::SpaceRock)
     }
 
     #[allow(non_snake_case)]
@@ -496,8 +478,7 @@ impl Map {
         // A big 40×26 lagoon, built programmatically so it's easy to grow. A
         // coral wall (row 5) with a single gap at col 8 is the shark's gate to
         // the treasure cove above (chest at (7,2)). The wide middle basin holds
-        // the ambient number-line stepping-stones (row 13, see number_track)
-        // plus the friendly sea folk; Inkwell's dive shaft down to the trench is
+        // the friendly sea folk (Shelly runs Pearl Hop from row 13); Inkwell's dive shaft down to the trench is
         // col 36. Entry lands at (8,9); the rise spot home is at (8,10).
         let (w, h) = (40usize, 26usize);
         let mut tiles = vec![vec![SeaFloor; w]; h];
@@ -529,7 +510,7 @@ impl Map {
             tiles[y][x] = Kelp;
         }
         // Scattered coral / sand beds / bubble vents for texture — kept clear of
-        // the creatures' spots, the portals, the number-line row (13) and the
+        // the creatures' spots, the portals, Shelly's perch (row 13) and the
         // Inkwell's ledge (col 36, row 7).
         for &(x, y) in &[(22, 4), (3, 16), (20, 11), (30, 11), (33, 15), (18, 16), (12, 18), (6, 20), (15, 21)] {
             tiles[y][x] = Coral;
@@ -555,10 +536,6 @@ impl Map {
         for &(x, y) in &[(27, 19), (27, 20), (28, 20), (29, 20), (30, 20), (31, 20), (33, 20), (29, 23), (30, 23)] {
             tiles[y][x] = Sand;
         }
-        // Shelly's pearl stones along row 13, with rip current in the gaps so
-        // the path can only be leapt. Painted from `number_track` itself, so
-        // the terrain and the marks can never drift apart.
-        paint_pearl_current("reef", &mut tiles);
         // The way home: the surface portal at (8,10) is a visible rise spot.
         tiles[10][8] = RiseSpot;
         Map { id: "reef", width: w, height: h, render_mode: RenderMode::Aquatic, tiles }
@@ -613,9 +590,6 @@ impl Map {
         for &(x, y) in &[(7, 3), (18, 9), (3, 7), (24, 10), (15, 16), (12, 3)] {
             tiles[y][x] = Coral;
         }
-        // The deep pearl path (row 8), currents and all — same rules as the
-        // reef's, and a deep pearl is worth double.
-        paint_pearl_current("trench", &mut tiles);
         // Treasure pocket: a chest deep in the south-east vent field.
         tiles[15][23] = Chest;
         // The way back up: a bright rise spot on the arrival ledge.
@@ -812,7 +786,6 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
             Tile::Grass     => dream_grass,
             Tile::Path      => Color::from_rgba(180, 160, 200, 255), // misty path
             Tile::Water     => dream_water,
-            Tile::Current   => dream_water,
             Tile::Tree      => dream_grass,
             Tile::Flower    => dream_grass,
             Tile::Fence     => dream_grass,
@@ -882,7 +855,7 @@ fn tile_color_sunken_glitch(tile: Tile, time: f32) -> Color {
     match tile {
         // Dedicated sea tiles already have their real look.
         Tile::SeaFloor | Tile::Sand | Tile::Coral | Tile::Kelp | Tile::Bubble
-        | Tile::Current | Tile::RiseSpot | Tile::DiveSpot => tile_color_aquatic(tile),
+        | Tile::RiseSpot | Tile::DiveSpot => tile_color_aquatic(tile),
         _ => {
             let land = tile_color_normal(tile);
             let sea = Color::from_rgba(24, 112, 132, 255);
@@ -935,7 +908,6 @@ fn tile_color_aquatic(tile: Tile) -> Color {
         Tile::Bubble    => floor,
         // The rip current between pearl stones: darker and colder than the
         // floor, so the gap reads as "not for walking" at a glance.
-        Tile::Current   => Color::from_rgba(16, 82, 116, 255),
         // Sunlit shaft — brighter than the floor so it reads from far away.
         Tile::RiseSpot  => Color::from_rgba(64, 156, 176, 255),
         Tile::Water     => deep,
@@ -959,7 +931,6 @@ fn tile_color_normal(tile: Tile) -> Color {
         Tile::Grass     => Color::from_rgba(76, 175, 80, 255),     // grass
         Tile::Path      => Color::from_rgba(222, 184, 135, 255),   // path (sandy)
         Tile::Water     => Color::from_rgba(66, 165, 245, 255),    // water
-        Tile::Current   => Color::from_rgba(40, 120, 190, 255),    // rip current
         Tile::Wall      => Color::from_rgba(121, 85, 72, 255),     // wall
         Tile::Tree      => Color::from_rgba(76, 175, 80, 255),     // tree (grass base)
         Tile::Flower    => Color::from_rgba(76, 175, 80, 255),     // flower (grass base)
@@ -1174,7 +1145,6 @@ fn draw_tile_detail(tile: Tile, x: f32, y: f32, time: f32, mode: RenderMode) {
         Tile::Coral     => draw_coral_detail(x, y, time),
         Tile::Kelp      => draw_kelp_detail(x, y, time),
         Tile::Bubble    => draw_bubble_vent_detail(x, y, time),
-        Tile::Current   => draw_current_detail(x, y, time),
         Tile::DiveSpot  => draw_dive_spot_detail(x, y, time),
         Tile::RiseSpot  => draw_rise_spot_detail(x, y, time),
         Tile::Star      => draw_star_detail(x, y, time),
@@ -1699,19 +1669,5 @@ fn draw_glitch_overlay(cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, time: f
         let shift = (time * 100.0).sin() * 8.0;
         draw_rectangle(cam_x + shift, tear_y, view_w, tear_h,
             Color::new(0.0, 1.0, 0.5, 0.15));
-    }
-}
-
-/// The rip current between Shelly's pearl stones: fast pale streaks sliding
-/// across the tile. Reads as moving water you'd be swept along by — the visual
-/// reason the stones have to be leapt instead of walked.
-fn draw_current_detail(x: f32, y: f32, time: f32) {
-    let streak = Color::new(0.62, 0.86, 0.95, 0.5);
-    for i in 0..3 {
-        let lane = y + 10.0 + i as f32 * 14.0;
-        // Each lane slides at its own speed and wraps within the tile.
-        let drift = ((time * (26.0 + i as f32 * 9.0) + i as f32 * 17.0) % (TILE_SIZE + 22.0)) - 22.0;
-        let w = 16.0 + i as f32 * 3.0;
-        draw_line(x + drift, lane, x + drift + w, lane, 2.5, streak);
     }
 }
