@@ -435,3 +435,43 @@ pub fn quest_beats_are_sane_everywhere() {
         }
     }
 }
+
+// ─── Pearl Hop ──────────────────────────────────────────
+
+/// Shelly's panel at every stage, aiming and after the win (Again! up), with
+/// short and long captions and a big purse, on every sweep screen. The scene
+/// has to keep real room to play in, even on a small phone.
+pub fn pearl_hop_is_sane_everywhere() {
+    use rand::SeedableRng;
+    use robot_buddy_domain::logic::pearl_hop::{generate_round, hop_reducer, HopAction, HopPhase, HopSession};
+    use robot_buddy_game::ui::pearl_hop::{self, HopView};
+
+    let captions = [
+        "My pearl is on stone 5! Fling me there!",
+        "You found my pearl!  +3 pearls  (your net caught one!)",
+        "I always hop the same size! Get me to my pearl on 15!",
+    ];
+    for band in [1u8, 2, 3, 4, 5, 6] {
+        let round = generate_round(band, &mut rand::rngs::SmallRng::seed_from_u64(band as u64));
+        let aiming = HopSession::new(round.clone());
+        let mut won = hop_reducer(aiming.clone(), HopAction::Aim { at: round.winning_aims()[0] });
+        won = hop_reducer(won, HopAction::Toss);
+        for _ in 0..200 {
+            won = hop_reducer(won, HopAction::Tick { dt: 0.1 });
+        }
+        assert_eq!(won.phase, HopPhase::Won);
+        for &screen in &SWEEP_SCREENS {
+            for session in [&aiming, &won] {
+                for caption in captions {
+                    let view = HopView { session, pearls: 1234, caption };
+                    let l = pearl_hop::layout(&view, screen);
+                    assert_sane(&l.frame, screen_rect(screen));
+                    assert!(l.leave().is_some(), "Leave is always tappable");
+                    assert_eq!(l.again().is_some(), session.phase == HopPhase::Won);
+                    let scene = l.scene.rect;
+                    assert!(scene.h >= 200.0 && scene.w >= 300.0, "room to play at {screen:?}: {scene:?}");
+                }
+            }
+        }
+    }
+}

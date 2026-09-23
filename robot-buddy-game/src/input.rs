@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use macroquad::prelude::{
     KeyCode, MouseButton,
     get_char_pressed, is_key_down, is_key_pressed,
-    is_mouse_button_pressed, mouse_position,
+    is_mouse_button_down, is_mouse_button_pressed, is_mouse_button_released, mouse_position,
 };
 
 /// Every key the game cares about. Capture polls macroquad for each.
@@ -27,7 +27,13 @@ pub struct FrameInput {
     keys_pressed: HashSet<KeyCode>,
     keys_down: HashSet<KeyCode>,
     pub mouse_pos: (f32, f32),
+    /// The left button (or a finger) went down this frame.
     pub mouse_clicked: bool,
+    /// The left button (or a finger) is held this frame — true on the press
+    /// frame too. Drags read this.
+    pub mouse_down: bool,
+    /// The left button (or a finger) came up this frame. Ends a drag.
+    pub mouse_released: bool,
     pub chars_typed: Vec<char>,
 }
 
@@ -47,6 +53,8 @@ impl FrameInput {
         }
         input.mouse_pos = mouse_position();
         input.mouse_clicked = is_mouse_button_pressed(MouseButton::Left);
+        input.mouse_down = is_mouse_button_down(MouseButton::Left);
+        input.mouse_released = is_mouse_button_released(MouseButton::Left);
         while let Some(c) = get_char_pressed() {
             input.chars_typed.push(c);
         }
@@ -78,9 +86,25 @@ impl FrameInput {
         self
     }
 
+    /// A press at (x, y): clicked, and held, this frame.
     pub fn with_mouse_click(mut self, x: f32, y: f32) -> Self {
         self.mouse_pos = (x, y);
         self.mouse_clicked = true;
+        self.mouse_down = true;
+        self
+    }
+
+    /// The button still held, the pointer now at (x, y): one frame of a drag.
+    pub fn with_mouse_held(mut self, x: f32, y: f32) -> Self {
+        self.mouse_pos = (x, y);
+        self.mouse_down = true;
+        self
+    }
+
+    /// The button let go at (x, y): the end of a drag.
+    pub fn with_mouse_release(mut self, x: f32, y: f32) -> Self {
+        self.mouse_pos = (x, y);
+        self.mouse_released = true;
         self
     }
 

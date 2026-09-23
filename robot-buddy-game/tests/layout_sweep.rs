@@ -26,4 +26,5 @@ sweep_tests! {
     dialogue_lines_are_sane_everywhere => sweep::dialogue_lines_are_sane_everywhere,
     settings_overlay_is_sane_everywhere => sweep::settings_overlay_is_sane_everywhere,
     quest_beats_are_sane_everywhere => sweep::quest_beats_are_sane_everywhere,
+    pearl_hop_is_sane_everywhere => sweep::pearl_hop_is_sane_everywhere,
 }

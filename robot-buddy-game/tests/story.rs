@@ -10,6 +10,9 @@ mod common;
 use common::Harness;
 use robot_buddy_game::game::{GameEvent, GameState};
 use robot_buddy_game::npc::NpcKind;
+use robot_buddy_game::input::FrameInput;
+use robot_buddy_domain::logic::pearl_hop::HopStage;
+use macroquad::prelude::KeyCode;
 
 #[test]
 fn new_game_form_takes_name_and_starts_intake() {
@@ -2043,116 +2046,179 @@ fn swapped_out_cross_map_buddy_walks_out_then_teleports_home() {
     );
 }
 
-/// Shelly's pearls can't be strolled into. The stones sit a leap apart with
-/// rip current between them, and the pearl only pops for a trip made in leaps
-/// of the size the kid commits to before launching.
+/// Shelly IS Pearl Hop: talking to her opens the slingshot game, and the
+/// first time ever she shows off (and misses on purpose) before handing over.
+/// The show-off is remembered in the save, so it only plays once.
 #[test]
-fn shellys_pearl_takes_the_right_leap_size_not_a_stroll() {
+fn talking_to_shelly_opens_pearl_hop_and_she_shows_off_once() {
+    let mut h = on_the_reef(9, 1);
+    h.open_pearl_hop();
+    let a = h.game.active_pearl_hop().unwrap();
+    assert!(a.demo.is_some(), "the first-ever round opens with Shelly's show-off");
+
+    // Let the show-off play right through: she flings herself, misses, and a
+    // hand shows the pull. None of it costs or earns the kid anything.
+    h.run_until(|g| g.active_pearl_hop().is_some_and(|a| a.demo.is_none()), 900);
+    let s = &h.game.active_pearl_hop().unwrap().session;
+    assert_eq!(s.tosses, 0, "her show-off toss never counts against the kid");
+    assert_eq!(h.game.pearls, 0);
+    assert!(h.game.has_seen_demo(robot_buddy_game::game::PEARL_HOP_DEMO));
+
+    h.leave_pearl_hop_by_tap();
+    h.open_pearl_hop();
+    assert!(h.game.active_pearl_hop().unwrap().demo.is_none(), "she only shows off once");
+}
+
+fn on_the_reef(seed: u64, band: u8) -> Harness {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-
-    let mut h = Harness::new(9);
+    let mut h = Harness::new(seed);
     h.start_dev_game();
-    h.game.profile.math_band = 3; // told the leap count; has to work out the size
+    h.game.profile.math_band = band;
     h.game.map = Map::reef();
     h.game.npcs = npc_mod::npcs_for_map("reef");
     h.game.npcs_offstage.clear();
-    assert_eq!(h.game.pearls, 0, "no pearls to start");
-
-    // The path is unwalkable by construction — that's the whole redesign.
-    assert!(h.game.map.is_solid(6, 13), "the gap between stones 0 and 1 is current");
-    assert!(!h.game.map.is_solid(5, 13), "the stones themselves are standable");
-
-    // Standing on the launch stone, Shelly sets up a trip.
-    let mark = h.mark();
     h.warp_to(5, 13);
-    let (pearl, size, count, choices) = {
-        let s = h.game.leap_session().expect("Shelly should offer a trip on stone 0");
-        (s.puzzle.pearl, s.puzzle.size, s.puzzle.count, s.puzzle.choices.clone())
-    };
-    assert!(
-        h.events_since(mark).iter().any(|e| matches!(e, GameEvent::LeapTripOffered { .. })),
-        "landing on the launch stone should log the trip: {:?}", h.events_since(mark),
-    );
+    h
+}
 
-    // A wrong size sails past the pearl — and pays nothing.
-    let wrong = *choices.iter().find(|c| **c != size).expect("there are decoy sizes");
-    h.pick_leap_size(wrong);
-    for _ in 0..=count {
-        if h.game.leap_session().map(|s| s.position) >= Some(pearl) { break; }
-        h.leap();
-    }
-    assert_eq!(h.game.pearls, 0, "leaping the wrong size never pays out");
-    assert_ne!(h.game.player.tile_x, 5 + 2 * pearl as usize,
-        "the wrong size shouldn't land on the pearl stone");
-
-    // Swim back, pick the size that divides the stone, and leap it out.
-    h.swim_back();
-    assert_eq!((h.game.player.tile_x, h.game.player.tile_y), (5, 13), "back to the launch stone");
-    h.pick_leap_size(size);
-    for _ in 0..count {
-        h.leap();
-    }
-
-    let events = h.events_since(mark);
-    let found = events.iter().find_map(|e| match e {
-        GameEvent::PearlFound { stone, leaps, resets, pearls, .. } =>
-            Some((*stone, *leaps, *resets, *pearls)),
+fn pearl_hop_wins_since(h: &Harness, mark: usize) -> Vec<(HopStage, u8, u32)> {
+    h.events_since(mark).iter().filter_map(|e| match e {
+        GameEvent::PearlHopWon { stage, tosses, pearls } => Some((*stage, *tosses, *pearls)),
         _ => None,
-    }).unwrap_or_else(|| panic!("expected PearlFound; got: {events:?}"));
-    assert_eq!(found.0, pearl, "the pearl was under the stone Shelly called");
-    assert_eq!(found.1, count, "reached in exactly the leaps she promised");
-    assert_eq!(found.2, 1, "one wrong size tried first — the silent read");
-    assert_eq!(h.game.pearls, found.3);
-    assert_eq!(h.game.pearls, 1, "a second-try find pays the plain reef rate");
+    }).collect()
 }
 
-/// Taps have to work as well as keys — this is a game for kids on tablets, and
-/// a tap on Shelly's panel must never double as a click-to-walk off the stones.
+/// Every stage pays: land Shelly on the pearl first try and it's the base
+/// pearl plus the clean bonus; "Again!" deals a fresh round.
 #[test]
-fn shellys_panel_can_be_played_entirely_by_tapping() {
-    use robot_buddy_game::tilemap::Map;
-    use robot_buddy_game::ui;
+fn every_stage_pays_a_pearl_and_a_first_try_bonus() {
+    for (band, stage) in [(1u8, HopStage::Count), (2, HopStage::SkipCount), (3, HopStage::Hops), (4, HopStage::Estimate)] {
+        let mut h = on_the_reef(40 + band as u64, band);
+        h.open_pearl_hop();
+        h.skip_shelly_demo();
+        assert_eq!(h.pearl_hop_round().stage, stage, "band {band} plays {stage:?}");
 
-    let mut h = Harness::new(21);
-    h.start_dev_game();
-    h.game.profile.math_band = 2;
-    h.game.map = Map::reef();
-    h.game.npcs.clear();
-    h.game.npcs_offstage.clear();
-    h.warp_to(5, 13);
+        let mark = h.mark();
+        let aim = h.winning_aim();
+        h.toss_shelly(aim);
+        assert_eq!(pearl_hop_wins_since(&h, mark), vec![(stage, 1, 2)],
+            "band {band}: first-try pearl = 1 base + 1 clean bonus");
+        assert_eq!(h.game.pearls, 2);
 
-    let (size, count) = {
-        let s = h.game.leap_session().expect("a trip on the launch stone");
-        (s.puzzle.size, s.puzzle.count)
-    };
-
-    // Tap the right size tile.
-    let (x, y) = {
-        let s = h.game.leap_session().unwrap();
-        let layout = ui::leap::layout(s, (960.0, 720.0));
-        let (r, _) = layout.choices.iter().find(|(_, n)| *n == size)
-            .expect("the answer is on offer");
-        (r.x + r.w / 2.0, r.y + r.h / 2.0)
-    };
-    h.click(x, y);
-    assert_eq!(h.game.leap_session().unwrap().chosen, Some(size), "the tap committed the size");
-    assert_eq!((h.game.player.tile_x, h.game.player.tile_y), (5, 13),
-        "a tap on the panel must not send the kid walking");
-
-    // Tap Leap until the pearl turns up.
-    for _ in 0..count {
-        let (lx, ly) = {
-            let s = h.game.leap_session().expect("still on the trip");
-            let layout = ui::leap::layout(s, (960.0, 720.0));
-            let r = layout.leap_btn.expect("the Leap button is up once a size is locked in");
-            (r.x + r.w / 2.0, r.y + r.h / 2.0)
-        };
-        h.click(lx, ly);
-        h.run_until(|g| !g.player.moving, 120);
+        // Again! A fresh round, then one miss before the pearl: base only.
+        h.pearl_hop_again();
+        let mark = h.mark();
+        let miss = h.missing_aim(true);
+        h.toss_shelly(miss);
+        assert_eq!(h.game.pearls, 2, "band {band}: a miss pays nothing and costs nothing");
+        let aim = h.winning_aim();
+        h.toss_shelly(aim);
+        assert_eq!(pearl_hop_wins_since(&h, mark), vec![(stage, 2, 1)], "band {band}: second try, no bonus");
+        assert_eq!(h.game.pearls, 3);
     }
-    assert!(h.game.pearls > 0, "tapping through the trip should find the pearl");
 }
+
+/// A miss is a funny beat, never a fail: she splashes (or shrugs on a stone)
+/// and is right back on her rock with the pull remembered, no lives lost.
+#[test]
+fn a_miss_is_harmless_and_she_is_right_back_for_another_go() {
+    use robot_buddy_domain::logic::pearl_hop::{HopPhase, Landing};
+    let mut h = on_the_reef(3, 1);
+    h.open_pearl_hop();
+    h.skip_shelly_demo();
+
+    for past in [true, false] {
+        let mark = h.mark();
+        let miss = h.missing_aim(past);
+        h.toss_shelly(miss);
+        let a = h.game.active_pearl_hop().unwrap();
+        assert_eq!(a.session.phase, HopPhase::Aiming, "back on the rock, ready to go again");
+        assert_eq!(a.session.aim, miss, "the pull is remembered so the kid can adjust it");
+        assert_eq!(a.session.toss.as_ref().unwrap().landing, if past { Landing::Past } else { Landing::Short });
+        assert!(!a.caption.to_lowercase().contains("wrong"), "never 'wrong': {:?}", a.caption);
+        assert_eq!(h.game.state, GameState::PearlHop);
+        assert!(h.events_since(mark).iter().any(|e| matches!(e, GameEvent::PearlHopTossed { hit: false, .. })),
+            "the miss is still a data point for the adaptive system");
+    }
+
+    let aim = h.winning_aim();
+    h.toss_shelly(aim);
+    assert_eq!(h.game.pearls, 1, "the retry works: the pearl, minus the first-try bonus");
+}
+
+/// Every toss is logged as a learner attempt under the stage's arithmetic —
+/// counting as addition, skip counting as multiplication, K hops as division.
+#[test]
+fn each_toss_feeds_the_adaptive_system_silently() {
+    use robot_buddy_domain::types::Operation;
+    for (band, op) in [(1u8, Operation::Add), (2, Operation::Multiply), (3, Operation::Divide)] {
+        let mut h = on_the_reef(7, band);
+        h.open_pearl_hop();
+        h.skip_shelly_demo();
+        let before = h.game.profile.operation_stats.get_coarse(op).attempts;
+        let miss = h.missing_aim(true);
+        h.toss_shelly(miss);
+        let aim = h.winning_aim();
+        h.toss_shelly(aim);
+        let after = h.game.profile.operation_stats.get_coarse(op).attempts;
+        assert_eq!(after, before + 2, "band {band}: both tosses logged under {op:?}");
+    }
+}
+
+/// Keyboard players aim a stone at a time with the arrows and toss with
+/// Space — no holding, no power meter.
+#[test]
+fn shelly_can_be_tossed_from_the_keyboard() {
+    let mut h = on_the_reef(12, 2);
+    h.open_pearl_hop();
+    h.skip_shelly_demo();
+    let aim = h.winning_aim();
+    h.toss_shelly_with_keys(aim);
+    assert_eq!(h.game.pearls, 2, "a first-try keyboard toss pays like any other");
+}
+
+/// Leave is one tap away at every point — even mid-air — and so is ESC.
+#[test]
+fn pearl_hop_can_be_left_by_tap_or_escape() {
+    let mut h = on_the_reef(5, 1);
+    h.open_pearl_hop();
+    h.leave_pearl_hop_by_tap(); // mid show-off
+    assert_eq!(h.game.state, GameState::Playing);
+    assert!(h.game.active_pearl_hop().is_none());
+
+    h.open_pearl_hop();
+    h.skip_shelly_demo();
+    // Mid-air: start a toss, tap Leave before she lands.
+    let l = h.game.pearl_hop_layout(common::SCREEN).unwrap();
+    let (hx, hy) = l.scene.home();
+    let (tx, ty) = l.scene.drag_point_for(h.winning_aim());
+    h.step(&FrameInput::empty().with_mouse_click(hx, hy));
+    h.step(&FrameInput::empty().with_mouse_held(tx, ty));
+    h.step(&FrameInput::empty().with_mouse_release(tx, ty));
+    h.leave_pearl_hop_by_tap();
+    assert_eq!(h.game.state, GameState::Playing, "leaving mid-air is fine");
+    assert_eq!(h.game.pearls, 0, "nothing paid for a toss that never landed");
+
+    h.open_pearl_hop();
+    h.press(KeyCode::Escape);
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+/// A tap on Shelly (no pull) and a drag that ends back on her rock never
+/// toss her — only a real pull does.
+#[test]
+fn a_tap_on_shelly_is_not_a_toss() {
+    let mut h = on_the_reef(6, 1);
+    h.open_pearl_hop();
+    h.skip_shelly_demo();
+    let (hx, hy) = h.game.pearl_hop_layout(common::SCREEN).unwrap().scene.home();
+    h.step(&FrameInput::empty().with_mouse_click(hx, hy));
+    h.step(&FrameInput::empty().with_mouse_release(hx + 2.0, hy + 1.0));
+    h.advance(30);
+    assert_eq!(h.game.active_pearl_hop().unwrap().session.tosses, 0);
+}
+
 
 /// Hermie's deep stall takes pearls, not Dum Dums — and what you buy there is
 /// wardrobe swag like anything else, so it can be handed to a buddy.
@@ -2327,17 +2393,12 @@ fn the_diving_net_pays_a_bonus_on_every_pearl() {
         "an upgrade is never worn, so it can't be handed to a buddy");
     assert_eq!(h.game.pearls, 5);
 
-    // Now go find a pearl on the deep path: 2 base + 1 first-try + 1 net.
-    h.game.npcs.clear();
-    h.warp_to(4, 8);
-    let (size, count) = {
-        let s = h.game.leap_session().expect("the trench pearl path");
-        (s.puzzle.size, s.puzzle.count)
-    };
-    h.pick_leap_size(size);
-    for _ in 0..count {
-        h.leap();
-    }
+    // Now win the trench Shelly's pearl: 2 base + 1 first-try + 1 net.
+    h.warp_to(4, 8); // over by the trench Shelly
+    h.open_pearl_hop();
+    h.skip_shelly_demo();
+    let aim = h.winning_aim();
+    h.toss_shelly(aim);
     assert_eq!(h.game.pearls, 5 + 4, "the net adds a pearl to every find");
 }
 
@@ -2384,46 +2445,35 @@ fn the_diving_net_explains_itself_and_shows_on_the_kid() {
         "the kid should be drawn with the net they just bought");
 
     // And every pearl it earns says so.
-    h.game.npcs.clear();
-    h.warp_to(4, 8);
-    let (size, count) = {
-        let s = h.game.leap_session().expect("the trench pearl path");
-        (s.puzzle.size, s.puzzle.count)
-    };
-    h.pick_leap_size(size);
-    for _ in 0..count {
-        h.leap();
-    }
-    let toast = h.game.track_toast_text().unwrap_or_default();
-    assert!(toast.contains("net"),
-        "the payout should name the net that earned it, got: {toast:?}");
+    h.warp_to(4, 8); // over by the trench Shelly
+    h.open_pearl_hop();
+    h.skip_shelly_demo();
+    let aim = h.winning_aim();
+    h.toss_shelly(aim);
+    let caption = h.game.active_pearl_hop().unwrap().caption.clone();
+    assert!(caption.contains("net"),
+        "the payout should name the net that earned it, got: {caption:?}");
 }
 
-/// Getting the size right first time is worth an extra pearl — and the deep
-/// path pays better than the shallow one, which is what the descent is for.
+/// The trench Shelly's pearls are worth double — the payoff for the dive —
+/// and a first try still adds its bonus.
 #[test]
-fn a_first_try_leap_pays_a_bonus_and_the_deep_path_pays_double() {
+fn the_deep_shelly_pays_double_plus_the_first_try_bonus() {
     use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
 
     let mut h = Harness::new(5);
     h.start_dev_game();
     h.game.profile.math_band = 2;
     h.game.map = Map::trench();
-    h.game.npcs.clear();
+    h.game.npcs = npc_mod::npcs_for_map("trench");
     h.game.npcs_offstage.clear();
-
-    h.warp_to(4, 8); // the trench path's launch stone
-    let (size, count) = {
-        let s = h.game.leap_session().expect("the trench has its own pearl path");
-        (s.puzzle.size, s.puzzle.count)
-    };
-    h.pick_leap_size(size);
-    for _ in 0..count {
-        h.leap();
-    }
-    // Deep pearls are worth 2, plus 1 for getting the size right first time.
-    assert_eq!(h.game.pearls, 3,
-        "a clean trip on the deep path pays double plus the first-try bonus");
+    h.warp_to(4, 8);
+    h.open_pearl_hop();
+    h.skip_shelly_demo();
+    let aim = h.winning_aim();
+    h.toss_shelly(aim);
+    assert_eq!(h.game.pearls, 3, "a clean deep pearl: 2 base + 1 first-try bonus");
 }
 
 #[test]
@@ -2461,10 +2511,8 @@ fn talking_to_inkwell_opens_the_dive_and_landing_descends() {
     }).unwrap_or_else(|| panic!("expected DescentLanded; got: {events:?}"));
     assert_eq!(landed.1, landed.2, "the shortest route is a clean dive");
     assert_eq!(h.game.pearls, 1, "a clean dive pays a pearl");
-    assert!(
-        robot_buddy_game::number_track::track_for_map("trench").is_some(),
-        "the trench should have its own pearl path (the descent payoff)",
-    );
+    assert!(h.game.npcs.iter().any(|n| n.kind == NpcKind::Clam),
+        "the trench has its own Shelly (the descent payoff)");
 }
 
 /// Nothing about a dive can go wrong: swim up and you're back on the reef with

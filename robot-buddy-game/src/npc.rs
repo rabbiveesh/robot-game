@@ -30,8 +30,8 @@ pub enum NpcKind {
     Crab,
     Jelly,
     Octopus,
-    /// Shelly, the pearl-path clam — one on each map with a number path. She
-    /// calls out which stone hides her pearl (see `number_track`).
+    /// Shelly, the pearl clam — one on the reef, one in the trench. Talk to
+    /// her and she runs Pearl Hop (`GameState::PearlHop`).
     Clam,
     // Trench creatures
     Anglerfish,
@@ -360,6 +360,8 @@ pub struct Npc {
     /// shooter (`GameState::Shooter`) directly, short-circuiting the normal
     /// interaction menu. Like `gate`/`refuel`, a reusable minigame-launch hook.
     pub launch_shooter: bool,
+    /// Runs Pearl Hop: talking to her opens the slingshot minigame (Shelly).
+    pub pearl_hop: bool,
     /// True while this NPC is strolling back to its home tile after being
     /// swapped out as the player's buddy (on the same map). It walks a
     /// precomputed route stored in `pathing` via `next_route_intent`; when the
@@ -553,6 +555,26 @@ impl Npc {
         self
     }
 
+    /// Builder: this NPC runs Pearl Hop — "Talk" opens the minigame. She
+    /// keeps the rest of her menu (gifts, swag), so she's still a buddy.
+    pub fn hopping(mut self) -> Self {
+        self.pearl_hop = true;
+        self
+    }
+
+    /// Hosts a minigame (Inkwell's dive, Shelly's Pearl Hop) — the world draws
+    /// an attract beacon over them so a kid can see there's a game here.
+    pub fn hosts_minigame(&self) -> Option<crate::sprites::attract::Beacon> {
+        use crate::sprites::attract::Beacon;
+        if self.pearl_hop {
+            Some(Beacon::Pearl)
+        } else if self.dive {
+            Some(Beacon::Dive)
+        } else {
+            None
+        }
+    }
+
     pub fn draw(&self, time: f32) {
         self.draw_at(self.entity.x, self.entity.y, self.entity.dir, time);
     }
@@ -630,6 +652,7 @@ fn npc(home_map: &'static str, kind: NpcKind, tx: usize, ty: usize, sprite: Spri
         refuel: false,
         dive: false,
         launch_shooter: false,
+        pearl_hop: false,
         homing: false,
         leaving_map: false,
     }
@@ -687,22 +710,20 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(Dolphin,  11, 8, S::Dolphin,   true, false, false).wandering(),
             n(Crab,      3, 9, S::Crab,      true, true,  false).wandering(),
             n(Jelly,     5, 2, S::Jellyfish, true, true,  false).wandering(),
-            // Shelly perches west of the pearl path calling out her number —
-            // her tile must match the track's `clam` in number_track.rs, and
-            // she stays put (she IS the signpost of the counting game).
-            n(Clam,      3, 13, S::Clam,     true, true,  false),
+            // Shelly stays put on her perch — talk to her for Pearl Hop.
+            n(Clam,      3, 13, S::Clam,     true, true,  false).hopping(),
             // Inkwell runs the dive shaft on the east edge — ask her for a
             // dive and the descent minigame opens. Still a giftable buddy.
             n(Octopus,  36, 7, S::Octopus,   true, true,  false).diving(),
         ],
         // The trench — deeper and stranger: Glimmer lights the pearl basin,
         // Wiggles winds around the east pocket, a jelly drifts the ledge, and
-        // the trench's own Shelly runs the deeper pearl path.
+        // the trench's own Shelly runs a Pearl Hop whose pearls are worth double.
         "trench" => vec![
             n(Jelly,      16, 3, S::Jellyfish, true, true,  false).wandering(),
             n(Anglerfish, 10, 10, S::Anglerfish, true, false, false).wandering(),
             n(Eel,        22, 8, S::Eel,       true, true,  false).wandering(),
-            n(Clam,       2, 8, S::Clam,       true, true,  false),
+            n(Clam,       2, 8, S::Clam,       true, true,  false).hopping(),
             // Hermie's deep stall, tucked in the walled east pocket — you have
             // to find your way round the rock spur to spend a pearl. Never
             // challenges; he's a shopkeeper, not a puzzler.

@@ -95,6 +95,10 @@ pub struct SaveData {
     /// `migrate_legacy` can infer they've already seen).
     #[serde(default)]
     pub seen_intros: Vec<String>,
+    /// Minigame demos that have already played, e.g. Shelly's Pearl Hop
+    /// show-off. Older saves load empty, so she shows off once.
+    #[serde(default)]
+    pub seen_demos: Vec<String>,
     /// Where the Dogfish House's bubble column leads: the map and tile the kid
     /// dove from. Saved so quitting down there never strands anyone. Older
     /// saves (and saves made anywhere else) load as None, and the column falls
@@ -628,6 +632,7 @@ mod tests {
         }"#;
         let mut save: SaveData = serde_json::from_str(json).expect("legacy save should load");
         assert!(save.seen_intros.is_empty(), "old saves have no intro list");
+        assert!(save.seen_demos.is_empty(), "old saves load before Pearl Hop existed: Shelly shows off once");
 
         save.migrate_legacy();
         assert!(save.seen_intros.contains(&"reef".to_string()),

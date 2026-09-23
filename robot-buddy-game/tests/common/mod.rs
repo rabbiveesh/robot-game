@@ -581,35 +581,100 @@ impl Harness {
         self.click(x, y);
     }
 
-    // ─── Shelly's pearl-leap helpers ─────────────────────
+    // ─── Shelly's Pearl Hop helpers ──────────────────────
 
-    /// Commit to a leap size by pressing the number key Shelly's bubble lists
-    /// it under. Panics if the size isn't on offer.
-    pub fn pick_leap_size(&mut self, size: u8) {
-        let key_no = {
-            let s = self.game.leap_session().expect("pick_leap_size: no pearl trip going");
-            s.puzzle.choices.iter().position(|c| *c == size)
-                .unwrap_or_else(|| panic!("{size} isn't on offer (choices: {:?})", s.puzzle.choices))
-        };
-        let key = match key_no {
-            0 => KeyCode::Key1,
-            1 => KeyCode::Key2,
-            2 => KeyCode::Key3,
-            _ => KeyCode::Key4,
-        };
-        self.press(key);
+    /// Walk up to Shelly on this map and talk to her. Pearl Hop opens (her
+    /// first-time show-off may be playing — see `skip_shelly_demo`).
+    pub fn open_pearl_hop(&mut self) {
+        self.walk_to_npc(NpcKind::Clam);
+        self.interact();
+        if self.game.state == GameState::InteractionMenu {
+            self.select_option("talk");
+        }
+        assert_eq!(self.game.state, GameState::PearlHop, "talking to Shelly should open Pearl Hop");
     }
 
-    /// One leap east, waiting out the slide.
-    pub fn leap(&mut self) {
-        self.press(KeyCode::Right);
-        self.run_until(|g| !g.player.moving, 120);
+    /// Tap through Shelly's first-time show-off, if it's playing.
+    pub fn skip_shelly_demo(&mut self) {
+        if self.game.active_pearl_hop().is_some_and(|a| a.demo.is_some()) {
+            let (x, y) = self.game.pearl_hop_layout(SCREEN).unwrap().scene.home();
+            self.click(x, y);
+        }
+        assert!(self.game.active_pearl_hop().is_some_and(|a| a.demo.is_none()), "the demo should be over");
     }
 
-    /// Swim back to the launch stone, waiting out the slide.
-    pub fn swim_back(&mut self) {
-        self.press(KeyCode::Left);
-        self.run_until(|g| !g.player.moving, 120);
+    /// The round on the rock right now.
+    pub fn pearl_hop_round(&self) -> robot_buddy_domain::logic::pearl_hop::HopRound {
+        self.game.active_pearl_hop().expect("Pearl Hop isn't open").session.round.clone()
+    }
+
+    /// A pull that lands Shelly on the pearl.
+    pub fn winning_aim(&self) -> u16 {
+        self.pearl_hop_round().winning_aims()[0]
+    }
+
+    /// A pull that misses: sails past the pearl if `past`, else comes up short.
+    pub fn missing_aim(&self, past: bool) -> u16 {
+        use robot_buddy_domain::logic::pearl_hop::Landing;
+        let r = self.pearl_hop_round();
+        let want = if past { Landing::Past } else { Landing::Short };
+        (r.min_aim..=r.max_aim).step_by(r.aim_step() as usize)
+            .find(|&a| r.resolve(a).landing == want)
+            .unwrap_or_else(|| panic!("no {want:?} aim in {r:?}"))
+    }
+
+    /// Toss Shelly the way a kid does: press on her, drag back to the pull
+    /// for `aim`, let go. Then watch the toss play out — she's on the pearl,
+    /// or back on her rock after a miss.
+    pub fn toss_shelly(&mut self, aim: u16) {
+        let l = self.game.pearl_hop_layout(SCREEN).expect("toss_shelly: Pearl Hop isn't open");
+        let (hx, hy) = l.scene.home();
+        let (tx, ty) = l.scene.drag_point_for(aim);
+        self.step(&FrameInput::empty().with_mouse_click(hx, hy));
+        for i in 1..=6 {
+            let u = i as f32 / 6.0;
+            self.step(&FrameInput::empty().with_mouse_held(hx + (tx - hx) * u, hy + (ty - hy) * u));
+        }
+        self.step(&FrameInput::empty().with_mouse_release(tx, ty));
+        self.wait_for_shelly();
+    }
+
+    /// Toss Shelly from the keyboard: arrows to the aim, Space to let go.
+    pub fn toss_shelly_with_keys(&mut self, aim: u16) {
+        for _ in 0..400 {
+            let now = self.game.active_pearl_hop().expect("Pearl Hop isn't open").session.aim;
+            match now.cmp(&aim) {
+                std::cmp::Ordering::Less => self.press(KeyCode::Right),
+                std::cmp::Ordering::Greater => self.press(KeyCode::Left),
+                std::cmp::Ordering::Equal => break,
+            }
+        }
+        self.press(KeyCode::Space);
+        self.wait_for_shelly();
+    }
+
+    /// Let the toss in the air finish: she's on the pearl, or (after a miss)
+    /// back on her rock ready to go again.
+    pub fn wait_for_shelly(&mut self) {
+        use robot_buddy_domain::logic::pearl_hop::HopPhase;
+        self.run_until(
+            |g| g.active_pearl_hop().is_none_or(|a| matches!(a.session.phase, HopPhase::Won | HopPhase::Aiming)),
+            1200,
+        );
+    }
+
+    /// Tap Pearl Hop's Leave button.
+    pub fn leave_pearl_hop_by_tap(&mut self) {
+        let (x, y) = self.game.pearl_hop_layout(SCREEN).expect("Pearl Hop isn't open")
+            .leave().expect("Leave is always on screen").center();
+        self.click(x, y);
+    }
+
+    /// Tap "Again!" after a win.
+    pub fn pearl_hop_again(&mut self) {
+        let (x, y) = self.game.pearl_hop_layout(SCREEN).expect("Pearl Hop isn't open")
+            .again().expect("Again! shows once she has the pearl").center();
+        self.click(x, y);
     }
 
     /// Stand the player on a tile outright (for setting up on a far-off map).

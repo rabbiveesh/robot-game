@@ -33,6 +33,7 @@ const MIGRATED: &[&str] = &[
     "dialogue.rs",
     "settings_overlay.rs",
     "visuals.rs",
+    "pearl_hop.rs",
 ];
 
 /// Raw macroquad calls a migrated panel must not make (besides every
@@ -360,8 +361,8 @@ fn the_scanner_flags_unmigrated_helpers_but_not_local_or_migrated_ones() {
     let src = "use crate::sprites::player;
                fn draw_star_burst() {}
                fn f() { draw_star_burst(); visuals::draw(c, r); super::visuals::draw(c, r); paint::text(t, WHITE);
-                        crate::ui::leap::draw_stones(s); player::draw_player(x, y); leap::draw(s); }";
-    assert_eq!(calls(src), vec!["crate::sprites::player::draw_player", "crate::ui::leap::draw_stones", "leap::draw"]);
+                        crate::ui::descent::draw_stones(s); player::draw_player(x, y); descent::draw(s); }";
+    assert_eq!(calls(src), vec!["crate::sprites::player::draw_player", "crate::ui::descent::draw_stones", "descent::draw"]);
 }
 
 #[test]
