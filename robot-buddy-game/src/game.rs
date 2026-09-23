@@ -4619,7 +4619,7 @@ impl Game {
             ui::interaction_menu::draw(&layout, input.mouse_pos);
         }
 
-        self.dialogue.draw();
+        self.dialogue.draw(screen);
 
         // Challenge overlay (separate from intake's in-render_world drawing).
         if let Some(ref ac) = self.active_challenge {

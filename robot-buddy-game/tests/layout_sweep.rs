@@ -294,6 +294,34 @@ mod challenge_sweep {
     }
 }
 
+// ─── Dialogue ────────────────────────────────────────────
+
+#[test]
+fn dialogue_lines_are_sane_everywhere() {
+    use robot_buddy_game::ui::dialogue::{self, DialogueId};
+    use robot_buddy_game::ui::layout::Kind;
+    let four_liner = "Oh no, oh no! The storm blew all of my lanterns off the shelf and into the harbour, \
+        and the fishing boats are coming home tonight. If the lighthouse is dark they'll never find the \
+        way in. Could you and Sparky count how many are still up here with me, and how many we need to fish out?";
+    let lines = [
+        ("Sparky", "Hi!"),
+        ("Professor Gizmo", "Let's build something amazing together today!"),
+        ("Bolt the Shopkeeper", four_liner),
+        ("A Very Long Speaker Name That Keeps Going", four_liner),
+    ];
+    for &screen in &SWEEP_SCREENS {
+        for (speaker, text) in lines {
+            let f = dialogue::layout(speaker, text, screen);
+            assert_sane(&f, screen_rect(screen));
+            // The whole line is on screen: nothing cut, "SPACE >" still there.
+            assert!(f.rect(DialogueId::Continue).is_some());
+            let Some(Kind::Text(body)) = f.get(DialogueId::Body).map(|e| &e.kind) else { panic!("body text") };
+            let shown: String = body.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" ");
+            assert_eq!(shown, text.split_whitespace().collect::<Vec<_>>().join(" "), "at {screen:?}");
+        }
+    }
+}
+
 // ─── Quest ───────────────────────────────────────────────
 
 #[test]
