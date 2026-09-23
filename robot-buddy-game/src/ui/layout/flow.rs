@@ -7,10 +7,13 @@
 //!
 //! * main-axis sizes start at the flex basis (the preferred size, else the
 //!   content size), then grow into free space by `flex_grow` or shrink by
-//!   `flex_shrink × basis`, never below the item's minimum (explicit `min_*`,
-//!   else its automatic minimum: min-content — for text, what its
+//!   `flex_shrink × inner basis`, never below the item's minimum (explicit
+//!   `min_*`, else its automatic minimum: min-content — for text, what its
 //!   [`Fit`](super::node::Fit) policy can shrink to — capped by its preferred
-//!   size) — the CSS "freeze" loop;
+//!   size) — the CSS "freeze" loop, ported from taffy step for step;
+//! * a container's min-content counts its children's *preferred* sizes, so
+//!   a nested column only gives up height it doesn't need if it says
+//!   `min_h(0.0)` (CSS's "min-height: 0" rule);
 //! * fixed (`flex_shrink: 0`) items keep their basis, so headers and footers
 //!   are reserved before a growable body gets anything;
 //! * cross size is the preferred size, or stretched to the line, or
@@ -23,12 +26,12 @@
 //! * nothing is dropped here: what doesn't fit overflows (Center/End
 //!   justification and alignment overflow the start side too), then the shared
 //!   [`clip`](super::engine::clip) post-pass turns overflow into `None`;
-//! * edges are rounded to whole pixels like taffy.
+//! * positions are exact (unrounded); the shared pipeline rounds edges.
 
-use super::engine::{round_edges, LayoutEngine, LayoutTree, LeafKind};
+use super::engine::{LayoutEngine, LayoutTree, LeafKind};
 use super::metrics::TextMetrics;
 use super::node::{Align, Dim, Direction, Justify, Len, Style};
-use super::rect::{UiRect, EPS};
+use super::rect::UiRect;
 use super::text;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -40,7 +43,6 @@ impl LayoutEngine for FlowEngine {
         if !tree.nodes.is_empty() {
             Cx { m: metrics, t: tree }.place(0, bounds, &mut out);
         }
-        round_edges(&mut out);
         out
     }
 }
@@ -112,76 +114,94 @@ impl Sz {
 
 /// One flex item's main-axis inputs.
 struct Item {
+    /// Flex base size (border box: padding included).
     basis: f32,
+    /// Padding along the main axis: CSS scales shrinking by the *inner*
+    /// (content-box) basis.
+    pad: f32,
     min: f32,
     max: f32,
     grow: f32,
     shrink: f32,
 }
 
-/// Resolve main-axis sizes: grow into free space or shrink out of a deficit,
-/// respecting each item's min/max (iteratively re-sharing what clamped items
-/// couldn't take — the CSS "freeze" loop). Sizes may sum past `avail` when
+/// Resolve main-axis sizes — CSS flexbox §9.7 "Resolving Flexible Lengths",
+/// following taffy's implementation step for step (including its quirks) so
+/// the two engines agree to the pixel. Sizes may sum past `avail` when
 /// minimums don't allow otherwise: that's overflow.
 fn distribute(items: &[Item], avail: f32, gap_total: f32) -> Vec<f32> {
-    let mut sizes: Vec<f32> = items.iter().map(|i| i.basis.clamp(i.min, i.max.max(i.min))).collect();
-    let mut frozen = vec![false; items.len()];
-    for _ in 0..=items.len() {
-        let free = avail - gap_total - sizes.iter().sum::<f32>();
-        if free > EPS {
-            let total: f32 = items.iter().zip(&frozen).filter(|(i, f)| !**f && i.grow > 0.0).map(|(i, _)| i.grow).sum();
-            if total <= 0.0 {
-                break;
-            }
-            let mut any_clamped = false;
-            for (k, it) in items.iter().enumerate() {
-                if frozen[k] || it.grow <= 0.0 {
-                    continue;
-                }
-                let want = sizes[k] + free * it.grow / total;
-                if want >= it.max {
-                    sizes[k] = it.max;
-                    frozen[k] = true;
-                    any_clamped = true;
-                } else {
-                    sizes[k] = want;
-                }
-            }
-            if !any_clamped {
-                break;
-            }
-        } else if free < -EPS {
-            let total: f32 = items
-                .iter()
-                .enumerate()
-                .filter(|(k, i)| !frozen[*k] && i.shrink > 0.0 && sizes[*k] > i.min + EPS)
-                .map(|(_, i)| i.shrink * i.basis.max(1.0))
-                .sum();
-            if total <= 0.0 {
-                break;
-            }
-            let mut any_clamped = false;
-            for (k, it) in items.iter().enumerate() {
-                if frozen[k] || it.shrink <= 0.0 || sizes[k] <= it.min + EPS {
-                    continue;
-                }
-                let want = sizes[k] + free * it.shrink * it.basis.max(1.0) / total;
-                if want <= it.min {
-                    sizes[k] = it.min;
-                    frozen[k] = true;
-                    any_clamped = true;
-                } else {
-                    sizes[k] = want;
-                }
-            }
-            if !any_clamped {
-                break;
-            }
+    // Flex base sizes are floored at the item's padding.
+    let basis: Vec<f32> = items.iter().map(|i| i.basis.max(i.pad)).collect();
+    let hypo: Vec<f32> = items.iter().zip(&basis).map(|(i, &b)| clamp(b, Some(i.min.max(i.pad)), Some(i.max))).collect();
+    let used = gap_total + hypo.iter().sum::<f32>();
+    let (growing, shrinking) = (used < avail, used > avail);
+
+    // Size inflexible items (and every item when nothing flexes).
+    let mut target = hypo.clone();
+    let mut frozen: Vec<bool> = items
+        .iter()
+        .enumerate()
+        .map(|(k, i)| {
+            !(growing || shrinking)
+                || (i.grow == 0.0 && i.shrink == 0.0)
+                || (growing && basis[k] > hypo[k])
+                || (shrinking && basis[k] < hypo[k])
+        })
+        .collect();
+    let used_space = |target: &[f32], frozen: &[bool]| {
+        gap_total + (0..items.len()).map(|k| if frozen[k] { target[k] } else { basis[k] }).sum::<f32>()
+    };
+    let initial_free = avail - used_space(&target, &frozen);
+
+    while frozen.iter().any(|f| !f) {
+        let used = used_space(&target, &frozen);
+        let unfrozen = || (0..items.len()).filter(|&k| !frozen[k]);
+        let sum_grow: f32 = unfrozen().map(|k| items[k].grow).sum();
+        let sum_shrink: f32 = unfrozen().map(|k| items[k].shrink).sum();
+        let free = if growing && sum_grow < 1.0 {
+            (initial_free * sum_grow - gap_total).min(avail - used)
+        } else if shrinking && sum_shrink < 1.0 {
+            (initial_free * sum_shrink - gap_total).max(avail - used)
         } else {
-            break;
+            avail - used
+        };
+
+        if free.is_normal() {
+            if growing && sum_grow > 0.0 {
+                for k in unfrozen() {
+                    target[k] = basis[k] + free * (items[k].grow / sum_grow);
+                }
+            } else if shrinking && sum_shrink > 0.0 {
+                let scaled = |k: usize| (basis[k] - items[k].pad) * items[k].shrink;
+                let sum_scaled: f32 = unfrozen().map(scaled).sum();
+                if sum_scaled > 0.0 {
+                    for k in unfrozen() {
+                        target[k] = basis[k] + free * (scaled(k) / sum_scaled);
+                    }
+                }
+            }
+        }
+
+        // Clamp to min/max and freeze the violators.
+        let mut total_violation = 0.0;
+        let mut violation = vec![0.0; items.len()];
+        for k in unfrozen() {
+            let clamped = clamp(target[k], Some(items[k].min), Some(items[k].max)).max(0.0);
+            violation[k] = clamped - target[k];
+            target[k] = clamped;
+            total_violation += violation[k];
+        }
+        for k in (0..items.len()).filter(|&k| !frozen[k]).collect::<Vec<_>>() {
+            frozen[k] = if total_violation > 0.0 {
+                violation[k] > 0.0
+            } else if total_violation < 0.0 {
+                violation[k] < 0.0
+            } else {
+                true
+            };
         }
     }
-    sizes
+    target
 }
 
 impl Cx<'_> {
@@ -280,9 +300,13 @@ impl Cx<'_> {
         z.clamp(z.pref.unwrap_or_else(|| self.max_content_w(n)))
     }
 
-    /// Min-content width contribution: the item's automatic minimum.
+    /// Min-content width contribution: the preferred width if there is one,
+    /// else min-content, clamped by min/max. NOT the item's automatic
+    /// minimum: in CSS a child's `min-width` only stops *that child* from
+    /// shrinking; what its parent can shrink to counts its preferred size.
     fn min_w(&self, n: usize) -> f32 {
-        self.sw(n, None).item_min(|| self.min_content_w(n), self.style(n).flex_shrink)
+        let z = self.sw(n, None);
+        z.clamp(z.pref.unwrap_or_else(|| self.min_content_w(n)))
     }
 
     /// Max-content height contribution at width `w`.
@@ -291,9 +315,12 @@ impl Cx<'_> {
         z.clamp(z.pref.unwrap_or_else(|| self.content_h(n, w)))
     }
 
-    /// Min-content height contribution at width `w`.
+    /// Min-content height contribution at width `w` (see [`Self::min_w`]):
+    /// so a container can only shrink below its children's preferred heights
+    /// if it says `min_h(0.0)` — the CSS "min-height: 0" rule.
     fn min_h(&self, n: usize, w: f32) -> f32 {
-        self.sh(n, None).item_min(|| self.min_content_h(n, w), self.style(n).flex_shrink)
+        let z = self.sh(n, None);
+        z.clamp(z.pref.unwrap_or_else(|| self.min_content_h(n, w)))
     }
 
     // ─── Sizing children against a known container ─────────
@@ -331,6 +358,7 @@ impl Cx<'_> {
                 let s = self.style(c);
                 Item {
                     basis: z.pref.unwrap_or_else(|| self.max_content_w(c)),
+                    pad: s.padding.horizontal(),
                     min: z.item_min(|| self.min_content_w(c), s.flex_shrink),
                     max: z.max.unwrap_or(f32::INFINITY),
                     grow: s.flex_grow,
@@ -364,6 +392,7 @@ impl Cx<'_> {
                     let cs = self.style(c);
                     Item {
                         basis: z.pref.unwrap_or_else(|| self.content_h(c, cw)),
+                        pad: cs.padding.vertical(),
                         min: z.item_min(|| self.min_content_h(c, cw), cs.flex_shrink),
                         max: z.max.unwrap_or(f32::INFINITY),
                         grow: cs.flex_grow,
@@ -412,7 +441,7 @@ impl Cx<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::layout::engine::{clip, Rects};
+    use crate::ui::layout::engine::{clip, round_edges, Rects};
     use crate::ui::layout::metrics::FontMetrics;
     use crate::ui::layout::node::{col, region, row, spacer, text, Fit, Node};
 
@@ -420,8 +449,11 @@ mod tests {
         FlowEngine.compute(&LayoutTree::new(root), UiRect::new(0.0, 0.0, w, h), FontMetrics::bundled())
     }
 
+    /// The whole shared pipeline: engine, rounding, clipping.
     fn run(root: &Node<()>, w: f32, h: f32) -> Rects {
-        clip(&LayoutTree::new(root), &raw(root, w, h))
+        let mut r = raw(root, w, h);
+        round_edges(&mut r);
+        clip(&LayoutTree::new(root), &r)
     }
 
     #[test]
@@ -519,11 +551,13 @@ mod tests {
         assert!(clipped[2].is_some() && clipped[3].is_some());
     }
 
-    /// Edges land on whole pixels, rounded independently like taffy.
+    /// The engine is exact; the pipeline rounds each edge to the nearest
+    /// pixel, so abutting boxes stay abutting and nothing that fit overflows.
     #[test]
     fn edges_round_to_whole_pixels() {
         let root = row().children((0..3).map(|_| region(0.0, 10.0).auto_w().grow(1.0)));
-        let r = raw(&root, 100.0, 10.0);
+        assert!((raw(&root, 100.0, 10.0)[2].x - 100.0 / 3.0).abs() < 1e-3, "the engine doesn't round");
+        let r: Vec<UiRect> = run(&root, 100.0, 10.0).into_iter().map(Option::unwrap).collect();
         assert_eq!((r[1].x, r[1].w), (0.0, 33.0));
         assert_eq!((r[2].x, r[2].w), (33.0, 34.0)); // 33.33..66.67 → 33..67
         assert_eq!((r[3].x, r[3].w), (67.0, 33.0));

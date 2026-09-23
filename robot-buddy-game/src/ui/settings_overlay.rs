@@ -115,7 +115,9 @@ fn build(m: SettingsModel, screen: (f32, f32)) -> Node<SettingsId> {
     let gap = if screen.1 < 600.0 { 6.0 } else { 10.0 };
 
     let parent_section = m.parent_open.then(|| {
+        // min_h(0): lets the section's buttons give up height on a short window.
         col()
+            .min_h(0.0)
             .gap(gap)
             .children(FEATURES.iter().map(|&(f, name)| {
                 let state = if feature_on(m.features, f) { "ON" } else { "OFF" };
@@ -144,7 +146,7 @@ fn build(m: SettingsModel, screen: (f32, f32)) -> Node<SettingsId> {
         // while open (both together never fit a default window).
         .maybe((!m.parent_open).then(|| toggle_row(SettingsId::Tts, SettingsId::TtsLabel, tts.into(), 22, 56.0)))
         .maybe((!m.parent_open).then(|| {
-            col().gap(6.0).pad_edges(0.0, 8.0, 0.0, 0.0).children([
+            col().gap(6.0).min_h(0.0).pad_edges(0.0, 8.0, 0.0, 0.0).children([
                 label("Text speed", SettingsId::SpeedLabel),
                 thirds(48.0, SPEEDS.iter().map(|&ts| {
                     button(SettingsId::Speed(ts), SettingsId::SpeedText(ts), ts.label(), 22, Fit::shrink(12))

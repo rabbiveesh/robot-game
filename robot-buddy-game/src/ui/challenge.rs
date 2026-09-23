@@ -182,7 +182,9 @@ fn tree(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32), visual_h
     };
 
     // PANEL_W wide, or the whole screen if that's narrower.
-    let panel = panel.id(ChallengeId::Panel).w_pct(1.0).max_w(PANEL_W).pad_edges(24.0, pad_top, 24.0, 20.0);
+    // min_h(0): the panel may be shorter than its children's preferred heights
+    // (their own min_h floors then apply) — the CSS "min-height: 0" rule.
+    let panel = panel.id(ChallengeId::Panel).w_pct(1.0).max_w(PANEL_W).min_h(0.0).pad_edges(24.0, pad_top, 24.0, 20.0);
     layout::centered_on_screen(panel, MARGIN)
 }
 

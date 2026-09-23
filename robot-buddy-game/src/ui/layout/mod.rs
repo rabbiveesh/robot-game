@@ -12,7 +12,8 @@
 //!
 //! Layers, and who may depend on what:
 //! * [`node`] — the panel-facing vocabulary. Flexbox-only, taffy-shaped.
-//! * [`engine`] — the seam: `LayoutEngine::compute(tree, bounds, metrics) -> rects`.
+//! * [`engine`] — the seam: `LayoutEngine::compute(tree, bounds, metrics) -> rects`
+//!   (exact CSS flexbox, overflow allowed), then the shared `round_edges` + `clip`.
 //! * [`flow`] — the in-house engine (`FlowEngine`).
 //! * [`text`] — fit/wrap/measure for text leaves; shared by every engine.
 //! * [`frame`] — the resolved output (texts with lines + baselines, boxes,
@@ -28,14 +29,19 @@
 //! | `direction`            | `flex_direction` (Row / Column)                  |
 //! | `padding: Edges`       | `padding: Rect<LengthPercentage::length>`        |
 //! | `gap`                  | `gap: Size { width: g, height: g }`              |
-//! | `width` / `height`     | `size: Size<Dimension>` (Auto / length)          |
-//! | `min_*` / `max_*`      | `min_size` / `max_size`                          |
+//! | `width` / `height`     | `size: Size<Dimension>` (auto / length / percent) |
+//! | `min_*` / `max_*`      | `min_size` / `max_size` (`LengthPercentageAuto`) |
 //! | `flex_grow/shrink`     | `flex_grow` / `flex_shrink`                      |
 //! | `align_items/self`     | `align_items` / `align_self` (START/CENTER/END/STRETCH) |
 //! | `justify_content`      | `justify_content` (START/CENTER/END/SPACE_BETWEEN) |
 //! | `Content::Text(spec)`  | leaf with context; measure = `text::natural_width` / `natural_height` / `min_*` |
 //! | `Content::Region`      | plain leaf                                       |
-//! | clip-on-overflow       | `overflow: Hidden` + drop children whose box ends past the parent (post-pass) |
+//! | root fills `bounds`    | root `size` = bounds (its own size style ignored) |
+//! | whole pixels           | `disable_rounding()`; the shared `engine::round_edges` rounds |
+//! | overflow → clipped     | `overflow: Visible` (default); the shared `engine::clip` post-pass |
+//!
+//! `tests/layout_taffy.rs` holds a working `TaffyEngine` built on this table
+//! and checks `FlowEngine` against it over the whole sweep.
 
 pub mod engine;
 pub mod flow;
@@ -67,18 +73,45 @@ pub type DefaultEngine = flow::FlowEngine;
 /// Lay `root` out inside `bounds` with the default engine and the bundled
 /// font's metrics. Pure: safe to call from `Game::step` and headless tests.
 pub fn layout<Id: Copy + PartialEq + Debug>(root: &Node<Id>, bounds: UiRect) -> Frame<Id> {
+    #[cfg(debug_assertions)]
+    if let Some(engine) = ENGINE_OVERRIDE.with(|e| e.borrow().clone()) {
+        return layout_with(&*engine, FontMetrics::bundled(), root, bounds);
+    }
     layout_with(&DefaultEngine::default(), FontMetrics::bundled(), root, bounds)
 }
 
+#[cfg(debug_assertions)]
+thread_local! {
+    static ENGINE_OVERRIDE: std::cell::RefCell<Option<std::rc::Rc<dyn LayoutEngine>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Debug builds only: run `f` with every [`layout`] call on this thread
+/// (every panel, paging included) going through `engine` instead of
+/// [`DefaultEngine`]. The engine differential test (`tests/layout_taffy.rs`)
+/// uses it to run the whole sweep against taffy.
+#[cfg(debug_assertions)]
+pub fn with_engine<R>(engine: std::rc::Rc<dyn LayoutEngine>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<std::rc::Rc<dyn LayoutEngine>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ENGINE_OVERRIDE.with(|e| *e.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(ENGINE_OVERRIDE.with(|e| e.borrow_mut().replace(engine)));
+    f()
+}
+
 /// [`layout`] with an explicit engine and metrics (for tests / engine swaps).
-pub fn layout_with<Id: Copy + PartialEq + Debug, E: LayoutEngine>(
+pub fn layout_with<Id: Copy + PartialEq + Debug, E: LayoutEngine + ?Sized>(
     engine: &E,
     metrics: &dyn TextMetrics,
     root: &Node<Id>,
     bounds: UiRect,
 ) -> Frame<Id> {
     let tree = LayoutTree::new(root);
-    let raw = engine.compute(&tree, bounds, metrics);
+    let mut raw = engine.compute(&tree, bounds, metrics);
+    engine::round_edges(&mut raw);
     let rects = engine::clip(&tree, &raw);
     Frame::resolve(root, &rects, bounds, metrics)
 }

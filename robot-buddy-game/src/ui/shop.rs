@@ -240,7 +240,8 @@ fn build(m: &ShopModel, page: Page) -> Node<ShopId> {
             ])
         }
         ShopView::PickingColor { colors, .. } => {
-            let grid = col().gap(18.0).children(colors.chunks(4).enumerate().map(|(r, chunk)| {
+            // min_h(0): the grid may squeeze its rows (CSS won't shrink a column below its rows' preferred heights otherwise).
+            let grid = col().gap(18.0).min_h(0.0).children(colors.chunks(4).enumerate().map(|(r, chunk)| {
                 // Rows shrink toward 56px on a short screen; swatches stretch to them.
                 row().gap(18.0).justify(Justify::Center).align(Align::Stretch).h(90.0).min_h(56.0).children(
                     (0..chunk.len()).map(|c| region(90.0, 0.0).auto_h().id(ShopId::Swatch(r * 4 + c)).hit().min_w(40.0)),

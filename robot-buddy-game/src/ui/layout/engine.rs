@@ -66,26 +66,26 @@ impl<'a> LayoutTree<'a> {
 
 pub trait LayoutEngine {
     /// Lay the tree out with the root filling `bounds` (node 0 is the root;
-    /// its own size style is ignored). Returns one absolute rect per node, in
-    /// pre-order. Contract every engine must keep — it's what the taffy
-    /// differential test holds `FlowEngine` to:
+    /// its own size style is ignored). Returns one absolute, **unrounded**
+    /// rect per node, in pre-order. The contract every engine keeps — and
+    /// what the taffy differential test holds `FlowEngine` to, to 0.01px:
     ///
     /// * **CSS flexbox semantics** for the vocabulary in `node.rs`, including
     ///   overflow: a child that doesn't fit is *not* capped or dropped here;
     ///   it pokes out of its parent exactly as it would in a browser (and
     ///   `justify`/`align` Center/End on overflow push it out of the *start*
-    ///   side too);
-    /// * **whole pixels**: edges rounded like taffy's `round_layout` (see
-    ///   [`round_edges`]).
+    ///   side too).
     ///
-    /// Text leaves are measured with [`super::text`] against `metrics`.
-    /// Overflow becomes clipping in [`clip`], which every engine shares.
+    /// Text leaves are measured with [`super::text`] against `metrics`. What
+    /// every engine shares happens after: [`round_edges`] then [`clip`].
     fn compute(&self, tree: &LayoutTree, bounds: UiRect, metrics: &dyn TextMetrics) -> Vec<UiRect>;
 }
 
-/// Round absolute rects to whole pixels the way taffy does: each edge goes to
-/// the nearest pixel independently (so abutting boxes stay abutting, and a
-/// box's size can change by a pixel).
+/// Round absolute rects to whole pixels: each edge goes to the nearest pixel
+/// independently, so abutting boxes stay abutting and a box that fit its
+/// parent still does (rounding is monotonic). Shared by every engine — taffy
+/// runs with its own rounding off, because it rounds *relative* offsets, which
+/// can push a snugly fitting child a pixel out of its parent.
 pub fn round_edges(rects: &mut [UiRect]) {
     for r in rects {
         let (x0, y0) = (r.x.round(), r.y.round());

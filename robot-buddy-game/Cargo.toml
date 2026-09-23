@@ -26,3 +26,6 @@ ttf-parser = "0.21"
 syn = { version = "2", features = ["full", "visit"] }
 # Layout discipline test: walk macro token streams for forbidden calls.
 proc-macro2 = "1"
+# Engine differential test (tests/layout_taffy.rs): the whole layout sweep
+# cross-checked against taffy. Flexbox only, and dev-only: zero WASM cost.
+taffy = { version = "0.14", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
