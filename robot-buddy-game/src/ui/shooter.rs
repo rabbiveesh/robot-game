@@ -3,10 +3,10 @@
 //! Pure drawing from a domain `ShooterSession`. The logical play field is
 //! `0..FIELD_W` × `0..FIELD_H`; everything maps into a centered play rect. There
 //! is no clock and no lives on screen (Invariant 4) — just the target, the
-//! aliens, a shield gauge, and gentle guidance.
+//! aliens (which settle near the bottom and wait), and gentle guidance.
 
 use crate::prelude::*;
-use robot_buddy_domain::logic::shooter::{ShooterSession, ShooterPhase, FIELD_W, FIELD_H, BREACH_Y, DOT_MAX};
+use robot_buddy_domain::logic::shooter::{ShooterSession, ShooterPhase, FIELD_W, FIELD_H, DOT_MAX};
 use robot_buddy_domain::types::CraStage;
 
 const VOID: Color = color_u8!(8, 10, 24, 255);
@@ -46,15 +46,9 @@ pub fn draw(session: &ShooterSession, screen: (f32, f32), time: f32) {
     let unit = play_w / FIELD_W; // one logical x-unit in pixels
     let alien_r = (unit * 5.0).clamp(16.0, 30.0);
 
-    // Faint frame + the danger line the aliens must not cross.
+    // Faint frame. No danger line: the aliens settle near the bottom and wait
+    // for as long as the kid needs.
     draw_rectangle_lines(play_x, play_y, play_w, play_h, 2.0, color_u8!(60, 70, 110, 120));
-    let (_, breach_py) = to_screen(0.0, BREACH_Y);
-    let dashed = color_u8!(120, 90, 150, 90);
-    let mut dx = play_x;
-    while dx < play_x + play_w {
-        draw_line(dx, breach_py, (dx + 14.0).min(play_x + play_w), breach_py, 2.0, dashed);
-        dx += 26.0;
-    }
 
     // ── Target banner ── shown as a numeral (Abstract/Representational) or as a
     // row of pips to count (Concrete), matching how the aliens read.
@@ -83,9 +77,6 @@ pub fn draw(session: &ShooterSession, screen: (f32, f32), time: f32) {
     // Aiming guide: a soft beam up the ship's column so kids see where a shot goes.
     draw_line(ship_x, ship_y - alien_r, ship_x, play_y, 2.0, color_u8!(120, 200, 255, 40));
 
-    // ── Shield gauge (top-left) ──
-    draw_shield(play_x + 6.0, 30.0, session.shield, session.max_shield);
-
     // ── Score (top-right) ──
     let score_label = format!("★ {}", session.score);
     let score_size = 26.0;
@@ -96,10 +87,6 @@ pub fn draw(session: &ShooterSession, screen: (f32, f32), time: f32) {
     // ── Bottom guidance / states ──
     if session.phase == ShooterPhase::Complete {
         centered_banner(sw, sh, "ALL CLEAR!", color_u8!(140, 240, 160, 255));
-    } else if session.shield == 0 {
-        // Shield empty: the aliens hover (drift frozen) — reassure, don't scare.
-        let msg = "Shield low — clear a pair to power back up!";
-        hint(sw, sh, msg, color_u8!(255, 200, 120, 255));
     } else {
         hint(sw, sh, "TAP a target  \u{2022}  or \u{2190}\u{2192} + SPACE  \u{2022}  ESC leave",
              color_u8!(150, 165, 210, 220));
@@ -248,22 +235,6 @@ fn draw_ship(cx: f32, cy: f32, r: f32) {
         vec2(cx, cy + r * 1.0),
         color_u8!(255, 170, 80, 220),
     );
-}
-
-fn draw_shield(x: f32, y: f32, shield: u8, max: u8) {
-    draw_text("Shield", x, y, 22.0, color_u8!(150, 165, 210, 255));
-    let base_x = x + measure_text("Shield", None, 22, 1.0).width + 10.0;
-    let pip_r = 7.0;
-    for i in 0..max {
-        let px = base_x + i as f32 * (pip_r * 2.0 + 6.0);
-        let py = y - pip_r;
-        if i < shield {
-            draw_circle(px, py, pip_r, color_u8!(90, 210, 255, 255));
-            draw_circle(px, py, pip_r, color_u8!(255, 255, 255, 40));
-        } else {
-            draw_circle_lines(px, py, pip_r, 2.0, color_u8!(80, 90, 130, 200));
-        }
-    }
 }
 
 fn draw_starfield(sw: f32, sh: f32, time: f32) {

@@ -8,10 +8,11 @@
 //! logic, so this passes the Broccoli Test. A wrong pair simply deselects
 //! (never a "WRONG", never punishment).
 //!
-//! Mild stakes, no clock (Invariant 4): an alien that drifts off the bottom
-//! dims the shield one notch and retreats; clearing a pair refills it. When the
-//! shield empties the aliens *hover* (drift freezes) so a stuck kid always
-//! recovers — there is no game-over and no timer anywhere.
+//! No clock, no stakes (Invariant 4): the aliens drift down to the floor line
+//! (`FLOOR_Y`) and WAIT there, hovering, for as long as the kid needs. Nothing
+//! is ever lost by being slow — an alien never leaves the field except by
+//! being paired. A wave clears only when every alien in it has been paired off,
+//! and the run completes only when every wave has. There is no game-over.
 //!
 //! Every wave is built purely from pairs that sum to the target, so it is
 //! always fully clearable: for any valid clear `a+c=T`, the leftover partners
@@ -23,6 +24,10 @@
 //! learner's NumberBond CRA stage sets how the numbers are drawn — pips
 //! (Concrete), grouped dots (Representational), or numerals (Abstract). Repeated
 //! mis-pairs scaffold that representation one step more concrete, mid-run.
+//!
+//! Stealth assessment: the session keeps an ordered log of every pairing
+//! attempt (`attempts`) and a record per cleared wave (`cleared_waves`) with
+//! the time spent on it. The kid never sees any of it.
 //!
 //! Public surface mirrors the other logic modules:
 //!   - `ShooterSession::new(band, cra_stage, pace, &mut impl Rng)` → fresh session (all
@@ -41,8 +46,9 @@ pub const FIELD_W: f32 = 100.0;
 pub const FIELD_H: f32 = 100.0;
 /// Where a fresh wave of aliens starts (near the top).
 pub const SPAWN_Y: f32 = 8.0;
-/// An alien at or past this depth has breached the shield and retreats.
-pub const BREACH_Y: f32 = 92.0;
+/// How far down the aliens drift. They stop here and hover until paired —
+/// comfortably above the ship so a waiting alien never sits on top of it.
+pub const FLOOR_Y: f32 = 80.0;
 /// A bolt tags an alien whose column is within this of the bolt. Kept well
 /// under half the alien spacing (~15) so hit-zones never overlap — a bolt fired
 /// between two aliens misses both, which reads clearly and rewards lining up.
@@ -52,8 +58,6 @@ pub const HIT_TOLERANCE: f32 = 6.0;
 pub const SHOT_SPEED: f32 = 150.0;
 /// Where a fired bolt starts — just above the ship on the bottom rail.
 pub const SHOT_SPAWN_Y: f32 = 96.0;
-/// Shield capacity (also the starting value).
-pub const MAX_SHIELD: u8 = 3;
 /// Waves per run.
 pub const TOTAL_WAVES: usize = 3;
 /// Consecutive mis-pairs (no correct one between) before the representation
@@ -74,12 +78,63 @@ pub struct Alien {
     pub selected: bool,
 }
 
+/// How a bolt was aimed. Silent assessment only: a tap means the kid pointed
+/// straight at the number they chose; keys mean they steered the ship there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShotSource {
+    /// Tap/click on the field: the ship snapped to the tapped column.
+    Tap,
+    /// Arrow keys (or A/D) to line up, then Space/Enter.
+    Keys,
+    /// Fired via the legacy `ShooterAction::Fire`, which doesn't say.
+    #[default]
+    Unknown,
+}
+
 /// A bolt in flight: fixed column `x`, `y` rising toward 0.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Shot {
     pub x: f32,
     pub y: f32,
+    #[serde(default)]
+    pub source: ShotSource,
+}
+
+/// One pairing attempt — two aliens tagged, resolved as a bond or not. Logged
+/// in the order they happen so the game can feed the learner profile in true
+/// order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairAttempt {
+    pub correct: bool,
+    /// The target on screen when the pair was made.
+    pub target: u32,
+    /// The two values, in the order they were tagged.
+    pub values: [u32; 2],
+    /// How each of the two selections was aimed, in tag order.
+    pub sources: [ShotSource; 2],
+    /// Index of the wave this happened in.
+    pub wave: usize,
+    /// Session clock (seconds of `Tick`) when the pair resolved.
+    pub at_secs: f32,
+    /// Seconds since the previous attempt resolved (or since the wave spawned,
+    /// for the wave's first attempt) — a per-pair think time.
+    pub think_secs: f32,
+}
+
+/// A wave the kid finished by pairing off every alien in it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveRecord {
+    pub wave: usize,
+    pub target: u32,
+    /// Seconds from the wave spawning to its last pair popping.
+    pub secs: f32,
+    pub hits: u32,
+    /// Mis-pairs during this wave.
+    pub misses: u32,
 }
 
 /// One wave's worth of aliens, expressed as the target and the values on the
@@ -107,11 +162,10 @@ pub struct ShooterSession {
     pub aliens: Vec<Alien>,
     /// Bolts currently in flight.
     pub shots: Vec<Shot>,
-    pub shield: u8,
-    pub max_shield: u8,
     /// Pairs cleared across the whole run — the "score".
     pub score: u32,
-    /// Index into `waves` of the wave now on screen.
+    /// Index into `waves` of the wave now on screen. Also the number of waves
+    /// cleared so far — waves only ever clear by pairing.
     pub wave: usize,
     pub waves: Vec<Wave>,
     /// Correct pairings (stealth-assessment signal).
@@ -132,6 +186,19 @@ pub struct ShooterSession {
     /// numbers get big, so a high band floors this above Concrete.
     pub min_representation: CraStage,
     pub phase: ShooterPhase,
+    /// Session clock: total seconds of `Tick` so far. Measured silently, never
+    /// shown (Invariant 4).
+    pub elapsed: f32,
+    /// Every pairing attempt, in the order it happened.
+    pub attempts: Vec<PairAttempt>,
+    /// One record per wave cleared, in order.
+    pub cleared_waves: Vec<WaveRecord>,
+    /// Session clock when the current wave spawned.
+    wave_started_at: f32,
+    /// Session clock when the last attempt resolved (or the wave spawned).
+    last_attempt_at: f32,
+    /// The currently-tagged aliens and how each was aimed, in tag order.
+    tagged: Vec<(u32, ShotSource)>,
     next_id: u32,
 }
 
@@ -166,8 +233,6 @@ impl ShooterSession {
             target: waves[0].target,
             aliens: Vec::new(),
             shots: Vec::new(),
-            shield: MAX_SHIELD,
-            max_shield: MAX_SHIELD,
             score: 0,
             wave: 0,
             waves,
@@ -178,15 +243,29 @@ impl ShooterSession {
             representation,
             min_representation,
             phase: ShooterPhase::Playing,
+            elapsed: 0.0,
+            attempts: Vec::new(),
+            cleared_waves: Vec::new(),
+            wave_started_at: 0.0,
+            last_attempt_at: 0.0,
+            tagged: Vec::new(),
             next_id: 0,
         };
         session.spawn_current_wave();
         session
     }
 
+    /// Waves finished by pairing. (The only way a wave ever finishes.)
+    pub fn waves_cleared(&self) -> usize {
+        self.cleared_waves.len()
+    }
+
     /// Lay the current wave's aliens out in a row across the field at the top.
     fn spawn_current_wave(&mut self) {
         self.shots.clear();
+        self.tagged.clear();
+        self.wave_started_at = self.elapsed;
+        self.last_attempt_at = self.elapsed;
         let wave = &self.waves[self.wave];
         self.target = wave.target;
         let n = wave.values.len().max(1);
@@ -246,9 +325,9 @@ fn representation_floor(band: u8) -> CraStage {
     }
 }
 
-/// Drift speed, logical units/sec. With FIELD_H≈100 a full descent takes
-/// ~11–14s at `GamePace::Steady` — a slow drift, never a countdown. `pace` is
-/// the parent's dial for kids who can do the maths but not at that speed.
+/// Drift speed, logical units/sec — purely how quickly the wave settles onto
+/// the floor line, since nothing happens when it gets there. `pace` is the
+/// parent's dial for kids who find moving targets hard to read.
 fn drift_speed(band: u8, pace: GamePace) -> f32 {
     (6.5 + band as f32 * 0.4) * pace.drift_multiplier()
 }
@@ -271,29 +350,57 @@ pub fn generate_wave(target: u32, count: usize, rng: &mut impl Rng) -> Wave {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ShooterAction {
-    /// Advance the world by `dt` seconds (alien drift + breaches + bolt flight
-    /// and collisions).
+    /// Advance the world by `dt` seconds (alien drift down to the floor, bolt
+    /// flight and collisions, and the silent session clock).
     Tick { dt: f32 },
     /// Slide the ship horizontally (clamped to the field).
     MoveShip { dx: f32 },
-    /// Fire a bolt up the ship's column. It travels on each `Tick` and tags the
-    /// first alien it reaches.
+    /// Fire a bolt up the ship's column, without saying how it was aimed
+    /// (logged as `ShotSource::Unknown`). Prefer `FireFrom`.
     Fire,
+    /// Fire a bolt up the ship's column, recording how the kid aimed it. For a
+    /// tap: `MoveShip` to the tapped column, then `FireFrom { source: Tap }`.
+    FireFrom { source: ShotSource },
 }
 
 /// Resolve a completed selection: when two aliens are tagged, pop them if their
 /// values sum to the target, otherwise release both (gentle, never punished).
+/// Either way the attempt is logged in order.
 fn resolve_selection(s: &mut ShooterSession) {
     if s.selected_count() != 2 {
         return;
     }
-    let sum: u32 = s.aliens.iter().filter(|a| a.selected).map(|a| a.value).sum();
-    if sum == s.target {
+    // Tag order comes from the tag log; anything selected without going
+    // through a bolt (only possible in tests) falls in after, as Unknown.
+    let mut picked: Vec<(u32, ShotSource)> = s.tagged.iter().copied()
+        .filter(|(id, _)| s.aliens.iter().any(|a| a.id == *id && a.selected))
+        .collect();
+    for a in s.aliens.iter().filter(|a| a.selected) {
+        if !picked.iter().any(|(id, _)| *id == a.id) {
+            picked.push((a.id, ShotSource::Unknown));
+        }
+    }
+    let value_of = |id: u32| s.aliens.iter().find(|a| a.id == id).map_or(0, |a| a.value);
+    let values = [value_of(picked[0].0), value_of(picked[1].0)];
+    let sources = [picked[0].1, picked[1].1];
+    let correct = values[0] + values[1] == s.target;
+    s.attempts.push(PairAttempt {
+        correct,
+        target: s.target,
+        values,
+        sources,
+        wave: s.wave,
+        at_secs: s.elapsed,
+        think_secs: s.elapsed - s.last_attempt_at,
+    });
+    s.last_attempt_at = s.elapsed;
+    s.tagged.clear();
+
+    if correct {
         s.aliens.retain(|a| !a.selected);
         s.score += 1;
         s.hits += 1;
         s.miss_streak = 0; // a correct pair clears the struggle streak
-        s.shield = (s.shield + 1).min(s.max_shield);
     } else {
         for a in &mut s.aliens {
             a.selected = false;
@@ -324,23 +431,15 @@ pub fn shooter_reducer(state: ShooterSession, action: ShooterAction) -> ShooterS
             next.ship_x = (next.ship_x + dx).clamp(0.0, FIELD_W);
         }
         ShooterAction::Tick { dt } => {
-            // Shield-empty freezes the drift so a stuck kid can always recover.
-            if next.shield > 0 && dt > 0.0 {
-                for a in &mut next.aliens {
-                    a.y += next.drift_speed * dt;
-                }
-                // Any alien past the line breaches: it retreats and dims the
-                // shield one notch.
-                let before = next.aliens.len();
-                next.aliens.retain(|a| a.y < BREACH_Y);
-                let breached = before - next.aliens.len();
-                for _ in 0..breached {
-                    next.shield = next.shield.saturating_sub(1);
-                }
+            let dt = dt.max(0.0);
+            next.elapsed += dt;
+            // Drift down to the floor line and wait there. Nothing is ever
+            // lost by taking your time.
+            for a in &mut next.aliens {
+                a.y = (a.y + next.drift_speed * dt).min(FLOOR_Y);
             }
 
-            // Bolts always fly (even at zero shield, so the kid can shoot their
-            // way back). Each rises; the first alien it reaches gets tagged.
+            // Each bolt rises; the first alien it reaches gets tagged.
             for shot in &mut next.shots {
                 shot.y -= SHOT_SPEED * dt;
             }
@@ -363,6 +462,7 @@ pub fn shooter_reducer(state: ShooterSession, action: ShooterAction) -> ShooterS
                     .map(|(idx, _)| idx);
                 if let Some(idx) = hit {
                     next.aliens[idx].selected = true;
+                    next.tagged.push((next.aliens[idx].id, shot.source));
                     next.shots.remove(i);
                     resolve_selection(&mut next);
                 } else if shot.y <= 0.0 {
@@ -373,16 +473,29 @@ pub fn shooter_reducer(state: ShooterSession, action: ShooterAction) -> ShooterS
             }
         }
         ShooterAction::Fire => {
-            next.shots.push(Shot { x: next.ship_x, y: SHOT_SPAWN_Y });
+            next.shots.push(Shot { x: next.ship_x, y: SHOT_SPAWN_Y, source: ShotSource::Unknown });
+        }
+        ShooterAction::FireFrom { source } => {
+            next.shots.push(Shot { x: next.ship_x, y: SHOT_SPAWN_Y, source });
         }
     }
 
-    // Wave cleared (by pairing or by the last aliens breaching) → advance, or
-    // finish the run if that was the final wave.
+    // Every alien paired off → record the wave and advance, or finish the run
+    // if that was the final wave. Pairing is the only way aliens leave.
     if next.phase == ShooterPhase::Playing && next.aliens.is_empty() {
+        let wave = next.wave;
+        let (hits, misses) = next.attempts.iter()
+            .filter(|a| a.wave == wave)
+            .fold((0, 0), |(h, m), a| if a.correct { (h + 1, m) } else { (h, m + 1) });
+        next.cleared_waves.push(WaveRecord {
+            wave,
+            target: next.target,
+            secs: next.elapsed - next.wave_started_at,
+            hits,
+            misses,
+        });
         next.wave += 1;
         if next.wave < next.waves.len() {
-            next.shield = next.max_shield;
             next.spawn_current_wave();
         } else {
             next.phase = ShooterPhase::Complete;
@@ -430,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn a_relaxed_pace_gives_a_kid_roughly_twice_as_long_to_think() {
+    fn a_relaxed_pace_settles_the_wave_about_half_as_fast() {
         let steady = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
         let relaxed = ShooterSession::new(3, CraStage::Abstract, GamePace::Relaxed, &mut rng());
         let brisk = ShooterSession::new(3, CraStage::Abstract, GamePace::Brisk, &mut rng());
@@ -441,7 +554,7 @@ mod tests {
         assert_eq!(relaxed.target, steady.target,
             "same seed, same band — pace must not touch the number bonds");
         let ratio = steady.drift_speed / relaxed.drift_speed;
-        assert!((1.7..2.1).contains(&ratio), "expected ~2x longer, got {ratio}x");
+        assert!((1.7..2.1).contains(&ratio), "expected ~2x slower drift, got {ratio}x");
     }
 
     #[test]
@@ -622,38 +735,135 @@ mod tests {
         assert!(s.shots.is_empty(), "the bolt is consumed on impact");
     }
 
-    #[test]
-    fn breach_dims_shield_and_retreats_alien() {
-        let mut s = ShooterSession::new(5, CraStage::Abstract, GamePace::Steady, &mut rng());
-        let shield0 = s.shield;
-        // Park one alien right at the line, the rest safely up top.
-        for (i, a) in s.aliens.iter_mut().enumerate() {
-            a.y = if i == 0 { BREACH_Y - 0.01 } else { SPAWN_Y };
+    /// Tick an untouched session for `secs` seconds at 60fps.
+    fn idle(mut s: ShooterSession, secs: f32) -> ShooterSession {
+        let frames = (secs * 60.0) as usize;
+        for _ in 0..frames {
+            s = shooter_reducer(s, ShooterAction::Tick { dt: 1.0 / 60.0 });
         }
+        s
+    }
+
+    #[test]
+    fn an_idle_kid_loses_nothing_the_aliens_just_wait_at_the_floor() {
+        for band in [0u8, 1, 3, 5, 10] {
+            for pace in GamePace::ALL {
+                let s = ShooterSession::new(band, CraStage::Abstract, pace, &mut rng());
+                let start = s.aliens.len();
+                let s = idle(s, 120.0);
+                assert_eq!(s.phase, ShooterPhase::Playing, "band {band} {pace:?}: never completes on its own");
+                assert_eq!(s.wave, 0, "band {band} {pace:?}: the wave is still there");
+                assert_eq!(s.aliens.len(), start, "band {band} {pace:?}: no alien ever leaves unpaired");
+                assert!(s.aliens.iter().all(|a| a.y <= FLOOR_Y),
+                    "band {band} {pace:?}: every alien waits at or above the floor");
+                assert!(s.aliens.iter().all(|a| a.y == FLOOR_Y),
+                    "band {band} {pace:?}: after two minutes they've all settled on it");
+                assert!(s.cleared_waves.is_empty() && s.attempts.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn a_waiting_alien_can_still_be_paired() {
+        let s = idle(ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng()), 60.0);
         let start = s.aliens.len();
-        let s = shooter_reducer(s, ShooterAction::Tick { dt: 1.0 });
-        assert_eq!(s.aliens.len(), start - 1, "the breached alien retreats");
-        assert_eq!(s.shield, shield0 - 1, "shield dims one notch");
-    }
-
-    #[test]
-    fn empty_shield_freezes_the_drift() {
-        let mut s = ShooterSession::new(5, CraStage::Abstract, GamePace::Steady, &mut rng());
-        s.shield = 0;
-        let y_before: Vec<f32> = s.aliens.iter().map(|a| a.y).collect();
-        let s = shooter_reducer(s, ShooterAction::Tick { dt: 1.0 });
-        let y_after: Vec<f32> = s.aliens.iter().map(|a| a.y).collect();
-        assert_eq!(y_before, y_after, "aliens hover while the shield is empty");
-    }
-
-    #[test]
-    fn correct_pair_refills_shield_up_to_max() {
-        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
-        s.shield = 1;
         let (a, b) = a_matching_pair(&s);
-        let s = shoot(s, a);
-        let s = shoot(s, b);
-        assert_eq!(s.shield, 2, "a clear tops the shield up a notch");
+        let s = shoot(shoot(s, a), b);
+        assert_eq!(s.aliens.len(), start - 2);
+        assert_eq!(s.hits, 1);
+    }
+
+    #[test]
+    fn pace_only_changes_how_fast_the_wave_settles() {
+        // Same seed, every pace: identical waves, targets and alien count; the
+        // only difference is drift speed.
+        let runs: Vec<ShooterSession> = GamePace::ALL.iter()
+            .map(|p| ShooterSession::new(4, CraStage::Abstract, *p, &mut rng()))
+            .collect();
+        for r in &runs[1..] {
+            assert_eq!(r.target, runs[0].target);
+            assert_eq!(r.aliens, runs[0].aliens);
+            let tv = |s: &ShooterSession| s.waves.iter().map(|w| (w.target, w.values.clone())).collect::<Vec<_>>();
+            assert_eq!(tv(r), tv(&runs[0]), "pace must not touch the number bonds");
+            assert_eq!(r.representation, runs[0].representation);
+        }
+        let drifts: Vec<f32> = runs.iter().map(|r| r.drift_speed).collect();
+        assert!(drifts.windows(2).all(|w| w[0] < w[1]), "slowest pace first: {drifts:?}");
+    }
+
+    #[test]
+    fn every_pairing_attempt_is_logged_in_the_order_it_happened() {
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
+        // A deliberate mis-pair first: find two aliens that DON'T sum.
+        let (x, y) = {
+            let mut found = None;
+            'o: for i in 0..s.aliens.len() {
+                for j in (i + 1)..s.aliens.len() {
+                    if s.aliens[i].value + s.aliens[j].value != s.target {
+                        found = Some((s.aliens[i].id, s.aliens[j].id));
+                        break 'o;
+                    }
+                }
+            }
+            found.expect("a 6-alien wave has a non-summing pair")
+        };
+        s = shoot(s, x);
+        s = shoot(s, y);
+        let (a, b) = a_matching_pair(&s);
+        let (va, vb) = {
+            let v = |id| s.aliens.iter().find(|al| al.id == id).unwrap().value;
+            (v(a), v(b))
+        };
+        s = shoot(s, a);
+        s = shoot(s, b);
+        let order: Vec<bool> = s.attempts.iter().map(|t| t.correct).collect();
+        assert_eq!(order, vec![false, true], "miss then hit, in true order");
+        assert_eq!(s.attempts[1].values, [va, vb], "values in the order they were tagged");
+        assert!(s.attempts[1].at_secs >= s.attempts[0].at_secs);
+        assert!(s.attempts.iter().all(|t| t.wave == 0 && t.target == s.target));
+        assert_eq!((s.hits, s.misses), (1, 1));
+    }
+
+    #[test]
+    fn each_shot_remembers_how_it_was_aimed() {
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
+        let (a, b) = a_matching_pair(&s);
+        let fire = |mut s: ShooterSession, id: u32, action: ShooterAction| {
+            let x = s.aliens.iter().find(|al| al.id == id).unwrap().x;
+            s = shooter_reducer(s.clone(), ShooterAction::MoveShip { dx: x - s.ship_x });
+            s = shooter_reducer(s, action);
+            while !s.shots.is_empty() {
+                s = shooter_reducer(s, ShooterAction::Tick { dt: 1.0 / 60.0 });
+            }
+            s
+        };
+        s = fire(s, a, ShooterAction::FireFrom { source: ShotSource::Tap });
+        s = fire(s, b, ShooterAction::FireFrom { source: ShotSource::Keys });
+        assert_eq!(s.attempts[0].sources, [ShotSource::Tap, ShotSource::Keys]);
+
+        // The legacy Fire still works; it just doesn't know.
+        let (c, d) = a_matching_pair(&s);
+        s = fire(s, c, ShooterAction::Fire);
+        s = fire(s, d, ShooterAction::Fire);
+        assert_eq!(s.attempts[1].sources, [ShotSource::Unknown, ShotSource::Unknown]);
+        assert!(s.attempts[1].correct);
+    }
+
+    #[test]
+    fn a_cleared_wave_records_how_long_it_took_and_how_it_went() {
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
+        s = idle(s, 5.0);
+        while s.wave == 0 {
+            let (a, b) = a_matching_pair(&s);
+            s = shoot(s, a);
+            s = shoot(s, b);
+        }
+        assert_eq!(s.waves_cleared(), 1);
+        let w = &s.cleared_waves[0];
+        assert_eq!(w.wave, 0);
+        assert_eq!(w.target, s.waves[0].target);
+        assert_eq!((w.hits, w.misses), (3, 0), "six aliens, three clean pairs");
+        assert!(w.secs >= 5.0 && w.secs < 10.0, "wave time is measured silently: {}", w.secs);
     }
 
     #[test]
