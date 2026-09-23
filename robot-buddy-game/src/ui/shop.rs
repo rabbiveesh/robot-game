@@ -22,6 +22,7 @@ use crate::ui::layout::{
     self, button, col, paint, region, row, spacer, text, Align, Fit, Frame, Justify, Kind, Node, Page,
 };
 pub use crate::ui::layout::UiRect;
+use crate::ui::swatches;
 
 /// What the kid is doing in the shop right now.
 pub enum ShopView<'a> {
@@ -240,13 +241,7 @@ fn build(m: &ShopModel, page: Page) -> Node<ShopId> {
             ])
         }
         ShopView::PickingColor { colors, .. } => {
-            // min_h(0): the grid may squeeze its rows (CSS won't shrink a column below its rows' preferred heights otherwise).
-            let grid = col().gap(18.0).min_h(0.0).children(colors.chunks(4).enumerate().map(|(r, chunk)| {
-                // Rows shrink toward 56px on a short screen; swatches stretch to them.
-                row().gap(18.0).justify(Justify::Center).align(Align::Stretch).h(90.0).min_h(56.0).children(
-                    (0..chunk.len()).map(|c| region(90.0, 0.0).auto_h().id(ShopId::Swatch(r * 4 + c)).hit().min_w(40.0)),
-                )
-            }));
+            let grid = swatches::grid(colors.len(), ShopId::Swatch);
             col().grow(1.0).min_h(0.0).gap(24.0).children([questions, grid])
         }
     };
@@ -387,13 +382,7 @@ pub fn draw_shop(m: &ShopModel, layout: &ShopLayout) {
             }
             ShopId::Swatch(i) => {
                 if let ShopView::PickingColor { colors, current } = &m.view {
-                    paint::fill(r, colors[i].1);
-                    if i == *current {
-                        // The color being worn right now gets a thick gold frame.
-                        paint::outline(r.expand(3.0), 6.0, GOLD);
-                    } else {
-                        paint::outline(r, 2.0, Color::new(1.0, 1.0, 1.0, 0.4));
-                    }
+                    swatches::paint_swatch(r, colors[i].1, i == *current);
                 }
             }
             ShopId::Done | ShopId::PrevPage | ShopId::NextPage => {

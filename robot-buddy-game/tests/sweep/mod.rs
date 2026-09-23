@@ -136,7 +136,7 @@ pub fn swag_picker_is_sane_with_a_full_wardrobe() {
                 let mut seen = BTreeSet::new();
                 let mut page = 0;
                 loop {
-                    let m = swag::SwagModel { recipient, items: &items, taken: &taken, message, page };
+                    let m = swag::SwagModel { recipient, items: &items, taken: &taken, message, page, picking: None };
                     let l = swag::layout(&m, screen);
                     assert_sane(&l.frame, screen_rect(screen));
                     seen.extend(l.page.rows());
@@ -156,15 +156,37 @@ pub fn swag_picker_is_sane_with_a_full_wardrobe() {
 pub fn a_tall_screen_shows_the_whole_wardrobe_on_one_page() {
     let items = swag_items();
     let taken = BTreeSet::new();
-    let m = swag::SwagModel { recipient: "Tali", items: &items, taken: &taken, message: None, page: 0 };
+    let m = swag::SwagModel { recipient: "Tali", items: &items, taken: &taken, message: None, page: 0, picking: None };
     let l = swag::layout(&m, (480.0, 800.0));
     assert!(!l.page.paged(), "all {} pieces fit at 480x800: {:?}", items.len(), l.page);
+}
+
+/// Picking a buddy's Color Change colour: every swatch on screen and tappable,
+/// with a long name in the "What colour for …?" heading.
+pub fn buddy_colour_picker_is_sane_everywhere() {
+    let items = swag_items();
+    let taken = owned(&["color_change"]);
+    for &screen in &SWEEP_SCREENS {
+        for message in [None, Some("Professor Gizmo looks great!")] {
+            for recipient in ["Tali", "Professor Gizmo"] {
+                let picking = Some(swag::ColorPick { colors: OUTFIT_COLORS, current: 3 });
+                let m = swag::SwagModel { recipient, items: &items, taken: &taken, message, page: 0, picking };
+                let l = swag::layout(&m, screen);
+                assert_sane(&l.frame, screen_rect(screen));
+                for i in 0..OUTFIT_COLORS.len() {
+                    assert!(l.swatch(i).is_some(), "swatch {i} missing for {recipient} at {screen:?}");
+                }
+                assert!(l.done().is_some(), "Done missing at {screen:?}");
+                assert!(l.preview().is_some(), "the buddy preview is missing at {screen:?}");
+            }
+        }
+    }
 }
 
 pub fn empty_swag_picker_is_sane() {
     let taken = BTreeSet::new();
     for &screen in &SWEEP_SCREENS {
-        let m = swag::SwagModel { recipient: "Sparky", items: &[], taken: &taken, message: None, page: 0 };
+        let m = swag::SwagModel { recipient: "Sparky", items: &[], taken: &taken, message: None, page: 0, picking: None };
         let l = swag::layout(&m, screen);
         assert_sane(&l.frame, screen_rect(screen));
     }

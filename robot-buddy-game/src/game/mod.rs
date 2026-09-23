@@ -272,6 +272,11 @@ pub struct ActiveSwag {
     pub message: Option<String>,
     /// List page on screen, when the window is too short for every piece.
     pub page: usize,
+    /// Swatches are up: the kid is picking the recipient's Color Change colour.
+    pub picking_color: bool,
+    /// Opened straight to the swatches from the buddy's "New colour?" option,
+    /// so Done closes the panel rather than going back to the list.
+    pub recolor_only: bool,
 }
 
 /// A live descent: the kid is kicking down the shaft looking for the trench
@@ -436,6 +441,8 @@ pub enum GameEvent {
     /// A piece of shop swag changed hands: the kid took it off, `recipient`
     /// (an NPC id or "sparky") put it on and keeps it from here on.
     SwagGiven { item: String, recipient: String },
+    /// `wearer` (the kid is "player") picked `color` for their Color Change.
+    OutfitColorPicked { wearer: String, color: String },
     /// A descent started: the shaft's door depth and the fewest kicks that
     /// reach it.
     DescentStarted { door: u8, optimal: u8 },
@@ -562,9 +569,8 @@ pub struct Game {
     /// `wardrobe::PLAYER`. Swag handed to a buddy leaves the kid's outfit
     /// (which is what frees Bolt to sell them another one) and stays on that
     /// buddy whether or not they're the one currently tagging along.
+    /// Each wearer's Color Change colour lives here too, the kid's included.
     wardrobe: Wardrobe,
-    /// Outfit color id for the Color Change cosmetic (persisted in the save).
-    color_choice: String,
     /// Opt-in in-development feature toggles (default all off).
     pub features: FeatureFlags,
     /// Tiles walked since the last random encounter (for encounter pacing).
@@ -699,7 +705,6 @@ impl Game {
             active_descent: None,
             active_quest: None,
             wardrobe: Wardrobe::new(),
-            color_choice: sprites::player::OUTFIT_COLORS[0].0.to_string(),
             features: FeatureFlags::default(),
             steps_since_encounter: 0,
             pending_challenge: false,
@@ -1773,6 +1778,7 @@ impl Game {
                     has_shop: Some(target_kind.shop().is_some()),
                     is_puzzler: Some(is_puzzler),
                     runs_dive: Some(is_dive),
+                    wears_color_change: Some(self.wears_color_change(&target_id)),
                 };
                 let player_st = PlayerState { dum_dums: self.dum_dums, swag_worn: self.player_swag().len() as u32 };
                 let opts = interaction_options::get_interaction_options(&npc_info, &player_st);
@@ -1806,6 +1812,7 @@ impl Game {
                     has_shop: None,
                     is_puzzler: Some(false),
                     runs_dive: None,
+                    wears_color_change: Some(self.wears_color_change("sparky")),
                 };
                 let player_st = PlayerState { dum_dums: self.dum_dums, swag_worn: self.player_swag().len() as u32 };
                 let opts = interaction_options::get_interaction_options(&npc_info, &player_st);
@@ -1842,6 +1849,7 @@ impl Game {
                     has_shop: None,
                     is_puzzler: Some(false),
                     runs_dive: None,
+                    wears_color_change: Some(self.wears_color_change(kind.as_str())),
                 };
                 let player_st = PlayerState { dum_dums: self.dum_dums, swag_worn: self.player_swag().len() as u32 };
                 let opts = interaction_options::get_interaction_options(&npc_info, &player_st);
@@ -2451,24 +2459,9 @@ impl Game {
                     });
                     self.set_state(GameState::Shop);
                 }
-                "swag" => {
-                    // Whoever's in front of the kid gets dressed up. Sparky is
-                    // a robot rather than a roster NPC, hence the sprite-less
-                    // preview; everyone else previews as themselves.
-                    let sprite = self.npcs.iter()
-                        .chain(self.companion.iter())
-                        .find(|n| n.id_str() == self.menu_target_id)
-                        .map(|n| n.sprite);
-                    self.active_swag = Some(ActiveSwag {
-                        recipient_id: self.menu_target_id.clone(),
-                        recipient_name: self.menu_target_name.clone(),
-                        recipient_sprite: sprite,
-                        items: self.swag_catalog_for(wardrobe::PLAYER),
-                        message: None,
-                        page: 0,
-                    });
-                    self.set_state(GameState::Swag);
-                }
+                "swag" => self.open_swag(false),
+                // Same panel, straight to the swatches for this buddy.
+                "recolor" => self.open_swag(true),
                 "give" => {
                     if !give::can_give(self.dum_dums) {
                         self.set_state(GameState::Playing);
@@ -2594,6 +2587,19 @@ impl Game {
         let (w, outcome) = wardrobe::wardrobe_reducer(std::mem::take(&mut self.wardrobe), action);
         self.wardrobe = w;
         outcome
+    }
+
+    /// The Color Change colour id `who` shows. Someone who never picked one
+    /// shows the kid's (which is what every wearer showed before colours were
+    /// per-wearer), and a kid who never picked shows the original tint.
+    pub fn outfit_color(&self, who: &str) -> &str {
+        self.wardrobe.color_of(who)
+            .or_else(|| self.wardrobe.color_of(wardrobe::PLAYER))
+            .unwrap_or(sprites::player::OUTFIT_COLORS[0].0)
+    }
+
+    fn wears_color_change(&self, who: &str) -> bool {
+        self.wardrobe.is_wearing(who, domain_shop::COLOR_CHANGE)
     }
 
     /// Hand the kid a pearl find: credit, flash, log. Returns the kid-facing
@@ -3312,7 +3318,7 @@ impl Game {
     fn draw_swag_on(&self, who: &str, x: f32, y: f32, dir: Dir, fit: sprites::swag::SwagFit) {
         let worn = self.wardrobe.worn_by(who);
         if worn.is_empty() { return; }
-        sprites::swag::draw_swag(x, y, dir, 0.0, worn, &self.color_choice, fit);
+        sprites::swag::draw_swag(x, y, dir, 0.0, worn, self.outfit_color(who), fit);
     }
 
     fn render_world(&mut self, screen: (f32, f32)) {
@@ -3427,7 +3433,7 @@ impl Game {
                                 Gender::Girl => sprites::player::draw_player_girl(self.player.x, py, self.player.dir, self.player.frame, self.game_time),
                             }
                             // Cosmetics bought from Bolt's shop ride on the kid.
-                            sprites::player::draw_player_cosmetics(self.player.x, py, self.player.dir, self.player.frame, self.player_swag(), &self.color_choice);
+                            sprites::player::draw_player_cosmetics(self.player.x, py, self.player.dir, self.player.frame, self.player_swag(), self.outfit_color(wardrobe::PLAYER));
                             // Perks from Hermie's stall ride along too — they're
                             // not wearable swag, but the kid should be able to
                             // SEE what twenty pearls bought them.
@@ -3704,7 +3710,8 @@ impl Game {
             }),
             shop_owned: Vec::new(), // legacy mirror; the wardrobe is the truth now
             wardrobe: self.wardrobe.clone(),
-            color_choice: self.color_choice.clone(),
+            // Rollback mirror: a build without per-wearer colours reads this.
+            color_choice: self.outfit_color(wardrobe::PLAYER).to_string(),
             satisfied_gates: self.satisfied_gates.iter().cloned().collect(),
             paid_tolls: self.paid_tolls.iter().cloned().collect(),
             seen_intros: self.seen_intros.iter().cloned().collect(),
@@ -3724,7 +3731,6 @@ impl Game {
         self.play_time = save_data.play_time;
         self.gifts_given = save_data.gifts_given.clone();
         self.wardrobe = save_data.wardrobe.clone();
-        self.color_choice = save_data.color_choice.clone();
         self.satisfied_gates = save_data.satisfied_gates.iter().cloned().collect();
         self.paid_tolls = save_data.paid_tolls.iter().cloned().collect();
         self.seen_intros = save_data.seen_intros.iter().cloned().collect();
@@ -4452,14 +4458,15 @@ mod tests {
     }
 
     #[test]
-    fn color_choice_persists_through_save_load() {
+    fn the_kids_colour_persists_through_save_load() {
         let mut g = game();
-        g.color_choice = "teal".to_string();
+        g.dress(wardrobe::WardrobeAction::set_color(wardrobe::PLAYER, "teal"));
         let data = g.gather_save_data();
+        assert_eq!(data.color_choice, "teal", "the rollback mirror follows the kid's colour");
 
         let mut g2 = game();
         g2.load_from_save(&data);
-        assert_eq!(g2.color_choice, "teal");
+        assert_eq!(g2.outfit_color(wardrobe::PLAYER), "teal");
     }
 
     #[test]

@@ -11,6 +11,7 @@ pub mod shop;
 pub mod sudoku;
 pub mod descent;
 pub mod swag;
+pub mod swatches;
 pub mod visuals;
 pub mod title_screen;
 pub mod hud;

@@ -4,6 +4,7 @@ use std::rc::Rc;
 use std::collections::{BTreeMap, HashMap};
 use crate::sprites::Dir;
 use robot_buddy_domain::learning::learner_profile::LearnerProfile;
+use robot_buddy_domain::economy::shop::COLOR_CHANGE;
 use robot_buddy_domain::economy::wardrobe::{self, Wardrobe};
 use robot_buddy_domain::types::GamePace;
 
@@ -56,11 +57,17 @@ pub struct SaveData {
     pub shop_owned: Vec<String>,
     /// Who's wearing which piece of shop swag — the kid under
     /// `wardrobe::PLAYER`, buddies under their NPC ids. A buddy keeps their
-    /// swag while swapped out, so this outlives any one companion.
+    /// swag while swapped out, so this outlives any one companion. Also
+    /// holds each wearer's Color Change colour.
     #[serde(default)]
     pub wardrobe: Wardrobe,
-    /// Outfit color picked for the Color Change cosmetic. Older saves load as
-    /// the default (the tint Color Change shipped with before the picker).
+    /// Legacy field — the kid's Color Change colour, from when there was only
+    /// one colour for everybody. Migrated into `wardrobe` (as the kid's colour)
+    /// on load when the wardrobe has none; older saves without it load as the
+    /// default (the tint Color Change shipped with before the picker).
+    ///
+    /// Still *written*, mirroring the kid's colour from the wardrobe, so a
+    /// build without per-wearer colours keeps the kid's pick on rollback.
     #[serde(default = "default_color_choice")]
     pub color_choice: String,
     /// Gate ids the kid has solved (e.g. the reef shark). A solved guardian
@@ -120,6 +127,11 @@ pub struct CompanionSave {
 }
 
 impl SaveData {
+    /// Change the save's wardrobe the only way it changes: its reducer.
+    fn dress(&mut self, action: wardrobe::WardrobeAction) {
+        self.wardrobe = wardrobe::wardrobe_reducer(std::mem::take(&mut self.wardrobe), action).0;
+    }
+
     /// Migrate legacy saves: if `math_band` was present but profile is default, apply it.
     pub fn migrate_legacy(&mut self) {
         if let Some(band) = self.math_band.take() {
@@ -134,10 +146,22 @@ impl SaveData {
         let legacy = std::mem::take(&mut self.shop_owned);
         if self.wardrobe.is_empty() {
             for item in &legacy {
-                let (w, _) = wardrobe::wardrobe_reducer(
-                    std::mem::take(&mut self.wardrobe), wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, item));
-                self.wardrobe = w;
+                self.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, item));
             }
+        }
+        // Saves from before colours were per-wearer had one colour for
+        // everybody. It becomes the kid's; any buddy already in Color Change
+        // keeps showing it too, so nobody's shirt changes colour on load.
+        if self.wardrobe.color_of(wardrobe::PLAYER).is_none() {
+            self.dress(wardrobe::WardrobeAction::set_color(wardrobe::PLAYER, &self.color_choice.clone()));
+        }
+        let kids = self.wardrobe.color_of(wardrobe::PLAYER).unwrap_or_default().to_string();
+        let uncoloured: Vec<String> = self.wardrobe.wearers_of(COLOR_CHANGE)
+            .filter(|who| self.wardrobe.color_of(who).is_none())
+            .map(String::from)
+            .collect();
+        for who in uncoloured {
+            self.dress(wardrobe::WardrobeAction::set_color(&who, &kids));
         }
         // Saves from before intros were tracked: infer what's already been
         // seen so a veteran diver doesn't sit through the reef speech again.
@@ -286,11 +310,15 @@ pub fn decode_saves(json: &str) -> DecodedSaves {
     DecodedSaves { slots, unreadable_file }
 }
 
-/// One save as it goes to disk. Fills the `shop_owned` rollback mirror with
-/// what the kid is wearing, so a pre-wardrobe build still dresses them.
+/// One save as it goes to disk. Fills the rollback mirrors from the wardrobe
+/// — `shop_owned` with what the kid is wearing, `color_choice` with the kid's
+/// colour — so a pre-wardrobe build still dresses them.
 pub fn encode_save(save: &SaveData) -> String {
     let mut disk = save.clone();
     disk.shop_owned = save.wardrobe.worn_by(wardrobe::PLAYER).iter().cloned().collect();
+    if let Some(c) = save.wardrobe.color_of(wardrobe::PLAYER) {
+        disk.color_choice = c.to_string();
+    }
     serde_json::to_string(&disk).expect("SaveData always serializes")
 }
 

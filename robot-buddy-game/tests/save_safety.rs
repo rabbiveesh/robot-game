@@ -294,6 +294,7 @@ fn main_can_still_read_what_this_build_writes_and_keeps_the_kids_cosmetics() {
     assert_eq!(main_ari.dum_dums, 17);
     assert_eq!(main_ari.shop_owned, vec!["hat".to_string(), "jet_boots".to_string()],
         "main sees what the kid is wearing (Echo's bow tie is Echo's)");
+    assert_eq!(main_ari.color_choice, "red", "and the kid's colour");
     assert!(on_main[2].is_some(), "Noa survives the rollback too");
 
     // And rolling forward again: main rewrites without a wardrobe; this build
@@ -320,6 +321,58 @@ fn the_rollback_mirror_never_overrides_a_real_wardrobe() {
     let back = tampered.load_all()[0].clone().unwrap();
     assert!(!back.wardrobe.is_wearing(wardrobe::PLAYER, "hat"), "Echo still has the hat");
     assert!(back.wardrobe.is_wearing("dolphin", "hat"));
+}
+
+// ─── Color Change colours, one per wearer ───────────────
+
+#[test]
+fn a_save_written_by_main_keeps_the_kids_colour() {
+    let slots = InMemoryBackend::with_raw_saves(MAIN_SAVES).load_all();
+    let ari = slots[0].as_ref().unwrap();
+    assert_eq!(ari.wardrobe.color_of(wardrobe::PLAYER), Some("red"),
+        "Ari picked red on main; it's the kid's colour now");
+    let noa = slots[2].as_ref().unwrap();
+    assert_eq!(noa.wardrobe.color_of(wardrobe::PLAYER), Some("purple"));
+}
+
+#[test]
+fn every_wearers_colour_survives_a_save_and_load() {
+    let backend = InMemoryBackend::with_raw_saves(MAIN_SAVES);
+    let mut ari = backend.load_all()[0].clone().unwrap();
+    // Ari buys Color Change, hands it to Echo who goes teal, buys another and goes pink.
+    dress(&mut ari.wardrobe, wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "color_change"));
+    dress(&mut ari.wardrobe, wardrobe::WardrobeAction::hand_over(wardrobe::PLAYER, "dolphin", "color_change"));
+    dress(&mut ari.wardrobe, wardrobe::WardrobeAction::set_color("dolphin", "teal"));
+    dress(&mut ari.wardrobe, wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "color_change"));
+    dress(&mut ari.wardrobe, wardrobe::WardrobeAction::set_color(wardrobe::PLAYER, "pink"));
+    backend.save_to(0, &ari);
+
+    let back = backend.load_all()[0].clone().unwrap();
+    assert_eq!(back.wardrobe, ari.wardrobe);
+    assert_eq!(back.wardrobe.color_of("dolphin"), Some("teal"));
+    assert_eq!(back.wardrobe.color_of(wardrobe::PLAYER), Some("pink"));
+
+    // Rolled back, main still dresses Ari in her own colour.
+    let on_main: [Option<MainSaveData>; 3] = serde_json::from_str(&stored(&backend)).unwrap();
+    assert_eq!(on_main[0].as_ref().unwrap().color_choice, "pink");
+}
+
+/// Builds between the wardrobe and per-wearer colours wrote the wardrobe as a
+/// bare map, with one `color_choice` that every Color Change wearer showed.
+#[test]
+fn a_save_from_before_per_wearer_colours_keeps_everyone_looking_the_same() {
+    let mut slot: serde_json::Value = serde_json::from_str(&ari()).unwrap();
+    slot["wardrobe"] = serde_json::json!({ "player": ["hat"], "kid_1": ["color_change"] });
+    slot["color_choice"] = serde_json::json!("teal");
+    slot["shop_owned"] = serde_json::json!(["hat"]);
+    let backend = InMemoryBackend::with_raw_saves(&format!("[{slot},null,null]"));
+
+    let back = backend.load_all()[0].clone().expect("the older wardrobe shape still loads");
+    assert!(back.wardrobe.is_wearing(wardrobe::PLAYER, "hat"));
+    assert!(back.wardrobe.is_wearing("kid_1", "color_change"));
+    assert_eq!(back.wardrobe.color_of(wardrobe::PLAYER), Some("teal"));
+    assert_eq!(back.wardrobe.color_of("kid_1"), Some("teal"),
+        "Tali's shirt was showing the kid's teal, and still does");
 }
 
 /// Hiding the tab saves once, not on every frame the tab stays hidden.

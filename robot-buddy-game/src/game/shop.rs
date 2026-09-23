@@ -13,7 +13,7 @@ impl Game {
             catalog: &ash.catalog,
             owned: &ash.owned,
             balance: self.balance_for(ash.shop.currency()),
-            view: shop_view(ash, &self.color_choice),
+            view: shop_view(ash, self.outfit_color(wardrobe::PLAYER)),
             message: ash.message.as_deref(),
             page: ash.page,
         })
@@ -224,7 +224,11 @@ impl Game {
             }
             ui::shop::ShopInput::PickColor(i) => {
                 let Some((id, _)) = sprites::player::OUTFIT_COLORS.get(i) else { return };
-                self.color_choice = id.to_string();
+                self.dress(wardrobe::WardrobeAction::set_color(wardrobe::PLAYER, id));
+                self.events.push(GameEvent::OutfitColorPicked {
+                    wearer: wardrobe::PLAYER.into(),
+                    color: id.to_string(),
+                });
                 let ash = self.active_shop.as_mut().unwrap();
                 ash.message = Some("Looking good!".into());
                 // Persist right away, same as a purchase — the new outfit
@@ -295,23 +299,54 @@ impl Game {
                     Gender::Boy => sprites::player::draw_player_boy(px, py, Dir::Down, 0, self.game_time),
                     Gender::Girl => sprites::player::draw_player_girl(px, py, Dir::Down, 0, self.game_time),
                 }
-                sprites::player::draw_player_cosmetics(px, py, Dir::Down, 0, &ash.owned, &self.color_choice);
+                sprites::player::draw_player_cosmetics(px, py, Dir::Down, 0, &ash.owned,
+                    self.outfit_color(wardrobe::PLAYER));
             }
         }
     }
 
-    /// The "Give Swag" picker. Handing a piece over moves it off the kid, so
-    /// the list shrinks as they dress their buddy up — and Bolt is free to
-    /// sell them another one of whatever they gave away.
-    /// Everything the "Give Swag" picker shows, borrowed from the session.
+    /// Open the Give-Swag panel for whoever the menu is talking to: to the
+    /// list of what the kid is wearing, or (`recolor_only`, from a buddy's "New
+    /// colour?") straight to that buddy's Color Change swatches.
+    pub(super) fn open_swag(&mut self, recolor_only: bool) {
+        // Sparky is a robot rather than a roster NPC, hence the sprite-less
+        // preview; everyone else previews as themselves.
+        let sprite = self.npcs.iter()
+            .chain(self.companion.iter())
+            .find(|n| n.id_str() == self.menu_target_id)
+            .map(|n| n.sprite);
+        self.active_swag = Some(ActiveSwag {
+            recipient_id: self.menu_target_id.clone(),
+            recipient_name: self.menu_target_name.clone(),
+            recipient_sprite: sprite,
+            items: self.swag_catalog_for(wardrobe::PLAYER),
+            message: None,
+            page: 0,
+            picking_color: recolor_only,
+            recolor_only,
+        });
+        self.set_state(GameState::Swag);
+    }
+
+    /// Everything the "Give Swag" panel shows, borrowed from the session.
+    /// Handing a piece over moves it off the kid, so the list shrinks as they
+    /// dress their buddy up — and Bolt is free to sell them another one.
     pub fn swag_model(&self) -> Option<ui::swag::SwagModel<'_>> {
         let asw = self.active_swag.as_ref()?;
+        let picking = asw.picking_color.then(|| {
+            let current = self.outfit_color(&asw.recipient_id);
+            ui::swag::ColorPick {
+                colors: sprites::player::OUTFIT_COLORS,
+                current: sprites::player::OUTFIT_COLORS.iter().position(|(id, _)| *id == current).unwrap_or(0),
+            }
+        });
         Some(ui::swag::SwagModel {
             recipient: &asw.recipient_name,
             items: &asw.items,
             taken: self.wardrobe.worn_by(&asw.recipient_id),
             message: asw.message.as_deref(),
             page: asw.page,
+            picking,
         })
     }
 
@@ -340,8 +375,27 @@ impl Game {
                 }
             }
             ui::swag::SwagInput::Close => {
+                // Done backs out of the swatches to the list they came from;
+                // opened for a recolour, there's no list to go back to.
+                if asw.picking_color && !asw.recolor_only {
+                    if let Some(asw) = self.active_swag.as_mut() {
+                        asw.picking_color = false;
+                        asw.message = None;
+                    }
+                    return;
+                }
                 self.active_swag = None;
                 self.set_state(GameState::Playing);
+            }
+            ui::swag::SwagInput::PickColor(i) => {
+                let Some((color, _)) = sprites::player::OUTFIT_COLORS.get(i) else { return };
+                let (who, name) = (asw.recipient_id.clone(), asw.recipient_name.clone());
+                self.dress(wardrobe::WardrobeAction::set_color(&who, color));
+                self.events.push(GameEvent::OutfitColorPicked { wearer: who, color: color.to_string() });
+                if let Some(asw) = self.active_swag.as_mut() {
+                    asw.message = Some(format!("{name} looks great!"));
+                }
+                self.persist();
             }
             ui::swag::SwagInput::Give(i) => {
                 let Some(item) = asw.items.get(i).cloned() else { return };
@@ -355,6 +409,13 @@ impl Game {
                             recipient: to.clone(),
                         });
                         audio::tts::speak(&name, &format!("Ooh! A {}! Thank you!", item.name));
+                        // The fun of Color Change is choosing — so the buddy
+                        // gets to choose too, starting from the colour it was.
+                        if item.id == domain_shop::COLOR_CHANGE {
+                            if let Some(asw) = self.active_swag.as_mut() {
+                                asw.picking_color = true;
+                            }
+                        }
                         Some(format!("{name} puts on the {}!", item.name))
                     }
                     // Never a scolding — just a fact about their buddy.
@@ -393,12 +454,12 @@ impl Game {
                     Some(sprite) => {
                         sprite.draw_sprite(px, py, Dir::Down, self.game_time, false);
                         sprites::swag::draw_swag(px, py, Dir::Down, 0.0, taken,
-                            &self.color_choice, sprite.swag_fit());
+                            self.outfit_color(&asw.recipient_id), sprite.swag_fit());
                     }
                     None => {
                         sprites::robot::draw_robot(px, py, Dir::Down, 0, self.game_time);
                         sprites::swag::draw_swag(px, py, Dir::Down, 0.0, taken,
-                            &self.color_choice, sprites::swag::SwagFit::ROBOT);
+                            self.outfit_color(&asw.recipient_id), sprites::swag::SwagFit::ROBOT);
                     }
                 }
             }
@@ -548,7 +609,7 @@ mod tests {
         let answer = g.active_shop.as_ref().unwrap().answer;
         let tile = {
             let ash = g.active_shop.as_ref().unwrap();
-            shop_layout(&g).answer(&shop_view(ash, &g.color_choice), answer).expect("correct answer tile")
+            shop_layout(&g).answer(&shop_view(ash, g.outfit_color(wardrobe::PLAYER)), answer).expect("correct answer tile")
         };
         click_shop(&mut g, tile);
 
@@ -559,7 +620,7 @@ mod tests {
         // Pick the second swatch; the kid's outfit color should change.
         let swatch = shop_layout(&g).swatch(1).unwrap();
         click_shop(&mut g, swatch);
-        assert_eq!(g.color_choice, sprites::player::OUTFIT_COLORS[1].0);
+        assert_eq!(g.outfit_color(wardrobe::PLAYER), sprites::player::OUTFIT_COLORS[1].0);
 
         // Done dismisses the picker but keeps the shop open.
         let close = shop_layout(&g).done().unwrap();
@@ -585,11 +646,11 @@ mod tests {
         for &i in &[1usize, 3, 6, 3, 1, 0, 6, 0] {
             let swatch = shop_layout(&g).swatch(i).unwrap();
             click_shop(&mut g, swatch);
-            assert_eq!(g.color_choice, sprites::player::OUTFIT_COLORS[i].0,
-                "picking swatch {i} should set color_choice to {}", sprites::player::OUTFIT_COLORS[i].0);
+            assert_eq!(g.outfit_color(wardrobe::PLAYER), sprites::player::OUTFIT_COLORS[i].0,
+                "picking swatch {i} should set the kid's colour to {}", sprites::player::OUTFIT_COLORS[i].0);
             assert!(g.active_shop.as_ref().unwrap().picking_color,
                 "picker should stay open so the kid can keep changing colors");
-            match shop_view(g.active_shop.as_ref().unwrap(), &g.color_choice) {
+            match shop_view(g.active_shop.as_ref().unwrap(), g.outfit_color(wardrobe::PLAYER)) {
                 ui::shop::ShopView::PickingColor { current, .. } =>
                     assert_eq!(current, i, "the highlighted swatch should track the latest pick"),
                 _ => panic!("expected the PickingColor view while picking"),

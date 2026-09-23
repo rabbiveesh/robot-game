@@ -79,7 +79,7 @@ robot-buddy-game/                # Macroquad game (depends on domain)
     save.rs                      # SaveBackend trait + LocalStorageBackend (prod) + InMemoryBackend (tests)
     tilemap.rs, npc.rs, session.rs, settings.rs
     sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit)
-    ui/                          # challenge, descent, dialogue, hud, interaction_menu, leap, shop, swag, title_screen, settings_overlay, visuals
+    ui/                          # challenge, descent, dialogue, hud, interaction_menu, leap, shop, swag, swatches, title_screen, settings_overlay, visuals
       layout/                    # declarative layout (ADR-004): node tree → LayoutEngine → Frame
                                  #   (placed text + hit targets) read by BOTH draw and click;
                                  #   FontMetrics (headless, real font), paging, assert_sane, painter

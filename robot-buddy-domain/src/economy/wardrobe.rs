@@ -9,10 +9,17 @@
 //! Everyone who can wear something is identified by the same stable id strings
 //! the rest of the game uses (`NpcKind::as_str()`, `"sparky"`), plus [`PLAYER`]
 //! for the kid themselves. One map, one rule, no special cases.
+//!
+//! Color Change is the one piece with a setting: its colour. Every wearer has
+//! their own ([`Wardrobe::color_of`]), the kid included — so recolouring the
+//! kid never repaints the shirt Tali was given. The colour travels with the
+//! shirt when it's handed over, and the new wearer can pick another.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
+
+use super::shop::COLOR_CHANGE;
 
 /// Wearer id for the kid. Every other wearer uses their NPC id string.
 pub const PLAYER: &str = "player";
@@ -25,6 +32,9 @@ pub enum WardrobeAction {
     PutOn { who: String, item: String },
     /// `from` hands `item` to `to`.
     HandOver { from: String, to: String, item: String },
+    /// `who` picks `color` for their Color Change outfit. `color` is an
+    /// outfit colour id (the game's palette); the wardrobe just remembers it.
+    SetColor { who: String, color: String },
 }
 
 impl WardrobeAction {
@@ -33,6 +43,9 @@ impl WardrobeAction {
     }
     pub fn hand_over(from: &str, to: &str, item: &str) -> Self {
         WardrobeAction::HandOver { from: from.into(), to: to.into(), item: item.into() }
+    }
+    pub fn set_color(who: &str, color: &str) -> Self {
+        WardrobeAction::SetColor { who: who.into(), color: color.into() }
     }
 }
 
@@ -43,6 +56,13 @@ pub fn wardrobe_reducer(mut w: Wardrobe, action: WardrobeAction) -> (Wardrobe, H
             if w.put_on(&who, &item) { HandOver::Given } else { HandOver::AlreadyWearing }
         }
         WardrobeAction::HandOver { from, to, item } => w.hand_over(&from, &to, &item),
+        WardrobeAction::SetColor { who, color } => {
+            // A colour is a preference, kept whether or not the shirt is on
+            // right now: give it away, buy another, and it comes back in the
+            // colour you liked.
+            w.colors.insert(who, color);
+            HandOver::Given
+        }
     };
     (w, outcome)
 }
@@ -59,12 +79,40 @@ pub enum HandOver {
 }
 
 /// Who wears what, for everyone in the world at once.
+///
+/// On disk: `{"worn": {wearer: [items]}, "colors": {wearer: colour}}`. Saves
+/// from before colours were per-wearer stored the bare `worn` map; those still
+/// load, with no colours (the game migrates the kid's old single colour).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[serde(from = "WardrobeOnDisk")]
 pub struct Wardrobe {
     /// wearer id → the item ids they're wearing. Sorted maps so a save file
     /// round-trips byte-identically and tests don't chase hash order.
     worn: BTreeMap<String, BTreeSet<String>>,
+    /// wearer id → the colour id of their Color Change outfit.
+    colors: BTreeMap<String, String>,
+}
+
+/// Either shape a save may hold. `Current` needs its `worn` key, so a legacy
+/// bare map (whose keys are wearer ids, never "worn") falls through to `Legacy`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WardrobeOnDisk {
+    Current {
+        worn: BTreeMap<String, BTreeSet<String>>,
+        #[serde(default)]
+        colors: BTreeMap<String, String>,
+    },
+    Legacy(BTreeMap<String, BTreeSet<String>>),
+}
+
+impl From<WardrobeOnDisk> for Wardrobe {
+    fn from(d: WardrobeOnDisk) -> Self {
+        match d {
+            WardrobeOnDisk::Current { worn, colors } => Wardrobe { worn, colors },
+            WardrobeOnDisk::Legacy(worn) => Wardrobe { worn, colors: BTreeMap::new() },
+        }
+    }
 }
 
 fn empty_set() -> &'static BTreeSet<String> {
@@ -90,6 +138,16 @@ impl Wardrobe {
     /// True when nobody in the world is wearing anything.
     pub fn is_empty(&self) -> bool {
         self.worn.values().all(|s| s.is_empty())
+    }
+
+    /// The Color Change colour `who` picked, if they ever picked one.
+    pub fn color_of(&self, who: &str) -> Option<&str> {
+        self.colors.get(who).map(String::as_str)
+    }
+
+    /// Everyone wearing `item`, in id order.
+    pub fn wearers_of<'a>(&'a self, item: &'a str) -> impl Iterator<Item = &'a str> + 'a {
+        self.worn.iter().filter(move |(_, s)| s.contains(item)).map(|(who, _)| who.as_str())
     }
 
     /// Put `item` on `who`. Returns false if they already had one.
@@ -122,6 +180,13 @@ impl Wardrobe {
         }
         self.take_off(from, item);
         self.put_on(to, item);
+        // The shirt arrives in the colour it was. The new wearer can pick
+        // another, but nothing changes colour just by changing hands.
+        if item == COLOR_CHANGE {
+            if let Some(c) = self.colors.get(from).cloned() {
+                self.colors.insert(to.to_string(), c);
+            }
+        }
         HandOver::Given
     }
 }
@@ -203,12 +268,62 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_through_json_as_a_plain_map() {
+    fn round_trips_through_json_with_everyones_colours() {
         let mut w = kid_with_hat();
         w.put_on("dolphin", "sparkle_trail");
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::set_color("dolphin", "teal"));
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::set_color(PLAYER, "gold"));
         let json = serde_json::to_string(&w).unwrap();
-        assert!(json.starts_with('{'), "wardrobe should serialize as a bare map: {json}");
         let back: Wardrobe = serde_json::from_str(&json).unwrap();
         assert_eq!(back, w);
+        assert_eq!(back.color_of("dolphin"), Some("teal"));
+        assert_eq!(back.color_of(PLAYER), Some("gold"));
+    }
+
+    #[test]
+    fn a_wardrobe_saved_as_a_bare_map_still_loads() {
+        // Before colours were per-wearer the wardrobe was just the worn map.
+        let old = r#"{"player":["hat"],"kid_1":["color_change"]}"#;
+        let w: Wardrobe = serde_json::from_str(old).unwrap();
+        assert!(w.is_wearing(PLAYER, "hat"));
+        assert!(w.is_wearing("kid_1", "color_change"));
+        assert_eq!(w.color_of("kid_1"), None, "no colours yet: the game fills them in");
+        let empty: Wardrobe = serde_json::from_str("{}").unwrap();
+        assert!(empty.is_empty());
+    }
+
+    // ── Colour per wearer ──
+
+    #[test]
+    fn each_wearer_has_their_own_colour() {
+        let (w, _) = wardrobe_reducer(Wardrobe::new(), WardrobeAction::put_on(PLAYER, COLOR_CHANGE));
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::set_color(PLAYER, "red"));
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::hand_over(PLAYER, "kid_1", COLOR_CHANGE));
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::set_color("kid_1", "teal"));
+        // The kid buys another and goes gold: Tali stays teal.
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::put_on(PLAYER, COLOR_CHANGE));
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::set_color(PLAYER, "gold"));
+        assert_eq!(w.color_of("kid_1"), Some("teal"));
+        assert_eq!(w.color_of(PLAYER), Some("gold"));
+    }
+
+    #[test]
+    fn a_handed_over_shirt_keeps_its_colour() {
+        let (w, _) = wardrobe_reducer(Wardrobe::new(), WardrobeAction::put_on(PLAYER, COLOR_CHANGE));
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::set_color(PLAYER, "pink"));
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::hand_over(PLAYER, "dolphin", COLOR_CHANGE));
+        assert_eq!(w.color_of("dolphin"), Some("pink"), "Echo gets it in the colour it was");
+        assert_eq!(w.color_of(PLAYER), Some("pink"), "the kid still likes pink for next time");
+        assert_eq!(w.wearers_of(COLOR_CHANGE).collect::<Vec<_>>(), vec!["dolphin"]);
+    }
+
+    #[test]
+    fn handing_over_other_swag_leaves_colours_alone() {
+        let mut w = kid_with_hat();
+        w.put_on("dolphin", COLOR_CHANGE);
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::set_color("dolphin", "green"));
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::set_color(PLAYER, "red"));
+        let (w, _) = wardrobe_reducer(w, WardrobeAction::hand_over(PLAYER, "dolphin", "hat"));
+        assert_eq!(w.color_of("dolphin"), Some("green"));
     }
 }

@@ -126,7 +126,8 @@ pub fn draw_gear(
 ///
 /// `bob` is the wearer's current vertical wobble (the kid's walk cycle), so the
 /// hat rides along instead of hovering. `color_choice` is the outfit tint the
-/// Color Change piece uses — one shared palette pick, whoever's wearing it.
+/// Color Change piece uses — THIS wearer's own pick (`Game::outfit_color`), so
+/// Tali's shirt and the kid's can differ.
 pub fn draw_swag(
     x: f32,
     y: f32,

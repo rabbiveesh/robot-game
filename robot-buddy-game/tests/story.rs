@@ -420,6 +420,104 @@ fn swag_bought_at_bolts_can_be_handed_to_a_buddy_and_stays_theirs() {
     assert!(h.game.swag_worn_by("kid_2").is_empty(), "Noa hasn't been given anything");
 }
 
+/// The heading on the Give-Swag panel, as the kid reads it.
+fn swag_title(h: &Harness) -> String {
+    let layout = h.game.swag_layout(common::SCREEN).expect("swag panel open");
+    let title = layout.frame.text(robot_buddy_game::ui::swag::SwagId::Title).expect("title laid out");
+    title.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" ")
+}
+
+/// Everyone in Color Change wears their own colour: hand it to Tali and pick
+/// hers, buy yourself another in a different colour, and Tali's stays put.
+#[test]
+fn a_buddy_keeps_the_colour_picked_for_them() {
+    use robot_buddy_domain::economy::wardrobe::PLAYER;
+
+    let mut h = Harness::new(21);
+    h.start_dev_game();
+    h.game.dum_dums = 40;
+    let dev_spot = (h.game.player.tile_x, h.game.player.tile_y);
+
+    // Buy Color Change at Bolt's and go red.
+    h.walk_to_npc(NpcKind::Shopkeeper);
+    h.interact();
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+    h.buy_shop_item("color_change");
+    h.pick_shop_color("red");
+    h.close_shop();
+    assert_eq!(h.game.outfit_color(PLAYER), "red");
+
+    // Hand it to Tali: the swatches come up for HER.
+    h.visit_map("home", 5, 3);
+    h.walk_to_npc(NpcKind::Kid1);
+    h.interact();
+    h.select_option("swag");
+    h.wait_until(|g| g.state == GameState::Swag);
+    h.give_swag("color_change");
+    assert_eq!(swag_title(&h), "What colour for Tali?");
+    let pick = h.game.swag_model().unwrap().picking.map(|p| p.current);
+    assert_eq!(pick, Some(common::outfit_color_index("red")), "the shirt arrives in the colour it was");
+    let mark = h.mark();
+    h.pick_swag_color("teal");
+    h.close_swag();
+    assert!(h.events_since(mark).iter().any(|e| matches!(e,
+        GameEvent::OutfitColorPicked { wearer, color } if wearer == "kid_1" && color == "teal")));
+    assert_eq!(h.game.outfit_color("kid_1"), "teal");
+    assert_eq!(h.game.outfit_color(PLAYER), "red", "picking Tali's colour isn't picking the kid's");
+
+    // Back to Bolt for another one, in gold this time.
+    h.visit_map("dev", dev_spot.0, dev_spot.1);
+    h.walk_to_npc(NpcKind::Shopkeeper);
+    h.interact();
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+    h.buy_shop_item("color_change");
+    h.pick_shop_color("gold");
+    h.close_shop();
+
+    assert_eq!(h.game.outfit_color(PLAYER), "gold");
+    assert_eq!(h.game.outfit_color("kid_1"), "teal", "Tali keeps her teal");
+}
+
+/// A buddy wearing Color Change can have a new colour whenever the kid likes;
+/// a buddy who isn't wearing it isn't offered one, and nobody else changes.
+#[test]
+fn new_colour_is_offered_to_a_buddy_in_color_change_and_recolours_only_them() {
+    use robot_buddy_domain::economy::wardrobe::{WardrobeAction, PLAYER};
+
+    let mut h = Harness::new(22);
+    h.start_dev_game();
+    h.visit_map("home", 5, 3);
+    // Tali already has Color Change (in red, like the kid's).
+    h.game.dress(WardrobeAction::put_on(PLAYER, "color_change"));
+    h.game.dress(WardrobeAction::set_color(PLAYER, "red"));
+    h.game.dress(WardrobeAction::hand_over(PLAYER, "kid_1", "color_change"));
+    h.game.dress(WardrobeAction::put_on(PLAYER, "color_change"));
+
+    h.walk_to_npc(NpcKind::Kid2);
+    h.interact();
+    assert!(!h.game.menu_options.iter().any(|o| o.option_type == "recolor"),
+        "Noa isn't wearing Color Change, so there's no colour to change");
+    h.select_option("talk");
+    h.finish_dialogue();
+
+    h.walk_to_npc(NpcKind::Kid1);
+    h.interact();
+    let option = h.game.menu_options.iter().find(|o| o.option_type == "recolor")
+        .expect("Tali in Color Change is offered a new colour");
+    assert_eq!(option.label, "New colour?");
+    h.select_option("recolor");
+    h.wait_until(|g| g.state == GameState::Swag);
+    assert_eq!(swag_title(&h), "What colour for Tali?");
+    h.pick_swag_color("green");
+    h.close_swag();
+
+    assert_eq!(h.game.outfit_color("kid_1"), "green");
+    assert_eq!(h.game.outfit_color(PLAYER), "red", "the kid's own shirt stays red");
+    assert!(h.game.swag_worn_by("kid_1").contains("color_change"), "recolouring isn't taking it off");
+}
+
 /// You can't stand next to a buddy you're sitting on, so reaching out over the
 /// mount's nose opens their menu — the only way to dress up Echo or Chompy.
 #[test]

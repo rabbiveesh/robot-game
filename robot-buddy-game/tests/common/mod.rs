@@ -562,11 +562,23 @@ impl Harness {
         self.answer_shop_math(answer);
     }
 
-    /// Click the shop's "Done" button to leave and return to Playing.
+    /// Click the shop's "Done" button (twice if the colour picker is up —
+    /// the first Done backs out of the swatches) and return to Playing.
     pub fn close_shop(&mut self) {
-        let (x, y) = self.game.shop_layout(SCREEN).expect("close_shop: shop not open").done().expect("Done laid out").center();
-        self.click(x, y);
+        for _ in 0..2 {
+            let Some(layout) = self.game.shop_layout(SCREEN) else { break };
+            let (x, y) = layout.done().expect("Done laid out").center();
+            self.click(x, y);
+        }
         self.wait_until(|g| g.state == GameState::Playing);
+    }
+
+    /// Tap the swatch for outfit colour `color` in the shop's colour picker.
+    pub fn pick_shop_color(&mut self, color: &str) {
+        let i = outfit_color_index(color);
+        let (x, y) = self.game.shop_layout(SCREEN).expect("pick_shop_color: shop not open")
+            .swatch(i).expect("pick_shop_color: the colour picker isn't up").center();
+        self.click(x, y);
     }
 
     // ─── Shelly's pearl-leap helpers ─────────────────────
@@ -741,11 +753,33 @@ impl Harness {
         panic!("never found the {item_id} row");
     }
 
-    /// Click the swag picker's "Done" button and return to Playing.
+    /// Click the swag picker's "Done" button (twice if a buddy's colour
+    /// swatches are up) and return to Playing.
     pub fn close_swag(&mut self) {
-        let (x, y) = self.game.swag_layout(SCREEN).expect("close_swag: picker not open").done().expect("Done laid out").center();
-        self.click(x, y);
+        for _ in 0..2 {
+            let Some(layout) = self.game.swag_layout(SCREEN) else { break };
+            let (x, y) = layout.done().expect("Done laid out").center();
+            self.click(x, y);
+        }
         self.wait_until(|g| g.state == GameState::Playing);
+    }
+
+    /// Tap the swatch for outfit colour `color` in the swag panel's colour
+    /// picker (up after handing over Color Change, or from "New colour?").
+    pub fn pick_swag_color(&mut self, color: &str) {
+        let i = outfit_color_index(color);
+        let (x, y) = self.game.swag_layout(SCREEN).expect("pick_swag_color: panel not open")
+            .swatch(i).expect("pick_swag_color: no colour swatches up").center();
+        self.click(x, y);
+    }
+
+    /// Put the kid on another map outright, with its roster, standing on
+    /// (`col`, `row`) — for stories that move between far-apart places.
+    pub fn visit_map(&mut self, map_id: &'static str, col: usize, row: usize) {
+        self.game.map = robot_buddy_game::tilemap::Map::by_id(map_id);
+        self.game.npcs = robot_buddy_game::npc::npcs_for_map(map_id);
+        self.game.npcs_offstage.clear();
+        self.warp_to(col, row);
     }
 
     // ─── Settings / parent overlay helpers ──────────────
@@ -877,4 +911,10 @@ fn bfs(
         }
     }
     None
+}
+
+/// Index of outfit colour `color` in the palette (panics on an unknown id).
+pub fn outfit_color_index(color: &str) -> usize {
+    robot_buddy_game::sprites::player::OUTFIT_COLORS.iter().position(|(id, _)| *id == color)
+        .unwrap_or_else(|| panic!("no outfit colour {color}"))
 }

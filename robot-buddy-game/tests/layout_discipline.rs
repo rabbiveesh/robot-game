@@ -27,6 +27,7 @@ use std::path::Path;
 const MIGRATED: &[&str] = &[
     "shop.rs",
     "swag.rs",
+    "swatches.rs",
     "quest.rs",
     "challenge.rs",
     "dialogue.rs",
@@ -62,7 +63,7 @@ const COORD_ALLOW: &[(&str, &str, &str)] = &[
     // from the tab's midline down.
     ("dialogue.rs", "draw", ".inset"),
     // The swatch being worn gets a gold frame just outside the swatch.
-    ("shop.rs", "draw_shop", ".expand"),
+    ("swatches.rs", "paint_swatch", ".expand"),
     // Display-list prims in the visual's local coordinates; painted through a
     // paint::Canvas bound to the layout region, which checks they stay inside.
     ("visuals.rs", "*", "UiRect::new"),

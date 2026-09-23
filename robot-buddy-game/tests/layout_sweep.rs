@@ -18,6 +18,7 @@ sweep_tests! {
     swag_picker_is_sane_with_a_full_wardrobe => sweep::swag_picker_is_sane_with_a_full_wardrobe,
     a_tall_screen_shows_the_whole_wardrobe_on_one_page => sweep::a_tall_screen_shows_the_whole_wardrobe_on_one_page,
     empty_swag_picker_is_sane => sweep::empty_swag_picker_is_sane,
+    buddy_colour_picker_is_sane_everywhere => sweep::buddy_colour_picker_is_sane_everywhere,
     every_challenge_phase_is_sane_everywhere => sweep::challenge_sweep::every_challenge_phase_is_sane_everywhere,
     a_wrong_answer_does_not_move_the_answer_buttons => sweep::challenge_sweep::a_wrong_answer_does_not_move_the_answer_buttons,
     tapping_a_drawn_button_answers_it_even_under_a_wrapped_question =>
