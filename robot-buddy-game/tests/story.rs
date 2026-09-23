@@ -443,7 +443,8 @@ fn a_mount_can_be_dressed_up_from_its_own_saddle() {
     h.game.sparky_parked = true;
 
     // Wearing something is what puts "Give Swag" on the menu.
-    h.game.wardrobe_mut().put_on(robot_buddy_domain::economy::wardrobe::PLAYER, "hat");
+    h.game.dress(robot_buddy_domain::economy::wardrobe::WardrobeAction::put_on(
+        robot_buddy_domain::economy::wardrobe::PLAYER, "hat"));
 
     // Face a wall — no NPC, no Sparky — and reach out anyway.
     h.press(KeyCode::Up);

@@ -17,14 +17,44 @@ use std::sync::OnceLock;
 /// Wearer id for the kid. Every other wearer uses their NPC id string.
 pub const PLAYER: &str = "player";
 
-/// What happened when swag changed hands.
+/// Everything that can change who wears what. The wardrobe only changes
+/// through [`wardrobe_reducer`] (Invariant 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WardrobeAction {
+    /// `who` puts on a new `item` (bought it, or an old save migrated).
+    PutOn { who: String, item: String },
+    /// `from` hands `item` to `to`.
+    HandOver { from: String, to: String, item: String },
+}
+
+impl WardrobeAction {
+    pub fn put_on(who: &str, item: &str) -> Self {
+        WardrobeAction::PutOn { who: who.into(), item: item.into() }
+    }
+    pub fn hand_over(from: &str, to: &str, item: &str) -> Self {
+        WardrobeAction::HandOver { from: from.into(), to: to.into(), item: item.into() }
+    }
+}
+
+/// The one way the wardrobe changes: state in, (state, what happened) out.
+pub fn wardrobe_reducer(mut w: Wardrobe, action: WardrobeAction) -> (Wardrobe, HandOver) {
+    let outcome = match action {
+        WardrobeAction::PutOn { who, item } => {
+            if w.put_on(&who, &item) { HandOver::Given } else { HandOver::AlreadyWearing }
+        }
+        WardrobeAction::HandOver { from, to, item } => w.hand_over(&from, &to, &item),
+    };
+    (w, outcome)
+}
+
+/// What happened when the wardrobe was asked to change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandOver {
-    /// The item moved: `from` took it off, `to` put it on.
+    /// It happened: the item was put on, or moved from `from` to `to`.
     Given,
     /// `from` isn't wearing that item, so there's nothing to hand over.
     NotWorn,
-    /// `to` already has one of those. Nobody wears two hats.
+    /// The wearer already has one of those. Nobody wears two hats.
     AlreadyWearing,
 }
 
@@ -63,12 +93,12 @@ impl Wardrobe {
     }
 
     /// Put `item` on `who`. Returns false if they already had one.
-    pub fn put_on(&mut self, who: &str, item: &str) -> bool {
+    fn put_on(&mut self, who: &str, item: &str) -> bool {
         self.worn.entry(who.to_string()).or_default().insert(item.to_string())
     }
 
     /// Take `item` off `who`. Returns false if they weren't wearing it.
-    pub fn take_off(&mut self, who: &str, item: &str) -> bool {
+    fn take_off(&mut self, who: &str, item: &str) -> bool {
         let Some(set) = self.worn.get_mut(who) else { return false };
         let had = set.remove(item);
         if set.is_empty() {
@@ -77,21 +107,10 @@ impl Wardrobe {
         had
     }
 
-    /// Replace everything `who` wears in one shot. Used when a shop session
-    /// closes and hands back the kid's updated outfit.
-    pub fn set_worn<I: IntoIterator<Item = String>>(&mut self, who: &str, items: I) {
-        let set: BTreeSet<String> = items.into_iter().collect();
-        if set.is_empty() {
-            self.worn.remove(who);
-        } else {
-            self.worn.insert(who.to_string(), set);
-        }
-    }
-
     /// Move one piece of swag from one wearer to another. The giver takes it
     /// off in the same breath the receiver puts it on — swag is never in two
     /// places, which is exactly why the shop can sell you another one.
-    pub fn hand_over(&mut self, from: &str, to: &str, item: &str) -> HandOver {
+    fn hand_over(&mut self, from: &str, to: &str, item: &str) -> HandOver {
         if !self.is_wearing(from, item) {
             return HandOver::NotWorn;
         }
@@ -171,13 +190,16 @@ mod tests {
     }
 
     #[test]
-    fn set_worn_replaces_the_whole_outfit() {
-        let mut w = kid_with_hat();
-        w.set_worn(PLAYER, ["bow_tie".to_string(), "jet_boots".to_string()]);
-        assert!(!w.is_wearing(PLAYER, "hat"));
-        assert_eq!(w.worn_by(PLAYER).len(), 2);
-        w.set_worn(PLAYER, Vec::new());
-        assert!(w.is_empty());
+    fn the_reducer_is_the_way_in() {
+        let (w, out) = wardrobe_reducer(Wardrobe::new(), WardrobeAction::put_on(PLAYER, "hat"));
+        assert_eq!(out, HandOver::Given);
+        let (w, out) = wardrobe_reducer(w, WardrobeAction::put_on(PLAYER, "hat"));
+        assert_eq!(out, HandOver::AlreadyWearing, "nobody wears two hats");
+        let (w, out) = wardrobe_reducer(w, WardrobeAction::hand_over(PLAYER, "dolphin", "hat"));
+        assert_eq!(out, HandOver::Given);
+        assert!(w.is_wearing("dolphin", "hat") && !w.is_wearing(PLAYER, "hat"));
+        let (_, out) = wardrobe_reducer(w, WardrobeAction::hand_over(PLAYER, "kid_1", "hat"));
+        assert_eq!(out, HandOver::NotWorn, "the kid gave it away already");
     }
 
     #[test]

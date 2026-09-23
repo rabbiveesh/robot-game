@@ -139,6 +139,11 @@ fn a_kid_on_the_title_screen_cannot_start_over_a_napping_save() {
         "nothing was written over the unreadable save");
 }
 
+/// Change a save's wardrobe the only way it can change: through its reducer.
+fn dress(w: &mut wardrobe::Wardrobe, action: wardrobe::WardrobeAction) {
+    *w = wardrobe::wardrobe_reducer(std::mem::take(w), action).0;
+}
+
 fn decode_first_save(json: &str) -> SaveData {
     match decode_saves(json).slots.into_iter().next().unwrap() {
         StoredSlot::Save(s) => s,
@@ -277,8 +282,8 @@ fn main_can_still_read_what_this_build_writes_and_keeps_the_kids_cosmetics() {
     let backend = InMemoryBackend::with_raw_saves(MAIN_SAVES);
     let mut ari = backend.load_all()[0].clone().unwrap();
     // Ari hands the bow tie to Echo, then buys jet boots.
-    ari.wardrobe.hand_over(wardrobe::PLAYER, "dolphin", "bow_tie");
-    ari.wardrobe.put_on(wardrobe::PLAYER, "jet_boots");
+    dress(&mut ari.wardrobe, wardrobe::WardrobeAction::hand_over(wardrobe::PLAYER, "dolphin", "bow_tie"));
+    dress(&mut ari.wardrobe, wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "jet_boots"));
     ari.upgrades.push("diving_net".into());
     backend.save_to(0, &ari);
 
@@ -306,7 +311,7 @@ fn the_rollback_mirror_never_overrides_a_real_wardrobe() {
     // must not put swag back on a kid who gave it away.
     let backend = InMemoryBackend::with_raw_saves(MAIN_SAVES);
     let mut ari = backend.load_all()[0].clone().unwrap();
-    ari.wardrobe.hand_over(wardrobe::PLAYER, "dolphin", "hat");
+    dress(&mut ari.wardrobe, wardrobe::WardrobeAction::hand_over(wardrobe::PLAYER, "dolphin", "hat"));
     backend.save_to(0, &ari);
 
     let mut json: serde_json::Value = serde_json::from_str(&stored(&backend)).unwrap();

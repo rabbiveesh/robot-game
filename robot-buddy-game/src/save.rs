@@ -119,7 +119,9 @@ impl SaveData {
         let legacy = std::mem::take(&mut self.shop_owned);
         if self.wardrobe.is_empty() {
             for item in &legacy {
-                self.wardrobe.put_on(wardrobe::PLAYER, item);
+                let (w, _) = wardrobe::wardrobe_reducer(
+                    std::mem::take(&mut self.wardrobe), wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, item));
+                self.wardrobe = w;
             }
         }
         // Saves from before intros were tracked: infer what's already been

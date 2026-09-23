@@ -827,12 +827,6 @@ impl Game {
         self.active_shop.as_ref()
     }
 
-    /// Mutable wardrobe access, for tests and dev tooling that need to dress
-    /// somebody without walking them through the shop.
-    pub fn wardrobe_mut(&mut self) -> &mut Wardrobe {
-        &mut self.wardrobe
-    }
-
     pub fn active_swag(&self) -> Option<&ActiveSwag> {
         self.active_swag.as_ref()
     }
@@ -2583,6 +2577,15 @@ impl Game {
         !self.sparky_parked || self.map.id == self.sparky_map
     }
 
+    /// The one way the game changes who wears what (Invariant 2: the
+    /// wardrobe only moves through its reducer). Public so tests and dev
+    /// tooling can dress somebody without walking them through the shop.
+    pub fn dress(&mut self, action: wardrobe::WardrobeAction) -> HandOver {
+        let (w, outcome) = wardrobe::wardrobe_reducer(std::mem::take(&mut self.wardrobe), action);
+        self.wardrobe = w;
+        outcome
+    }
+
     /// Hand the kid a pearl find: credit, flash, log. Returns the kid-facing
     /// "+N pearls" line (naming the net when it paid) so every source words
     /// it the same way.
@@ -4315,8 +4318,8 @@ mod tests {
     #[test]
     fn shop_cosmetics_persist_through_save_load() {
         let mut g = game();
-        g.wardrobe.put_on(wardrobe::PLAYER, "hat");
-        g.wardrobe.put_on(wardrobe::PLAYER, "bow_tie");
+        g.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "hat"));
+        g.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "bow_tie"));
         let data = g.gather_save_data();
 
         let mut g2 = game();
@@ -4369,8 +4372,8 @@ mod tests {
     #[test]
     fn swag_given_to_a_buddy_persists_through_save_load() {
         let mut g = game();
-        g.wardrobe.put_on(wardrobe::PLAYER, "hat");
-        assert_eq!(g.wardrobe.hand_over(wardrobe::PLAYER, "dolphin", "hat"), HandOver::Given);
+        g.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "hat"));
+        assert_eq!(g.dress(wardrobe::WardrobeAction::hand_over(wardrobe::PLAYER, "dolphin", "hat")), HandOver::Given);
         let data = g.gather_save_data();
 
         let mut g2 = game();

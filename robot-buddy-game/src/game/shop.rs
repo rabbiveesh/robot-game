@@ -53,14 +53,9 @@ impl Game {
                     ash.message = None;
                     return;
                 }
-                if let Some(ash) = self.active_shop.take() {
-                    // Only the wearable half of `owned` belongs in the
-                    // wardrobe; upgrades were banked when they were bought.
-                    let swag: Vec<String> = ash.owned.into_iter()
-                        .filter(|id| !self.upgrades.contains(id))
-                        .collect();
-                    self.wardrobe.set_worn(wardrobe::PLAYER, swag);
-                }
+                // Purchases went straight into the wardrobe and upgrades as
+                // they settled, so closing has nothing to hand back.
+                self.active_shop = None;
                 self.set_state(GameState::Playing);
             }
             ui::shop::ShopInput::SelectItem(i) => {
@@ -160,7 +155,6 @@ impl Game {
                         Some(Settled::Traded(quote))
                     } else {
                         let item = ash.catalog[i].clone();
-                        ash.owned.insert(item.id.clone());
                         ash.selected = None;
                         ash.choices.clear();
                         if item.id == domain_shop::COLOR_CHANGE {
@@ -190,13 +184,23 @@ impl Game {
                     Settled::Bought { item, spent, left } => {
                         debug_assert_eq!(self.balance_for(item.currency), left + spent);
                         self.spend(item.currency, spent, item.id.clone());
-                        // Upgrades are banked here rather than worn — they're
-                        // perks, not outfits, and can't be handed to a buddy.
-                        if matches!(item.kind, ItemKind::Upgrade) {
-                            self.upgrades.insert(item.id.clone());
-                            if let Some(ash) = self.active_shop.as_mut() {
-                                ash.owned.insert(item.id.clone());
+                        // Swag goes on the kid; upgrades are banked rather than
+                        // worn — they're perks, not outfits, and can't be
+                        // handed to a buddy.
+                        match item.kind {
+                            ItemKind::Swag => {
+                                self.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, &item.id));
                             }
+                            ItemKind::Upgrade => {
+                                self.upgrades.insert(item.id.clone());
+                            }
+                            ItemKind::Trade { .. } => {}
+                        }
+                        // The shelf's "owned" marks are read from the real
+                        // wardrobe, never kept as a second copy.
+                        let owned = self.active_shop.as_ref().map(|ash| self.shop_owned_for(ash.shop));
+                        if let (Some(ash), Some(owned)) = (self.active_shop.as_mut(), owned) {
+                            ash.owned = owned;
                         }
                     }
                     Settled::Traded(quote) => {
@@ -216,13 +220,6 @@ impl Game {
 
                 // Persist immediately so the purchase (and the spent currency)
                 // survive a reload even if the kid quits right now.
-                if let Some(ash) = self.active_shop.as_ref() {
-                    let swag: Vec<String> = ash.owned.iter()
-                        .filter(|id| !self.upgrades.contains(*id))
-                        .cloned()
-                        .collect();
-                    self.wardrobe.set_worn(wardrobe::PLAYER, swag);
-                }
                 self.persist();
             }
             ui::shop::ShopInput::PickColor(i) => {
@@ -350,7 +347,7 @@ impl Game {
                 let Some(item) = asw.items.get(i).cloned() else { return };
                 let to = asw.recipient_id.clone();
                 let name = asw.recipient_name.clone();
-                let outcome = self.wardrobe.hand_over(wardrobe::PLAYER, &to, &item.id);
+                let outcome = self.dress(wardrobe::WardrobeAction::hand_over(wardrobe::PLAYER, &to, &item.id));
                 let message = match outcome {
                     HandOver::Given => {
                         self.events.push(GameEvent::SwagGiven {
@@ -483,14 +480,14 @@ mod tests {
     #[test]
     fn giving_swag_away_lets_bolt_sell_another_one() {
         let mut g = game();
-        g.wardrobe.put_on(wardrobe::PLAYER, "hat");
+        g.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "hat"));
         assert_eq!(
             domain_shop::process_purchase(20, "hat", g.player_swag()),
             domain_shop::PurchaseOutcome::AlreadyOwned,
             "no buying a second hat while you're wearing one",
         );
 
-        g.wardrobe.hand_over(wardrobe::PLAYER, "kid_1", "hat");
+        g.dress(wardrobe::WardrobeAction::hand_over(wardrobe::PLAYER, "kid_1", "hat"));
         assert!(
             matches!(domain_shop::process_purchase(20, "hat", g.player_swag()),
                 domain_shop::PurchaseOutcome::Bought { .. }),
@@ -575,7 +572,7 @@ mod tests {
     #[test]
     fn changing_color_back_and_forth_sticks_each_time() {
         let mut g = game();
-        g.wardrobe.put_on(wardrobe::PLAYER, "color_change");
+        g.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "color_change"));
         open_shop(&mut g);
 
         // Reopen the picker from the owned Color Change row.
@@ -603,7 +600,7 @@ mod tests {
     #[test]
     fn owned_color_change_row_reopens_the_picker() {
         let mut g = game();
-        g.wardrobe.put_on(wardrobe::PLAYER, "color_change");
+        g.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "color_change"));
         open_shop(&mut g);
         let row = shop_row(&g, "color_change");
         click_shop(&mut g, row);
