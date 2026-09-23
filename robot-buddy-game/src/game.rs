@@ -945,10 +945,8 @@ impl Game {
         if !self.settings_open && self.state != GameState::Title && self.state != GameState::NewGame {
             self.play_time += dt;
             self.auto_save_timer += dt;
-            if (self.auto_save_timer >= 30.0 || self.save_backend.is_page_hidden()) && self.map.id != "dev" {
-                self.auto_save_timer = 0.0;
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
+            if self.auto_save_timer >= 30.0 || self.save_backend.is_page_hidden() {
+                self.persist();
             }
         }
 
@@ -2042,11 +2040,7 @@ impl Game {
             }
             self.set_state(GameState::Playing);
 
-            if self.map.id != "dev" {
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
-                self.auto_save_timer = 0.0;
-            }
+            self.persist();
         }
     }
 
@@ -2425,11 +2419,7 @@ impl Game {
             }
             self.set_state(GameState::Playing);
 
-            if self.map.id != "dev" {
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
-                self.auto_save_timer = 0.0;
-            }
+            self.persist();
         }
     }
 
@@ -2492,11 +2482,7 @@ impl Game {
             }
             self.set_state(GameState::Playing);
 
-            if self.map.id != "dev" {
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
-                self.auto_save_timer = 0.0;
-            }
+            self.persist();
         }
     }
 
@@ -2551,11 +2537,7 @@ impl Game {
             }
             self.set_state(GameState::Playing);
 
-            if self.map.id != "dev" {
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
-                self.auto_save_timer = 0.0;
-            }
+            self.persist();
         }
     }
 
@@ -2604,11 +2586,7 @@ impl Game {
             }
             self.set_state(GameState::Playing);
 
-            if self.map.id != "dev" {
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
-                self.auto_save_timer = 0.0;
-            }
+            self.persist();
         }
     }
 
@@ -2733,11 +2711,7 @@ impl Game {
             }
             self.set_state(GameState::Playing);
 
-            if self.map.id != "dev" {
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
-                self.auto_save_timer = 0.0;
-            }
+            self.persist();
         }
     }
 
@@ -2919,10 +2893,8 @@ impl Game {
                     asw.items = remaining;
                     asw.message = message;
                 }
-                if outcome == HandOver::Given && self.map.id != "dev" {
-                    let save_data = self.gather_save_data();
-                    self.save_backend.save_to(self.active_slot, &save_data);
-                    self.auto_save_timer = 0.0;
+                if outcome == HandOver::Given {
+                    self.persist();
                 }
             }
         }
@@ -3158,10 +3130,7 @@ impl Game {
                         .collect();
                     self.wardrobe.set_worn(wardrobe::PLAYER, swag);
                 }
-                if self.map.id != "dev" {
-                    let save_data = self.gather_save_data();
-                    self.save_backend.save_to(self.active_slot, &save_data);
-                }
+                self.persist();
             }
             ui::shop::ShopInput::PickColor(i) => {
                 let Some((id, _)) = sprites::player::OUTFIT_COLORS.get(i) else { return };
@@ -3170,10 +3139,7 @@ impl Game {
                 ash.message = Some("Looking good!".into());
                 // Persist right away, same as a purchase — the new outfit
                 // should survive a reload even if the kid quits now.
-                if self.map.id != "dev" {
-                    let save_data = self.gather_save_data();
-                    self.save_backend.save_to(self.active_slot, &save_data);
-                }
+                self.persist();
             }
         }
     }
@@ -3367,10 +3333,7 @@ impl Game {
                     // persist it, without touching which numbers get asked.
                     SettingsResult::SetPace(pace) => {
                         self.game_pace = pace;
-                        if self.map.id != "dev" {
-                            let save_data = self.gather_save_data();
-                            self.save_backend.save_to(self.active_slot, &save_data);
-                        }
+                        self.persist();
                     }
                     SettingsResult::ExportSession => {
                         let json = session::build_export(
@@ -3940,10 +3903,7 @@ impl Game {
                 self.track_toast = Some((cheer, 2.4));
                 // Shelly hides it again — a fresh trip next time they launch.
                 self.leap_session = None;
-                if self.map.id != "dev" {
-                    let save_data = self.gather_save_data();
-                    self.save_backend.save_to(self.active_slot, &save_data);
-                }
+                self.persist();
             }
             LeapPhase::Overshot => {
                 let msg = format!(
@@ -4734,6 +4694,16 @@ impl Game {
     }
 
     // ─── Save helpers ──────────────────────────────────
+
+    /// Write the current game to the active slot and restart the auto-save
+    /// clock. The dev zone never saves.
+    fn persist(&mut self) {
+        if self.map.id != "dev" {
+            let save_data = self.gather_save_data();
+            self.save_backend.save_to(self.active_slot, &save_data);
+            self.auto_save_timer = 0.0;
+        }
+    }
 
     fn gather_save_data(&self) -> SaveData {
         SaveData {
