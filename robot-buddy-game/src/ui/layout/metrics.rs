@@ -106,9 +106,11 @@ pub fn renderer_drift() -> Option<String> {
         .max_by(|x, y| (x.1 - x.2).abs().total_cmp(&(y.1 - y.2).abs()))
         .map(|(size, a, b)| {
             format!(
-                "a {}-char probe at {size}px is {a}px wide to layout but {b}px rendered (dpi scale {})",
+                "a {}-char probe at {size}px is {}px wide to layout but {}px rendered (dpi scale {}%)",
                 PROBE.chars().count(),
-                macroquad::miniquad::window::dpi_scale()
+                a.round() as i32,
+                b.round() as i32,
+                (macroquad::miniquad::window::dpi_scale() * 100.0).round() as i32
             )
         })
 }

@@ -69,7 +69,7 @@ pub fn check_sane<Id: Copy + PartialEq + Debug>(frame: &Frame<Id>, bounds: UiRec
     }
 
     for c in frame.clipped() {
-        issues.push(format!("{} was clipped out (didn't fit)", c.what));
+        issues.push(format!("{} was clipped out (didn't fit)", c.what()));
     }
 
     if issues.is_empty() { Ok(()) } else { Err(issues) }

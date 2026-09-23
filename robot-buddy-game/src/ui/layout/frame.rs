@@ -53,8 +53,20 @@ pub struct Clipped<Id> {
     /// Pre-order index of the node in the panel's tree.
     pub node: usize,
     pub id: Option<Id>,
-    /// Human-readable: the id, or the text, or "region".
-    pub what: String,
+    /// The text, if it was a text leaf.
+    pub text: Option<String>,
+}
+
+impl<Id: Debug> Clipped<Id> {
+    /// Human-readable: the id, or the text, or "region (node n)". Built on
+    /// demand so release builds don't format every panel's ids.
+    pub fn what(&self) -> String {
+        match (&self.id, &self.text) {
+            (Some(id), _) => format!("{id:?}"),
+            (None, Some(t)) => format!("text {t:?}"),
+            (None, None) => format!("region (node {})", self.node),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -134,14 +146,13 @@ impl<Id: Copy + PartialEq + Debug> Frame<Id> {
 
     /// Record `n` (pre-order index `at`) and its subtree as clipped.
     fn collect_clipped(&mut self, n: &Node<Id>, at: usize) {
-        let what = match (&n.id, &n.content) {
-            (Some(id), _) => Some(format!("{id:?}")),
-            (None, Content::Text(t)) => Some(format!("text {:?}", t.text)),
-            (None, Content::Region) => Some(format!("region (node {at})")),
-            (None, Content::Container(_)) => None,
-        };
-        if let Some(what) = what {
-            self.clipped.push(Clipped { node: at, id: n.id, what });
+        // Anonymous containers aren't elements; their children are recorded.
+        if n.id.is_some() || !matches!(n.content, Content::Container(_)) {
+            let text = match &n.content {
+                Content::Text(t) => Some(t.text.clone()),
+                _ => None,
+            };
+            self.clipped.push(Clipped { node: at, id: n.id, text });
         }
         if let Content::Container(kids) = &n.content {
             let mut i = at + 1;

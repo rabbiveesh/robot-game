@@ -159,7 +159,7 @@ mod tests {
             col().child(text("nested", 20, Fit::shrink(20)).fixed()).fixed(),
         ]);
         let frame = layout(&root, bounds);
-        let what: Vec<&str> = frame.clipped().iter().map(|c| c.what.as_str()).collect();
+        let what: Vec<String> = frame.clipped().iter().map(|c| c.what()).collect();
         assert_eq!(what, ["text \"I don't\"", "region (node 3)", "text \"nested\""]);
         assert_eq!(frame.clipped()[2].node, 5);
         let issues = check_sane(&frame, bounds).unwrap_err();
