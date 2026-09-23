@@ -11,11 +11,11 @@ use ::rand::seq::SliceRandom;
 use std::collections::HashMap;
 
 use robot_buddy_domain::challenge::challenge_state::{
-    ChallengeState, DisplaySpeech, RenderHint, VoiceState,
+    ChallengeAction, ChallengeState, DisplaySpeech, RenderHint, VoiceState,
     challenge_reducer,
 };
 use robot_buddy_domain::learning::challenge_generator::{
-    Challenge, ChallengeProfile, generate_challenge,
+    Challenge, ChallengeProfile, generate_challenge, generate_challenge_at,
 };
 use robot_buddy_domain::learning::learner_profile::{
     LearnerProfile, LearnerEvent, learner_reducer,
@@ -29,6 +29,7 @@ use robot_buddy_domain::learning::intake_assessor::{
 use robot_buddy_domain::economy::give;
 use robot_buddy_domain::economy::rewards;
 use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
+use robot_buddy_domain::logic::manipulate_concrete::ConcreteKind;
 use robot_buddy_domain::logic::kenken::{
     self, KenKenAction, KenKenPhase, KenKenSession, cage_ops_for_band, generate_kenken,
 };
@@ -168,6 +169,8 @@ impl IntakeState {
 struct ActiveChallenge {
     state: ChallengeState,
     challenge: Challenge,
+    /// The hands-on "Show me" workspace, once a Concrete-stage kid asks for it.
+    workspace: Option<ui::concrete::Workspace>,
     complete_timer: f32,
     start_time: f32,
 }
@@ -396,6 +399,11 @@ pub enum GameEvent {
     DialogueAdvanced,
     ChallengeStarted { question: String },
     ChallengeResolved { correct: bool, response_ms: f64 },
+    /// "Show me" at the Concrete stage opened the hands-on workspace.
+    ManipulativeOpened { kind: ConcreteKind },
+    /// The kid finished building the problem in the workspace (all counters
+    /// moved). Not an answer — the quiz still decides.
+    ManipulativeBuilt { kind: ConcreteKind },
     /// A gate guardian's puzzle was solved; the passage is now open.
     GateOpened { gate_id: String },
     /// The rocket spent fuel taking a space jump.
@@ -575,6 +583,8 @@ pub struct Game {
     pub features: FeatureFlags,
     /// Tiles walked since the last random encounter (for encounter pacing).
     steps_since_encounter: u32,
+    /// Which manipulative the control room's bench opens next (dev only).
+    manip_bench_next: usize,
     pending_challenge: bool,
     /// Gate id whose challenge is currently on screen (set when the kid takes
     /// on a gate guardian; cleared when that challenge resolves).
@@ -707,6 +717,7 @@ impl Game {
             wardrobe: Wardrobe::new(),
             features: FeatureFlags::default(),
             steps_since_encounter: 0,
+            manip_bench_next: 0,
             pending_challenge: false,
             opening_gate: None,
             satisfied_gates: std::collections::HashSet::new(),
@@ -788,6 +799,18 @@ impl Game {
             .map(|ac| &ac.challenge)
             .or_else(|| self.intake.as_ref().and_then(|iq| iq.challenge.as_ref().map(|ac| &ac.challenge)))?;
         ch.choices.iter().position(|c| c.correct)
+    }
+
+    /// The active challenge's layout, exactly as `step` hit-tests it. Tests
+    /// click through this (Show me, the workspace's counters).
+    pub fn challenge_layout(&self, screen: (f32, f32)) -> Option<ui::challenge::ChallengeLayout> {
+        let ac = self.active_challenge.as_ref()?;
+        Some(ui::challenge::layout(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen))
+    }
+
+    /// The hands-on "Show me" workspace, if one is open.
+    pub fn challenge_workspace(&self) -> Option<&ui::concrete::Workspace> {
+        self.active_challenge.as_ref().and_then(|ac| ac.workspace.as_ref())
     }
 
     /// Phase of the active challenge (intake or normal). None if no challenge.
@@ -1300,7 +1323,7 @@ impl Game {
                         if let Some(action) = ui::challenge::handle_click(
                             mx, my, &ac.state, &ac.challenge,
                             // Same pure layout render paints — hit rects can't drift.
-                            &ui::challenge::layout(&ac.state, &ac.challenge, screen),
+                            &ui::challenge::layout(&ac.state, &ac.challenge, None, screen),
                         ) {
                             ac.state = challenge_reducer(ac.state.clone(), action);
                             speak_challenge_feedback(&ac.state, "Sparky");
@@ -1961,6 +1984,30 @@ impl Game {
                 if ac.complete_timer >= 2.5 { dismiss = true; }
             }
 
+            // The hands-on workspace gets first claim on the pointer: a press on
+            // a counter is a pickup, not a click on the panel beneath it.
+            let mut pointer_busy = false;
+            let area = ui::challenge::layout(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen)
+                .workspace();
+            if let (Some(ws), Some(area)) = (ac.workspace.as_mut(), area) {
+                ws.tick(dt);
+                match ui::concrete::handle_pointer(ws, input, area) {
+                    ui::concrete::Pointer::Idle => {}
+                    ui::concrete::Pointer::Busy => pointer_busy = true,
+                    ui::concrete::Pointer::Landed(landed) => {
+                        pointer_busy = true;
+                        if landed.filled_ten {
+                            audio::tts::speak(&buddy, ui::concrete::FULL_TEN_LINE);
+                        }
+                        if landed.built {
+                            self.events.push(GameEvent::ManipulativeBuilt {
+                                kind: ws.session.puzzle.kind,
+                            });
+                        }
+                    }
+                }
+            }
+
             if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge, input) {
                 ac.state = challenge_reducer(ac.state.clone(), action);
                 speak_challenge_feedback(&ac.state, &buddy);
@@ -1970,15 +2017,18 @@ impl Game {
                 dismiss = true;
             }
 
-            if !dismiss && input.mouse_clicked {
+            if !dismiss && !pointer_busy && input.mouse_clicked {
                 let (mx, my) = input.mouse_pos;
                 if let Some(action) = ui::challenge::handle_click(
                     mx, my, &ac.state, &ac.challenge,
                     // Same pure layout render paints — hit rects can't drift.
-                    &ui::challenge::layout(&ac.state, &ac.challenge, screen),
+                    &ui::challenge::layout(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen),
                 ) {
+                    let show_me = matches!(action, ChallengeAction::ShowMe);
                     ac.state = challenge_reducer(ac.state.clone(), action);
-                    speak_challenge_feedback(&ac.state, &buddy);
+                    if !(show_me && open_concrete_workspace(ac, &mut self.rng, &mut self.events, &buddy)) {
+                        speak_challenge_feedback(&ac.state, &buddy);
+                    }
                 } else if ac.state.phase == Phase::Complete {
                     dismiss = true;
                 }
@@ -2163,6 +2213,32 @@ impl Game {
                 audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
                 self.active_challenge = Some(ac);
                 self.set_state(GameState::Challenge);
+            }
+            CtrlManipulatives => {
+                // The bench: each visit opens the next manipulative, already
+                // out as if a Concrete-stage kid had pressed "Show me". Numbers
+                // follow the band knob (clamped to where the frames apply).
+                let bench = ui::concrete::BENCH;
+                let op = bench[self.manip_bench_next % bench.len()];
+                self.manip_bench_next += 1;
+                let band = self.profile.math_band.clamp(2, 4);
+                let rng = &mut self.rng;
+                let mut challenge = generate_challenge_at(band, op, rng);
+                for _ in 0..20 {
+                    if ui::concrete::puzzle_for(&challenge, rng).is_some() { break; }
+                    challenge = generate_challenge_at(band, op, rng);
+                }
+                if ui::concrete::puzzle_for(&challenge, rng).is_none() {
+                    challenge = generate_challenge_at(2, op, rng);
+                }
+                let mut ac = active_challenge_for(challenge, &self.profile, self.game_time);
+                ac.state.render_hint.cra_stage = CraStage::Concrete;
+                ac.state = challenge_reducer(ac.state, ChallengeAction::ShowMe);
+                let buddy = self.current_buddy_name();
+                self.begin_challenge(ac);
+                if let Some(ac) = self.active_challenge.as_mut() {
+                    open_concrete_workspace(ac, &mut self.rng, &mut self.events, &buddy);
+                }
             }
             CtrlToggleEncounters => {
                 self.features.encounters = !self.features.encounters;
@@ -3344,8 +3420,8 @@ impl Game {
             if let Some(ref iq) = self.intake {
                 if let Some(ref ac) = iq.challenge {
                     {
-                        let layout = ui::challenge::layout(&ac.state, &ac.challenge, screen);
-                        ui::challenge::draw(&layout, &ac.state, &ac.challenge, self.game_time);
+                        let layout = ui::challenge::layout(&ac.state, &ac.challenge, None, screen);
+                        ui::challenge::draw(&layout, &ac.state, &ac.challenge, None, self.game_time);
                     }
                 }
             }
@@ -3606,10 +3682,9 @@ impl Game {
 
         // Challenge overlay (separate from intake's in-render_world drawing).
         if let Some(ref ac) = self.active_challenge {
-            {
-                        let layout = ui::challenge::layout(&ac.state, &ac.challenge, screen);
-                        ui::challenge::draw(&layout, &ac.state, &ac.challenge, self.game_time);
-                    }
+            let ws = ac.workspace.as_ref();
+            let layout = ui::challenge::layout(&ac.state, &ac.challenge, ws, screen);
+            ui::challenge::draw(&layout, &ac.state, &ac.challenge, ws, self.game_time);
         }
 
         // KenKen overlay
@@ -3881,7 +3956,12 @@ fn make_challenge_profile(profile: &LearnerProfile) -> ChallengeProfile {
 fn start_challenge(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32) -> ActiveChallenge {
     let cp = make_challenge_profile(profile);
     let challenge = generate_challenge(&cp, rng);
+    active_challenge_for(challenge, profile, game_time)
+}
 
+/// Present an already-generated challenge at the learner's CRA stage for its
+/// operation.
+fn active_challenge_for(challenge: Challenge, profile: &LearnerProfile, game_time: f32) -> ActiveChallenge {
     let cra = profile.cra_stages
         .get(&challenge.operation)
         .copied()
@@ -3913,6 +3993,7 @@ fn start_challenge(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32)
     ActiveChallenge {
         state: cs,
         challenge,
+        workspace: None,
         complete_timer: 0.0,
         start_time: game_time,
     }
@@ -3946,6 +4027,7 @@ fn start_intake_challenge(challenge: Challenge, _band: u8, game_time: f32) -> Ac
     ActiveChallenge {
         state: cs,
         challenge,
+        workspace: None,
         complete_timer: 0.0,
         start_time: game_time,
     }
@@ -4140,6 +4222,26 @@ fn display_name_for_buddy_id(id: &str) -> String {
     npc::NpcKind::from_id(id)
         .map(|k| k.display_name().to_string())
         .unwrap_or_else(|| id.to_string())
+}
+
+/// "Show me" landed on the Concrete stage: swap the static picture for the
+/// hands-on workspace, and have the buddy say what to do (the only
+/// instructions a pre-reader gets). Returns false — leaving the static
+/// picture — when the problem doesn't fit the ten-frames.
+fn open_concrete_workspace(
+    ac: &mut ActiveChallenge,
+    rng: &mut SmallRng,
+    events: &mut Vec<GameEvent>,
+    buddy: &str,
+) -> bool {
+    if ac.workspace.is_some() || ac.state.render_hint.cra_stage != CraStage::Concrete {
+        return false;
+    }
+    let Some(ws) = ui::concrete::Workspace::for_challenge(&ac.challenge, rng) else { return false };
+    audio::tts::speak(buddy, ui::concrete::intro_line(&ws));
+    events.push(GameEvent::ManipulativeOpened { kind: ws.session.puzzle.kind });
+    ac.workspace = Some(ws);
+    true
 }
 
 fn speak_challenge_feedback(cs: &ChallengeState, speaker: &str) {

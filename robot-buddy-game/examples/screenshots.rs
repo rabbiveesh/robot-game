@@ -331,8 +331,8 @@ async fn main() {
             );
             for (name, cs) in [("presented", &p), ("showme_feedback", &hinted_fed), ("taught", &taught)] {
                 snap(&format!("14_challenge_band{band}_{name}"), |screen| {
-                    let l = challenge::layout(cs, &c, screen);
-                    challenge::draw(&l, cs, &c, 1.0);
+                    let l = challenge::layout(cs, &c, None, screen);
+                    challenge::draw(&l, cs, &c, None, 1.0);
                 }).await;
             }
         }

@@ -153,7 +153,7 @@ pub(crate) fn npc_dialogue_lines(npc: &Npc, rng: &mut SmallRng) -> Vec<DialogueL
         // Dev-control NPCs go through apply_dev_control, never this path.
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
         | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance
-        | CtrlTriggerSudoku | CtrlTriggerChallenge
+        | CtrlTriggerSudoku | CtrlTriggerChallenge | CtrlManipulatives
         | CtrlToggleEncounters | CtrlTriggerEncounter
         | CtrlToggleQuest | CtrlStartQuest => &["Hello there!"],
     };

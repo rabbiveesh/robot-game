@@ -1,6 +1,7 @@
 pub mod layout;
 pub mod dialogue;
 pub mod challenge;
+pub mod concrete;
 pub mod balance;
 pub mod kenken;
 pub mod leap;

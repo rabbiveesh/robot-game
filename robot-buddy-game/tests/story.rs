@@ -3294,3 +3294,86 @@ fn rocket_jumps_burn_fuel_and_the_depot_refills() {
     assert_eq!(h.game.map.id, "mars");
     assert_eq!(h.game.fuel(), 7, "the Mars jump burns 3 fuel");
 }
+
+// ─── Concrete "Show me": build it with your hands ─────────
+
+/// Talk to Sparky at band 2 (small + and −, ten-frame territory). Every
+/// operation starts at the Concrete stage on a fresh profile.
+fn sparky_small_challenge(h: &mut Harness) {
+    use macroquad::prelude::KeyCode;
+    h.start_dev_game();
+    h.game.profile.math_band = 2;
+    h.hold(KeyCode::Right); // face Sparky (seed 0 rolls a challenge on talk)
+    h.interact();
+    h.select_option("talk");
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Challenge);
+}
+
+#[test]
+fn concrete_show_me_opens_a_workspace_the_kid_builds_and_the_quiz_still_decides() {
+    let mut h = Harness::new(0);
+    sparky_small_challenge(&mut h);
+
+    let mark = h.mark();
+    h.press_show_me();
+    assert!(h.game.challenge_workspace().is_some(),
+        "at the Concrete stage, Show me hands the kid counters, not a picture");
+
+    h.build_the_model();
+    let events = h.events_since(mark).to_vec();
+    assert!(events.iter().any(|e| matches!(e, GameEvent::ManipulativeOpened { .. })));
+    assert!(events.iter().any(|e| matches!(e, GameEvent::ManipulativeBuilt { .. })));
+    assert!(!events.iter().any(|e| matches!(e, GameEvent::ChallengeResolved { .. })),
+        "building the model is not answering — no free pass");
+    assert_eq!(h.game.state, GameState::Challenge);
+
+    h.answer_correctly();
+    h.wait_until(|g| g.state == GameState::Playing);
+    assert!(h.events_since(mark).iter().any(|e|
+        matches!(e, GameEvent::ChallengeResolved { correct: true, .. })));
+}
+
+#[test]
+fn a_tap_on_a_counter_moves_nothing_it_has_to_be_dragged() {
+    let mut h = Harness::new(0);
+    sparky_small_challenge(&mut h);
+    h.press_show_me();
+
+    let before = h.game.challenge_workspace().unwrap().session.total();
+    let spot = h.a_grabbable_counter();
+    h.drag(spot, spot); // press and let go in place
+    assert_eq!(h.game.challenge_workspace().unwrap().session.total(), before);
+    assert!(h.game.challenge_workspace().unwrap().drag.is_none(), "nothing left in hand");
+}
+
+#[test]
+fn a_counter_dropped_off_target_slides_home() {
+    let mut h = Harness::new(0);
+    sparky_small_challenge(&mut h);
+    h.press_show_me();
+
+    let before = h.game.challenge_workspace().unwrap().session.total();
+    let from = h.a_grabbable_counter();
+    h.drag(from, (5.0, 5.0)); // the far corner of the screen
+    assert_eq!(h.game.challenge_workspace().unwrap().session.total(), before);
+    assert_eq!(h.game.state, GameState::Challenge, "a stray drop doesn't close anything");
+}
+
+#[test]
+fn the_dev_bench_cycles_through_each_manipulative() {
+    use robot_buddy_domain::logic::manipulate_concrete::ConcreteKind;
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+
+    let mut kinds = Vec::new();
+    for _ in 0..robot_buddy_game::ui::concrete::BENCH.len() {
+        h.open_manipulatives_bench();
+        let ws = h.game.challenge_workspace().expect("the bench opens straight into the workspace");
+        kinds.push(ws.session.puzzle.kind);
+        h.build_the_model();
+        h.answer_correctly();
+        h.wait_until(|g| g.state == GameState::Playing);
+    }
+    assert_eq!(kinds, vec![ConcreteKind::AddGroups, ConcreteKind::TakeAway]);
+}
