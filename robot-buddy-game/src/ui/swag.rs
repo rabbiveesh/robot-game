@@ -118,9 +118,9 @@ fn build(m: &SwagModel, page: Page) -> Node<SwagId> {
             .id(SwagId::Panel)
             // As tall as the wardrobe needs, up to the screen; paging only
             // kicks in once even the whole screen can't hold it.
-            .w(PANEL_W)
+            .w_pct(1.0)
+            .max_w(PANEL_W)
             .min_h(0.0)
-            .min_w(0.0)
             .pad_edges(32.0, 8.0, 16.0, 14.0)
             .gap(12.0)
             .child(header)

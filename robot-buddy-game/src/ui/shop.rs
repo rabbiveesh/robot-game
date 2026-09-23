@@ -19,7 +19,7 @@ use robot_buddy_domain::economy::shop::{ItemKind, ShopItem, ShopKind, TradeQuote
 
 use crate::input::FrameInput;
 use crate::ui::layout::{
-    self, button, col, paint, region, row, spacer, text, Fit, Frame, Justify, Kind, Node, Page,
+    self, button, col, paint, region, row, spacer, text, Align, Fit, Frame, Justify, Kind, Node, Page,
 };
 pub use crate::ui::layout::UiRect;
 
@@ -169,13 +169,13 @@ fn catalog_row(i: usize, item: &ShopItem, owned: bool) -> Node<ShopId> {
 }
 
 fn answer_tiles(choices: &[u32]) -> Node<ShopId> {
-    // Tiles give up height before anything clips (kid-sized floor: 60px).
-    row().gap(18.0).justify(Justify::Center).min_h(60.0).children(choices.iter().enumerate().map(|(i, v)| {
-        button(ShopId::Answer(i), ShopId::AnswerLabel(i), v.to_string(), 36, Fit::shrink(18))
-            .size(90.0, 90.0)
-            .min_w(48.0)
-            
-    }))
+    // Tiles give up height before anything clips (kid-sized floor: 60px):
+    // the row shrinks, the tiles stretch to it.
+    row().gap(18.0).justify(Justify::Center).align(Align::Stretch).h(90.0).min_h(60.0).children(
+        choices.iter().enumerate().map(|(i, v)| {
+            button(ShopId::Answer(i), ShopId::AnswerLabel(i), v.to_string(), 36, Fit::shrink(18)).w(90.0).min_w(48.0)
+        }),
+    )
 }
 
 /// Rows of the pile needed for the trade quote (the grouping IS the division).
@@ -241,8 +241,9 @@ fn build(m: &ShopModel, page: Page) -> Node<ShopId> {
         }
         ShopView::PickingColor { colors, .. } => {
             let grid = col().gap(18.0).children(colors.chunks(4).enumerate().map(|(r, chunk)| {
-                row().gap(18.0).justify(Justify::Center).min_h(56.0).children(
-                    (0..chunk.len()).map(|c| region(90.0, 90.0).id(ShopId::Swatch(r * 4 + c)).hit().min_w(40.0)),
+                // Rows shrink toward 56px on a short screen; swatches stretch to them.
+                row().gap(18.0).justify(Justify::Center).align(Align::Stretch).h(90.0).min_h(56.0).children(
+                    (0..chunk.len()).map(|c| region(90.0, 0.0).auto_h().id(ShopId::Swatch(r * 4 + c)).hit().min_w(40.0)),
                 )
             }));
             col().grow(1.0).min_h(0.0).gap(24.0).children([questions, grid])
@@ -270,9 +271,11 @@ fn build(m: &ShopModel, page: Page) -> Node<ShopId> {
     layout::centered_on_screen(
         col()
             .id(ShopId::Panel)
-            .size(PANEL_W, PANEL_H)
+            // PANEL_W wide, or the whole screen if that's narrower.
+            .w_pct(1.0)
+            .max_w(PANEL_W)
+            .h(PANEL_H)
             .min_h(0.0)
-            .min_w(0.0)
             .pad_edges(32.0, 12.0, 16.0, 14.0)
             .gap(12.0)
             .children([header, body, footer]),

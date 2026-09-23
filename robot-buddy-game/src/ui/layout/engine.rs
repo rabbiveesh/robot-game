@@ -65,12 +65,54 @@ impl<'a> LayoutTree<'a> {
 }
 
 pub trait LayoutEngine {
-    /// Lay the tree out inside `bounds` (node 0 is the root). Contract every
-    /// engine must keep:
-    /// * every placed child lies inside its parent's padding box, and
-    /// * siblings never overlap.
+    /// Lay the tree out with the root filling `bounds` (node 0 is the root;
+    /// its own size style is ignored). Returns one absolute rect per node, in
+    /// pre-order. Contract every engine must keep — it's what the taffy
+    /// differential test holds `FlowEngine` to:
     ///
-    /// Anything that can't satisfy both is returned as `None` (clipped).
+    /// * **CSS flexbox semantics** for the vocabulary in `node.rs`, including
+    ///   overflow: a child that doesn't fit is *not* capped or dropped here;
+    ///   it pokes out of its parent exactly as it would in a browser (and
+    ///   `justify`/`align` Center/End on overflow push it out of the *start*
+    ///   side too);
+    /// * **whole pixels**: edges rounded like taffy's `round_layout` (see
+    ///   [`round_edges`]).
+    ///
     /// Text leaves are measured with [`super::text`] against `metrics`.
-    fn compute(&self, tree: &LayoutTree, bounds: UiRect, metrics: &dyn TextMetrics) -> Rects;
+    /// Overflow becomes clipping in [`clip`], which every engine shares.
+    fn compute(&self, tree: &LayoutTree, bounds: UiRect, metrics: &dyn TextMetrics) -> Vec<UiRect>;
+}
+
+/// Round absolute rects to whole pixels the way taffy does: each edge goes to
+/// the nearest pixel independently (so abutting boxes stay abutting, and a
+/// box's size can change by a pixel).
+pub fn round_edges(rects: &mut [UiRect]) {
+    for r in rects {
+        let (x0, y0) = (r.x.round(), r.y.round());
+        let (x1, y1) = ((r.x + r.w).round(), (r.y + r.h).round());
+        *r = UiRect::new(x0, y0, x1 - x0, y1 - y0);
+    }
+}
+
+/// The shared clip post-pass: turn CSS overflow into "didn't fit". A node
+/// whose box leaves its parent's content box (its rect minus padding) by more
+/// than [`EPS`](super::rect::EPS), in any direction, is `None` together with
+/// its whole subtree. `Frame::clipped` reports them; paging and the sanity
+/// sweep read that.
+pub fn clip(tree: &LayoutTree, raw: &[UiRect]) -> Rects {
+    fn walk(tree: &LayoutTree, raw: &[UiRect], n: usize, out: &mut Rects) {
+        out[n] = Some(raw[n]);
+        let p = tree.nodes[n].style.padding;
+        let content = raw[n].inset(p.left, p.top, p.right, p.bottom);
+        for &c in &tree.nodes[n].children {
+            if content.contains_rect(&raw[c]) {
+                walk(tree, raw, c, out);
+            }
+        }
+    }
+    let mut out = vec![None; raw.len()];
+    if !raw.is_empty() {
+        walk(tree, raw, 0, &mut out);
+    }
+    out
 }

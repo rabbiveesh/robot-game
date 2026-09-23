@@ -116,8 +116,8 @@ fn actions(view: &QuestView) -> Node<QuestId> {
 pub fn layout(view: &QuestView, title: &str, message: Option<&str>, screen: (f32, f32)) -> QuestLayout {
     let panel = col()
         .id(QuestId::Panel)
-        .w(PANEL_W)
-        .min_w(0.0)
+        .w_pct(1.0)
+        .max_w(PANEL_W)
         .min_h(PANEL_H.min(screen.1 - 2.0 * MARGIN))
         .pad_edges(28.0, 14.0, 28.0, 20.0)
         .gap(12.0)

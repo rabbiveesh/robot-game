@@ -31,11 +31,23 @@ pub enum Justify {
     SpaceBetween,
 }
 
-/// A preferred size (`taffy::Dimension`). Percentages aren't needed yet.
+/// A preferred size (`taffy::Dimension`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Dim {
     Auto,
     Px(f32),
+    /// A fraction (1.0 = 100%) of the parent's content box in that axis.
+    /// Like CSS, it only resolves when that size is known (placement); while
+    /// measuring content it behaves as `Auto`.
+    Percent(f32),
+}
+
+/// A min/max size (`taffy::Dimension` without `Auto`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Len {
+    Px(f32),
+    /// A fraction of the parent's content box; ignored while measuring content.
+    Percent(f32),
 }
 
 /// Padding (`taffy::Rect<LengthPercentage>`).
@@ -70,10 +82,10 @@ pub struct Style {
     pub gap: f32,
     pub width: Dim,
     pub height: Dim,
-    pub min_width: Option<f32>,
-    pub max_width: Option<f32>,
-    pub min_height: Option<f32>,
-    pub max_height: Option<f32>,
+    pub min_width: Option<Len>,
+    pub max_width: Option<Len>,
+    pub min_height: Option<Len>,
+    pub max_height: Option<Len>,
     pub flex_grow: f32,
     pub flex_shrink: f32,
     pub align_items: Align,
@@ -233,8 +245,8 @@ pub fn region<Id>(w: f32, h: f32) -> Node<Id> {
 pub fn spacer<Id>() -> Node<Id> {
     let mut n = Node { style: Style::default(), content: Content::Region, id: None, hit: false };
     n.style.flex_grow = 1.0;
-    n.style.min_width = Some(0.0);
-    n.style.min_height = Some(0.0);
+    n.style.min_width = Some(Len::Px(0.0));
+    n.style.min_height = Some(Len::Px(0.0));
     n
 }
 
@@ -285,6 +297,18 @@ impl<Id> Node<Id> {
         self.style.height = Dim::Px(v);
         self
     }
+    /// Width as a fraction of the parent's content width (`1.0` = 100%).
+    /// `.w_pct(1.0).max_w(760.0)` is the flexbox way to say "760 wide, or
+    /// the parent's whole width if that's narrower".
+    pub fn w_pct(mut self, f: f32) -> Self {
+        self.style.width = Dim::Percent(f);
+        self
+    }
+    /// Height as a fraction of the parent's content height.
+    pub fn h_pct(mut self, f: f32) -> Self {
+        self.style.height = Dim::Percent(f);
+        self
+    }
     /// Content/stretch width instead of a fixed one.
     pub fn auto_w(mut self) -> Self {
         self.style.width = Dim::Auto;
@@ -299,19 +323,29 @@ impl<Id> Node<Id> {
         self.w(w).h(h)
     }
     pub fn min_w(mut self, v: f32) -> Self {
-        self.style.min_width = Some(v);
+        self.style.min_width = Some(Len::Px(v));
         self
     }
     pub fn max_w(mut self, v: f32) -> Self {
-        self.style.max_width = Some(v);
+        self.style.max_width = Some(Len::Px(v));
         self
     }
     pub fn min_h(mut self, v: f32) -> Self {
-        self.style.min_height = Some(v);
+        self.style.min_height = Some(Len::Px(v));
         self
     }
     pub fn max_h(mut self, v: f32) -> Self {
-        self.style.max_height = Some(v);
+        self.style.max_height = Some(Len::Px(v));
+        self
+    }
+    /// `min-height` as a fraction of the parent's content height.
+    pub fn min_h_pct(mut self, f: f32) -> Self {
+        self.style.min_height = Some(Len::Percent(f));
+        self
+    }
+    /// `max-height` as a fraction of the parent's content height.
+    pub fn max_h_pct(mut self, f: f32) -> Self {
+        self.style.max_height = Some(Len::Percent(f));
         self
     }
     pub fn grow(mut self, v: f32) -> Self {

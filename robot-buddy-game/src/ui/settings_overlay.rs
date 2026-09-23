@@ -97,9 +97,15 @@ fn toggle_row(id: SettingsId, label_id: SettingsId, label: String, size: u16, h:
     button(id, label_id, label, size, Fit::shrink(12)).h(h).min_h(MIN_BUTTON_H)
 }
 
-/// Three equal buttons side by side.
-fn thirds(buttons: impl IntoIterator<Item = Node<SettingsId>>) -> Node<SettingsId> {
-    row().gap(10.0).min_h(MIN_BUTTON_H).children(buttons.into_iter().map(|b| b.grow(1.0).min_w(0.0)))
+/// Three equal buttons side by side, `h` tall; the row gives up height
+/// (down to MIN_BUTTON_H) on a short window and the buttons stretch to it.
+fn thirds(h: f32, buttons: impl IntoIterator<Item = Node<SettingsId>>) -> Node<SettingsId> {
+    row()
+        .gap(10.0)
+        .align(layout::Align::Stretch)
+        .h(h)
+        .min_h(MIN_BUTTON_H)
+        .children(buttons.into_iter().map(|b| b.grow(1.0).min_w(0.0)))
 }
 
 fn build(m: SettingsModel, screen: (f32, f32)) -> Node<SettingsId> {
@@ -120,16 +126,16 @@ fn build(m: SettingsModel, screen: (f32, f32)) -> Node<SettingsId> {
             // Arcade pace: parents need to know this is the arcade's speed,
             // not the child's level.
             .child(label("Arcade speed", SettingsId::PaceLabel))
-            .child(thirds(GamePace::ALL.iter().map(|&p| {
-                button(SettingsId::Pace(p), SettingsId::PaceText(p), p.label(), 20, Fit::shrink(12)).h(44.0)
+            .child(thirds(44.0, GamePace::ALL.iter().map(|&p| {
+                button(SettingsId::Pace(p), SettingsId::PaceText(p), p.label(), 20, Fit::shrink(12))
             })))
             .child(text("Experimental — for playtesting", 16, Fit::shrink(11)).id(SettingsId::Note).fixed())
     });
 
     let panel = col()
         .id(SettingsId::Panel)
-        .w(480.0_f32.min(screen.0 - 80.0).max(0.0))
-        .min_w(0.0)
+        .w_pct(1.0)
+        .max_w(480.0)
         .min_h(540.0_f32.min(screen.1 - 40.0))
         .pad_edges(28.0, 18.0, 28.0, 10.0)
         .gap(gap)
@@ -140,8 +146,8 @@ fn build(m: SettingsModel, screen: (f32, f32)) -> Node<SettingsId> {
         .maybe((!m.parent_open).then(|| {
             col().gap(6.0).pad_edges(0.0, 8.0, 0.0, 0.0).children([
                 label("Text speed", SettingsId::SpeedLabel),
-                thirds(SPEEDS.iter().map(|&ts| {
-                    button(SettingsId::Speed(ts), SettingsId::SpeedText(ts), ts.label(), 22, Fit::shrink(12)).h(48.0)
+                thirds(48.0, SPEEDS.iter().map(|&ts| {
+                    button(SettingsId::Speed(ts), SettingsId::SpeedText(ts), ts.label(), 22, Fit::shrink(12))
                 })),
             ])
         }))

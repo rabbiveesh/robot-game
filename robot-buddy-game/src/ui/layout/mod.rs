@@ -54,7 +54,7 @@ pub use engine::{LayoutEngine, LayoutTree};
 pub use frame::{Clipped, Element, Frame, Kind, PlacedLine, PlacedText};
 pub use metrics::{FontMetrics, TextMetrics};
 pub use node::{
-    button, col, gap_box, region, row, spacer, text, Align, Dim, Direction, Edges, Fit, Justify, Node, Style,
+    button, col, gap_box, region, row, spacer, text, Align, Dim, Direction, Edges, Fit, Justify, Len, Node, Style,
     TextAlign,
 };
 pub use page::{paged, Page};
@@ -77,7 +77,9 @@ pub fn layout_with<Id: Copy + PartialEq + Debug, E: LayoutEngine>(
     root: &Node<Id>,
     bounds: UiRect,
 ) -> Frame<Id> {
-    let rects = engine.compute(&LayoutTree::new(root), bounds, metrics);
+    let tree = LayoutTree::new(root);
+    let raw = engine.compute(&tree, bounds, metrics);
+    let rects = engine::clip(&tree, &raw);
     Frame::resolve(root, &rects, bounds, metrics)
 }
 
@@ -87,8 +89,11 @@ pub fn screen_rect(screen: (f32, f32)) -> UiRect {
 }
 
 /// Wrap a panel in a full-screen root that centers it with `margin` on every
-/// side. The panel should carry `.w()/.h()` (or `.max_*`) for its preferred
-/// size; it shrinks to fit small screens.
+/// side. Height is the root's main axis, so a panel's `.h()` shrinks to fit a
+/// short screen like any flex item. Width is the cross axis, where CSS never
+/// shrinks anything: give the panel `.w_pct(1.0).max_w(PANEL_W)` ("PANEL_W,
+/// or all the room there is"), not `.w(PANEL_W)`, or it overflows (and is
+/// clipped) on a narrow phone.
 pub fn centered_on_screen<Id>(panel: Node<Id>, margin: f32) -> Node<Id> {
     col().pad(margin).align(Align::Center).justify(Justify::Center).child(panel)
 }
@@ -117,7 +122,9 @@ mod tests {
         centered_on_screen(
             col()
                 .id(T::Panel)
-                .size(400.0, 300.0)
+                .w_pct(1.0)
+                .max_w(400.0)
+                .h(300.0)
                 .pad(16.0)
                 .gap(8.0)
                 .child(text("A title", 30, Fit::shrink(16)).id(T::Title).center_text().fixed())

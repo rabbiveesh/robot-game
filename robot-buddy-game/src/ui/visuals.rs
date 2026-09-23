@@ -175,7 +175,9 @@ pub fn plan(challenge: &Challenge, max_w: f32) -> Visual {
 /// `w > max_w` and the layout sweep says so.
 pub fn extent(challenge: &Challenge, max_w: f32) -> VisualExtent {
     let v = plan(challenge, max_w);
-    VisualExtent { w: v.bbox.w, h: v.bbox.h }
+    // Whole pixels: layout rounds box edges, and a fractional reservation
+    // could round down below what's drawn.
+    VisualExtent { w: v.bbox.w.ceil(), h: v.bbox.h.ceil() }
 }
 
 /// Paint `challenge`'s visual centered in `rect` (the region the layout
@@ -538,7 +540,7 @@ mod tests {
                     "{} {} {} (band {}, {}) is {}px wide in a {max_w}px slot",
                     c.numbers.a, c.numbers.op, c.numbers.b, c.sampled_band, c.numbers.format, v.bbox.w
                 );
-                assert_eq!(extent(&c, max_w), VisualExtent { w: v.bbox.w, h: v.bbox.h });
+                assert_eq!(extent(&c, max_w), VisualExtent { w: v.bbox.w.ceil(), h: v.bbox.h.ceil() });
             }
         }
     }

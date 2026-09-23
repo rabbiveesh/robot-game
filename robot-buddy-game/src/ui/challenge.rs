@@ -13,7 +13,7 @@ use robot_buddy_domain::types::Phase;
 
 use super::visuals;
 use crate::input::FrameInput;
-use crate::ui::layout::{self, col, paint, region, row, text, Fit, Frame, Justify, Kind, Node};
+use crate::ui::layout::{self, col, paint, region, row, text, Align, Fit, Frame, Justify, Kind, Node};
 pub use crate::ui::layout::UiRect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,14 +77,14 @@ fn visual(h: f32) -> Node<ChallengeId> {
 /// A labelled scaffold button ("Show me" / "Tell me").
 fn scaffold(id: ChallengeId, label_id: ChallengeId, label: &str) -> Node<ChallengeId> {
     // Preferred 150 wide; squeezes (never clips) on a narrow phone.
-    layout::button(id, label_id, label, 22, Fit::shrink(14)).size(150.0, 46.0).min_w(96.0).shrink(1.0)
+    layout::button(id, label_id, label, 22, Fit::shrink(14)).w(150.0).min_w(96.0).shrink(1.0)
 }
 
 fn answer_button(i: usize, label: &str) -> Node<ChallengeId> {
     col()
         .id(ChallengeId::Choice(i))
         .hit()
-        .size(200.0, 88.0)
+        .w(200.0)
         .min_w(64.0)
         .pad_xy(10.0, 4.0)
         // Key hint (1, 2, 3) top-left; the answer centered between it and a
@@ -143,6 +143,9 @@ fn tree(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32), visual_h
             row()
                 .gap(12.0)
                 .justify(Justify::Center)
+                // The row gives up height on a short screen; the buttons stretch to it.
+                .align(Align::Stretch)
+                .h(46.0)
                 .min_h(38.0)
                 // Show me — available until the visual is displayed.
                 .maybe((!cs.hint_used).then(|| scaffold(ChallengeId::ShowMe, ChallengeId::ShowMeLabel, "Show me")))
@@ -167,6 +170,8 @@ fn tree(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32), visual_h
                 row()
                     .gap(20.0)
                     .justify(Justify::Center)
+                    .align(Align::Stretch)
+                    .h(88.0)
                     .min_h(64.0)
                     .children(challenge.choices.iter().enumerate().map(|(i, c)| answer_button(i, &c.text))),
             )
@@ -176,7 +181,8 @@ fn tree(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32), visual_h
             .maybe(complete.then(|| text("Press SPACE to continue", 22, Fit::shrink(14)).id(ChallengeId::Dismiss).center_text().fixed()))
     };
 
-    let panel = panel.id(ChallengeId::Panel).w(PANEL_W).min_w(0.0).pad_edges(24.0, pad_top, 24.0, 20.0);
+    // PANEL_W wide, or the whole screen if that's narrower.
+    let panel = panel.id(ChallengeId::Panel).w_pct(1.0).max_w(PANEL_W).pad_edges(24.0, pad_top, 24.0, 20.0);
     layout::centered_on_screen(panel, MARGIN)
 }
 
