@@ -1,8 +1,13 @@
+//! Settings overlay (T / the gear): read-aloud, text speed, and the
+//! parent-only experimental section. Laid out through `ui::layout`; the same
+//! `Frame` is painted and hit-tested, section labels included.
+
 use crate::prelude::*;
 use crate::settings::{self, TextSpeed};
 use robot_buddy_domain::types::GamePace;
 use crate::game::FeatureFlags;
 use crate::input::FrameInput;
+use crate::ui::layout::{self, button, col, paint, row, spacer, text, Fit, Frame, Justify, Kind, Node};
 
 /// Which experimental in-development feature a parent toggled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,258 +37,190 @@ const LABEL_GRAY: Color = Color::new(0.690, 0.745, 0.773, 1.0);    // #B0BEC5
 const BTN_OFF: Color = Color::new(0.216, 0.278, 0.310, 1.0);       // #37474F
 const BTN_TXT_OFF: Color = Color::new(0.565, 0.643, 0.682, 1.0);   // #90A4AE
 const HINT_GRAY: Color = Color::new(0.329, 0.431, 0.478, 1.0);     // #546E7A
-
-struct Row {
-    rect: (f32, f32, f32, f32),
-    action: RowAction,
-}
-
-#[derive(Clone, Copy)]
-enum RowAction {
-    ToggleTts,
-    SetSpeed(TextSpeed),
-    ToggleParentPanel,
-    ToggleFeature(Feature),
-    ExportSession,
-    SetPace(GamePace),
-    BackToTitle,
-    Done,
-}
-
-fn round_rect(x: f32, y: f32, w: f32, h: f32, r: f32, color: Color) {
-    draw_rectangle(x + r, y, w - 2.0 * r, h, color);
-    draw_rectangle(x, y + r, w, h - 2.0 * r, color);
-    draw_circle(x + r, y + r, r, color);
-    draw_circle(x + w - r, y + r, r, color);
-    draw_circle(x + r, y + h - r, r, color);
-    draw_circle(x + w - r, y + h - r, r, color);
-}
+const DARK_TXT: Color = Color::new(26.0 / 255.0, 26.0 / 255.0, 46.0 / 255.0, 1.0);
 
 const FEATURES: [(Feature, &str); 2] = [
     (Feature::Encounters, "Random encounters"),
     (Feature::Quest, "Quests"),
 ];
 
-/// Lay the overlay out top-down. The parent section (and its feature rows) only
-/// take space when `parent_open`, so the panel grows to fit.
-fn layout(screen: (f32, f32), parent_open: bool) -> (f32, f32, f32, f32, Vec<Row>) {
-    let (sw, sh) = screen;
-    let pad = 28.0;
-    let feature_h = 44.0;
-    let feature_gap = 10.0;
-    // Panel height: base content + the parent section when expanded.
-    let base_h = 540.0;
-    let extra = if parent_open {
-        // Feature toggles + the Export-session button + the arcade-pace row
-        // (which carries a section label above it).
-        (FEATURES.len() as f32 + 1.0) * (feature_h + feature_gap) + 24.0
-            + feature_h + feature_gap + 26.0
-    } else {
-        0.0
-    };
-    let panel_w = (sw - 80.0).min(480.0);
-    let panel_h = base_h + extra;
-    let panel_x = (sw - panel_w) / 2.0;
-    let panel_y = (sh - panel_h) / 2.0;
-    let inner_w = panel_w - pad * 2.0;
-    let mut rows = Vec::new();
+const SPEEDS: [TextSpeed; 3] = [TextSpeed::Slow, TextSpeed::Normal, TextSpeed::Fast];
 
-    // TTS toggle
-    let ts_y = panel_y + 80.0;
-    let ts_h = 56.0;
-    rows.push(Row { rect: (panel_x + pad, ts_y, inner_w, ts_h), action: RowAction::ToggleTts });
-
-    // Text speed — three side-by-side buttons
-    let speed_y = ts_y + ts_h + 54.0;
-    let speed_h = 48.0;
-    let speed_gap = 10.0;
-    let speed_w = (inner_w - speed_gap * 2.0) / 3.0;
-    for (i, ts) in [TextSpeed::Slow, TextSpeed::Normal, TextSpeed::Fast].iter().enumerate() {
-        let x = panel_x + pad + i as f32 * (speed_w + speed_gap);
-        rows.push(Row { rect: (x, speed_y, speed_w, speed_h), action: RowAction::SetSpeed(*ts) });
-    }
-
-    // Parent-options reveal
-    let parent_y = speed_y + speed_h + 40.0;
-    let parent_h = 44.0;
-    rows.push(Row { rect: (panel_x + pad, parent_y, inner_w, parent_h), action: RowAction::ToggleParentPanel });
-
-    // Experimental feature toggles (only when expanded)
-    let mut cursor = parent_y + parent_h + 12.0;
-    if parent_open {
-        for (feature, _) in FEATURES {
-            rows.push(Row { rect: (panel_x + pad, cursor, inner_w, feature_h), action: RowAction::ToggleFeature(feature) });
-            cursor += feature_h + feature_gap;
-        }
-        // Export the session data (parent dashboard action).
-        rows.push(Row { rect: (panel_x + pad, cursor, inner_w, feature_h), action: RowAction::ExportSession });
-        cursor += feature_h + feature_gap;
-
-        // Arcade pace — three side-by-side buttons under their own label.
-        cursor += 26.0; // room for the "Arcade speed" label
-        let pace_gap = 10.0;
-        let pace_w = (inner_w - pace_gap * 2.0) / 3.0;
-        for (i, p) in GamePace::ALL.iter().enumerate() {
-            let x = panel_x + pad + i as f32 * (pace_w + pace_gap);
-            rows.push(Row { rect: (x, cursor, pace_w, feature_h), action: RowAction::SetPace(*p) });
-        }
-        cursor += feature_h + feature_gap;
-        cursor += 12.0;
-    }
-
-    // Back to title
-    let btt_h = 48.0;
-    rows.push(Row { rect: (panel_x + pad, cursor, inner_w, btt_h), action: RowAction::BackToTitle });
-
-    // Done — bottom
-    let done_y = panel_y + panel_h - 72.0;
-    let done_h = 52.0;
-    rows.push(Row { rect: (panel_x + pad, done_y, inner_w, done_h), action: RowAction::Done });
-
-    (panel_x, panel_y, panel_w, panel_h, rows)
+/// Every element of the overlay. Buttons carry what they do; `*Label` ids are
+/// the text inside them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingsId {
+    Panel,
+    Title,
+    Tts,
+    TtsLabel,
+    SpeedLabel,
+    Speed(TextSpeed),
+    SpeedText(TextSpeed),
+    Parent,
+    ParentLabel,
+    Feature(Feature),
+    FeatureLabel(Feature),
+    Export,
+    ExportLabel,
+    PaceLabel,
+    Pace(GamePace),
+    PaceText(GamePace),
+    Note,
+    BackToTitle,
+    BackLabel,
+    Done,
+    DoneLabel,
+    Hint,
 }
 
-fn center((x, y, w, h): (f32, f32, f32, f32)) -> (f32, f32) {
-    (x + w / 2.0, y + h / 2.0)
+/// What the overlay shows: the live flags plus the parent-panel reveal.
+#[derive(Clone, Copy)]
+pub struct SettingsModel {
+    pub features: FeatureFlags,
+    pub parent_open: bool,
+    pub pace: GamePace,
+}
+
+fn feature_on(features: FeatureFlags, f: Feature) -> bool {
+    match f {
+        Feature::Encounters => features.encounters,
+        Feature::Quest => features.quest,
+    }
+}
+
+/// Buttons give up height (down to a still-tappable 32px) before anything
+/// is clipped on a short window.
+const MIN_BUTTON_H: f32 = 32.0;
+
+fn toggle_row(id: SettingsId, label_id: SettingsId, label: String, size: u16, h: f32) -> Node<SettingsId> {
+    button(id, label_id, label, size, Fit::shrink(12)).h(h).min_h(MIN_BUTTON_H)
+}
+
+/// Three equal buttons side by side.
+fn thirds(buttons: impl IntoIterator<Item = Node<SettingsId>>) -> Node<SettingsId> {
+    row().gap(10.0).min_h(MIN_BUTTON_H).children(buttons.into_iter().map(|b| b.grow(1.0).min_w(0.0)))
+}
+
+fn build(m: SettingsModel, screen: (f32, f32)) -> Node<SettingsId> {
+    let tts = if settings::tts_enabled() { "Read dialogue aloud: ON" } else { "Read dialogue aloud: OFF" };
+    let parent_label = if m.parent_open { "Parent options  ▾" } else { "Parent options  ▸" };
+    let label = |s: &str, id| text(s, 18, Fit::shrink(12)).id(id).fixed();
+    let gap = if screen.1 < 600.0 { 6.0 } else { 10.0 };
+
+    let parent_section = m.parent_open.then(|| {
+        col()
+            .gap(gap)
+            .children(FEATURES.iter().map(|&(f, name)| {
+                let state = if feature_on(m.features, f) { "ON" } else { "OFF" };
+                toggle_row(SettingsId::Feature(f), SettingsId::FeatureLabel(f), format!("{name}: {state}"), 20, 44.0)
+            }))
+            // Export the session data (parent dashboard action).
+            .child(toggle_row(SettingsId::Export, SettingsId::ExportLabel, "Export session data".into(), 20, 44.0))
+            // Arcade pace: parents need to know this is the arcade's speed,
+            // not the child's level.
+            .child(label("Arcade speed", SettingsId::PaceLabel))
+            .child(thirds(GamePace::ALL.iter().map(|&p| {
+                button(SettingsId::Pace(p), SettingsId::PaceText(p), p.label(), 20, Fit::shrink(12)).h(44.0)
+            })))
+            .child(text("Experimental — for playtesting", 16, Fit::shrink(11)).id(SettingsId::Note).fixed())
+    });
+
+    let panel = col()
+        .id(SettingsId::Panel)
+        .w(480.0_f32.min(screen.0 - 80.0).max(0.0))
+        .min_w(0.0)
+        .min_h(540.0_f32.min(screen.1 - 40.0))
+        .pad_edges(28.0, 18.0, 28.0, 10.0)
+        .gap(gap)
+        .child(text("Settings", 36, Fit::shrink(20)).id(SettingsId::Title).center_text().fixed())
+        // The parent section is its own page: it replaces the kid's settings
+        // while open (both together never fit a default window).
+        .maybe((!m.parent_open).then(|| toggle_row(SettingsId::Tts, SettingsId::TtsLabel, tts.into(), 22, 56.0)))
+        .maybe((!m.parent_open).then(|| {
+            col().gap(6.0).pad_edges(0.0, 8.0, 0.0, 0.0).children([
+                label("Text speed", SettingsId::SpeedLabel),
+                thirds(SPEEDS.iter().map(|&ts| {
+                    button(SettingsId::Speed(ts), SettingsId::SpeedText(ts), ts.label(), 22, Fit::shrink(12)).h(48.0)
+                })),
+            ])
+        }))
+        .child(toggle_row(SettingsId::Parent, SettingsId::ParentLabel, parent_label.into(), 22, 44.0))
+        .maybe(parent_section)
+        .child(toggle_row(SettingsId::BackToTitle, SettingsId::BackLabel, "Back to title screen".into(), 22, 48.0))
+        .child(spacer())
+        .child(toggle_row(SettingsId::Done, SettingsId::DoneLabel, "Done".into(), 26, 52.0))
+        .child(text("Press T or ESC to close", 18, Fit::shrink(12)).id(SettingsId::Hint).center_text().fixed());
+    col().pad(20.0).align(layout::Align::Center).justify(Justify::Center).child(panel)
+}
+
+/// Lay the overlay out top-down. The parent section only takes space when
+/// open, so the panel grows to fit (up to the screen). Pure.
+pub fn layout(screen: (f32, f32), m: SettingsModel) -> Frame<SettingsId> {
+    layout::layout(&build(m, screen), layout::screen_rect(screen))
+}
+
+fn center_of(screen: (f32, f32), parent_open: bool, id: SettingsId) -> (f32, f32) {
+    let m = SettingsModel { features: FeatureFlags::default(), parent_open, pace: GamePace::ALL[0] };
+    layout(screen, m).rect(id).unwrap_or_else(|| panic!("{id:?} not laid out")).center()
 }
 
 /// Screen-space center of the "Parent options" reveal row (for input/tests).
 pub fn parent_toggle_center(screen: (f32, f32)) -> (f32, f32) {
-    let (_, _, _, _, rows) = layout(screen, false);
-    rows.iter()
-        .find_map(|r| matches!(r.action, RowAction::ToggleParentPanel).then(|| center(r.rect)))
-        .expect("parent toggle row always present")
+    center_of(screen, false, SettingsId::Parent)
 }
 
 /// Center of an arcade-pace button (the parent panel must be open).
 pub fn pace_button_center(screen: (f32, f32), pace: GamePace) -> (f32, f32) {
-    let (_, _, _, _, rows) = layout(screen, true);
-    rows.iter()
-        .find_map(|r| match r.action {
-            RowAction::SetPace(p) if p == pace => Some(center(r.rect)),
-            _ => None,
-        })
-        .expect("pace buttons present when parent panel open")
+    center_of(screen, true, SettingsId::Pace(pace))
 }
 
 /// Center of a feature toggle row (the parent panel must be open to show them).
 pub fn feature_toggle_center(screen: (f32, f32), feature: Feature) -> (f32, f32) {
-    let (_, _, _, _, rows) = layout(screen, true);
-    rows.iter()
-        .find_map(|r| match r.action {
-            RowAction::ToggleFeature(f) if f == feature => Some(center(r.rect)),
-            _ => None,
-        })
-        .expect("feature toggle row present when parent panel open")
+    center_of(screen, true, SettingsId::Feature(feature))
 }
 
-pub fn draw(screen: (f32, f32), features: FeatureFlags, parent_open: bool, pace: GamePace) {
-    let (sw, sh) = screen;
-    draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.75));
-
-    let (panel_x, panel_y, panel_w, panel_h, rows) = layout(screen, parent_open);
-
-    round_rect(panel_x, panel_y, panel_w, panel_h, 16.0, PANEL_BG);
-    draw_rectangle_lines(panel_x, panel_y, panel_w, panel_h, 3.0, ACCENT);
-
-    let title = "Settings";
-    let tw = measure_text(title, None, 36, 1.0).width;
-    draw_text(title, panel_x + panel_w / 2.0 - tw / 2.0, panel_y + 48.0, 36.0, ACCENT);
-
-    let feature_on = |f: Feature| match f {
-        Feature::Encounters => features.encounters,
-        Feature::Quest => features.quest,
-    };
-    let feature_label = |f: Feature| FEATURES.iter().find(|(ff, _)| *ff == f).map(|(_, l)| *l).unwrap_or("");
-
-    for row in &rows {
-        let (x, y, w, h) = row.rect;
-        match row.action {
-            RowAction::ToggleTts => {
-                let on = settings::tts_enabled();
-                let bg = if on { ACCENT } else { BTN_OFF };
-                let fg = if on { Color::from_rgba(26, 26, 46, 255) } else { BTN_TXT_OFF };
-                round_rect(x, y, w, h, 8.0, bg);
-                let label = if on { "Read dialogue aloud: ON" } else { "Read dialogue aloud: OFF" };
-                let lw = measure_text(label, None, 22, 1.0).width;
-                draw_text(label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 8.0, 22.0, fg);
+pub fn draw(screen: (f32, f32), m: SettingsModel) {
+    let f = layout(screen, m);
+    paint::dim(f.bounds, 0.75);
+    let on_off = |on: bool| if on { (ACCENT, DARK_TXT) } else { (BTN_OFF, BTN_TXT_OFF) };
+    for el in f.elements() {
+        let Some(id) = el.id else { continue };
+        let r = el.rect;
+        if let Kind::Text(t) = &el.kind {
+            let color = match id {
+                SettingsId::Title | SettingsId::ExportLabel => ACCENT,
+                SettingsId::SpeedLabel | SettingsId::PaceLabel | SettingsId::ParentLabel => LABEL_GRAY,
+                SettingsId::Note | SettingsId::Hint => HINT_GRAY,
+                SettingsId::TtsLabel => on_off(settings::tts_enabled()).1,
+                SettingsId::SpeedText(ts) => on_off(settings::text_speed() == ts).1,
+                SettingsId::FeatureLabel(ft) => on_off(feature_on(m.features, ft)).1,
+                SettingsId::PaceText(p) => on_off(m.pace == p).1,
+                SettingsId::DoneLabel => DARK_TXT,
+                _ => BTN_TXT_OFF,
+            };
+            paint::text(t, color);
+            continue;
+        }
+        match id {
+            SettingsId::Panel => {
+                paint::round_rect(r, 16.0, PANEL_BG);
+                paint::outline(r, 3.0, ACCENT);
             }
-            RowAction::SetSpeed(ts) => {
-                let active = settings::text_speed() == ts;
-                let bg = if active { ACCENT } else { BTN_OFF };
-                let fg = if active { Color::from_rgba(26, 26, 46, 255) } else { BTN_TXT_OFF };
-                round_rect(x, y, w, h, 8.0, bg);
-                let label = ts.label();
-                let lw = measure_text(label, None, 22, 1.0).width;
-                draw_text(label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 8.0, 22.0, fg);
-            }
-            RowAction::ToggleParentPanel => {
-                round_rect(x, y, w, h, 8.0, BTN_OFF);
-                let label = if parent_open { "Parent options  ▾" } else { "Parent options  ▸" };
-                let lw = measure_text(label, None, 22, 1.0).width;
-                draw_text(label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 8.0, 22.0, LABEL_GRAY);
-            }
-            RowAction::ToggleFeature(f) => {
-                let on = feature_on(f);
-                let bg = if on { ACCENT } else { BTN_OFF };
-                let fg = if on { Color::from_rgba(26, 26, 46, 255) } else { BTN_TXT_OFF };
-                round_rect(x, y, w, h, 8.0, bg);
-                let label = format!("{}: {}", feature_label(f), if on { "ON" } else { "OFF" });
-                let lw = measure_text(&label, None, 20, 1.0).width;
-                draw_text(&label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 7.0, 20.0, fg);
-            }
-            RowAction::SetPace(p) => {
-                // The first button carries the section label — parents need to
-                // know this is the arcade's speed, not the child's level.
-                if p == GamePace::ALL[0] {
-                    draw_text("Arcade speed", x, y - 8.0, 18.0, LABEL_GRAY);
-                }
-                let active = pace == p;
-                let bg = if active { ACCENT } else { BTN_OFF };
-                let fg = if active { Color::from_rgba(26, 26, 46, 255) } else { BTN_TXT_OFF };
-                round_rect(x, y, w, h, 8.0, bg);
-                let label = p.label();
-                let lw = measure_text(label, None, 20, 1.0).width;
-                draw_text(label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 7.0, 20.0, fg);
-            }
-            RowAction::ExportSession => {
-                round_rect(x, y, w, h, 8.0, BTN_OFF);
-                let label = "Export session data";
-                let lw = measure_text(label, None, 20, 1.0).width;
-                draw_text(label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 7.0, 20.0, ACCENT);
-            }
-            RowAction::BackToTitle => {
-                round_rect(x, y, w, h, 8.0, BTN_OFF);
-                let label = "Back to title screen";
-                let lw = measure_text(label, None, 22, 1.0).width;
-                draw_text(label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 8.0, 22.0, BTN_TXT_OFF);
-            }
-            RowAction::Done => {
-                round_rect(x, y, w, h, 10.0, ACCENT);
-                let label = "Done";
-                let lw = measure_text(label, None, 26, 1.0).width;
-                draw_text(label, x + w / 2.0 - lw / 2.0, y + h / 2.0 + 9.0, 26.0, Color::from_rgba(26, 26, 46, 255));
-            }
+            SettingsId::Tts => paint::round_rect(r, 8.0, on_off(settings::tts_enabled()).0),
+            SettingsId::Speed(ts) => paint::round_rect(r, 8.0, on_off(settings::text_speed() == ts).0),
+            SettingsId::Feature(ft) => paint::round_rect(r, 8.0, on_off(feature_on(m.features, ft)).0),
+            SettingsId::Pace(p) => paint::round_rect(r, 8.0, on_off(m.pace == p).0),
+            SettingsId::Parent | SettingsId::Export | SettingsId::BackToTitle => paint::round_rect(r, 8.0, BTN_OFF),
+            SettingsId::Done => paint::round_rect(r, 10.0, ACCENT),
+            _ => {}
         }
     }
-
-    // "Text speed" section label, just above the speed buttons.
-    let speed_label_y = panel_y + 80.0 + 56.0 + 34.0;
-    draw_text("Text speed", panel_x + 28.0, speed_label_y, 18.0, LABEL_GRAY);
-
-    if parent_open {
-        let note = "Experimental — for playtesting";
-        draw_text(note, panel_x + 28.0, panel_y + panel_h - 92.0, 16.0, HINT_GRAY);
-    }
-
-    let hint = "Press T or ESC to close";
-    let hw = measure_text(hint, None, 18, 1.0).width;
-    draw_text(hint, panel_x + panel_w / 2.0 - hw / 2.0, panel_y + panel_h - 12.0, 18.0, HINT_GRAY);
 }
 
 /// Handle input; returns a result if the overlay state should change. The
 /// caller owns the live feature flags and the parent-panel reveal state.
-pub fn handle_input(input: &FrameInput, screen: (f32, f32), parent_open: bool) -> Option<SettingsResult> {
+pub fn handle_input(input: &FrameInput, screen: (f32, f32), m: SettingsModel) -> Option<SettingsResult> {
     if input.pressed(KeyCode::Escape) || input.pressed(KeyCode::T) {
         return Some(SettingsResult::Close);
     }
@@ -291,30 +228,24 @@ pub fn handle_input(input: &FrameInput, screen: (f32, f32), parent_open: bool) -
         return None;
     }
     let (mx, my) = input.mouse_pos;
-    let (_, _, _, _, rows) = layout(screen, parent_open);
-    for row in rows {
-        let (x, y, w, h) = row.rect;
-        if mx >= x && mx <= x + w && my >= y && my <= y + h {
-            match row.action {
-                RowAction::ToggleTts => {
-                    settings::toggle_tts();
-                    if !settings::tts_enabled() {
-                        crate::audio::tts::cancel();
-                    }
-                    return None;
-                }
-                RowAction::SetPace(p) => return Some(SettingsResult::SetPace(p)),
-                RowAction::SetSpeed(ts) => {
-                    settings::set_text_speed(ts);
-                    return None;
-                }
-                RowAction::ToggleParentPanel => return Some(SettingsResult::ToggleParentPanel),
-                RowAction::ToggleFeature(f) => return Some(SettingsResult::ToggleFeature(f)),
-                RowAction::ExportSession => return Some(SettingsResult::ExportSession),
-                RowAction::BackToTitle => return Some(SettingsResult::BackToTitle),
-                RowAction::Done => return Some(SettingsResult::Close),
+    match layout(screen, m).hit_at(mx, my)? {
+        SettingsId::Tts => {
+            settings::toggle_tts();
+            if !settings::tts_enabled() {
+                crate::audio::tts::cancel();
             }
+            None
         }
+        SettingsId::Speed(ts) => {
+            settings::set_text_speed(ts);
+            None
+        }
+        SettingsId::Pace(p) => Some(SettingsResult::SetPace(p)),
+        SettingsId::Parent => Some(SettingsResult::ToggleParentPanel),
+        SettingsId::Feature(f) => Some(SettingsResult::ToggleFeature(f)),
+        SettingsId::Export => Some(SettingsResult::ExportSession),
+        SettingsId::BackToTitle => Some(SettingsResult::BackToTitle),
+        SettingsId::Done => Some(SettingsResult::Close),
+        _ => None,
     }
-    None
 }

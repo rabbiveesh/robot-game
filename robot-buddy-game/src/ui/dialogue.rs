@@ -1,4 +1,5 @@
 use crate::prelude::*;
+use crate::ui::layout::{self, col, gap_box, paint, row, spacer, Fit, Frame, Justify, Kind};
 use crate::audio;
 use crate::settings;
 
@@ -96,46 +97,86 @@ impl DialogueBox {
         }
     }
 
-    pub fn draw(&self) {
+    /// Draw the current line. Layout comes from [`layout`]; the typewriter
+    /// only reveals a prefix of lines broken on the FULL text, so words never
+    /// hop to the next line mid-sentence and the box never grows mid-line.
+    pub fn draw(&self, screen: (f32, f32)) {
         if !self.active { return; }
         let Some(line) = self.lines.get(self.current_line) else { return };
-
-        let sw = screen_width();
-        let sh = screen_height();
-        let box_h = 170.0;
-        let box_y = sh - box_h - 10.0;
-        let box_x = 10.0;
-        let box_w = sw - 20.0;
-
-        // Background
-        draw_rectangle(box_x, box_y, box_w, box_h, Color::from_rgba(20, 20, 40, 230));
-
-        // Border (colored by speaker)
-        let border_color = speaker_color(&line.speaker);
-        draw_rectangle_lines(box_x, box_y, box_w, box_h, 3.0, border_color);
-
-        // Speaker name tab
-        let name_w = line.speaker.len() as f32 * 13.0 + 30.0;
-        draw_rectangle(box_x + 15.0, box_y - 18.0, name_w, 34.0, border_color);
-        draw_text(&line.speaker, box_x + 27.0, box_y + 6.0, 26.0, Color::from_rgba(26, 26, 46, 255));
-
-        // Text with typewriter effect
-        let visible = &line.text[..self.char_index.min(line.text.len())];
-        let max_chars = ((box_w - 40.0) / 15.0) as usize;
-        let wrapped = word_wrap(visible, max_chars);
-        for (i, text_line) in wrapped.iter().enumerate() {
-            draw_text(text_line, box_x + 20.0, box_y + 52.0 + i as f32 * 32.0, 28.0, WHITE);
-        }
-
-        // "SPACE >" blink indicator
-        if self.waiting_for_input {
-            let blink = (get_time() * 6.0).sin() > 0.0;
-            if blink {
-                draw_text("SPACE >", box_x + box_w - 120.0, box_y + box_h - 18.0, 20.0,
-                    Color::from_rgba(150, 150, 150, 255));
+        let frame = layout(&line.speaker, &line.text, screen);
+        let border = speaker_color(&line.speaker);
+        let visible = line.text[..self.char_index.min(line.text.len())].chars().count();
+        for el in frame.elements() {
+            match (el.id, &el.kind) {
+                (Some(DialogueId::Area), _) => {
+                    // The box starts halfway down the name tab, which sits
+                    // across its top edge.
+                    let b = el.rect.inset(0.0, TAB_OVERHANG, 0.0, 0.0);
+                    paint::fill(b, Color::from_rgba(20, 20, 40, 230));
+                    paint::outline(b, 3.0, border);
+                }
+                (Some(DialogueId::Tab), _) => paint::fill(el.rect, border),
+                (Some(DialogueId::Speaker), Kind::Text(t)) => paint::text(t, Color::from_rgba(26, 26, 46, 255)),
+                (Some(DialogueId::Body), Kind::Text(t)) => paint::text_prefix(t, visible, WHITE),
+                (Some(DialogueId::Continue), Kind::Text(t)) if self.waiting_for_input && paint::blink(6.0) => {
+                    paint::text(t, Color::from_rgba(150, 150, 150, 255));
+                }
+                _ => {}
             }
         }
     }
+}
+
+/// How far the speaker's name tab rises above the box's top edge.
+const TAB_OVERHANG: f32 = 18.0;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogueId {
+    /// The whole dialogue area: the name tab plus the box under it.
+    Area,
+    Tab,
+    Speaker,
+    Body,
+    /// The "SPACE >" prompt, in a footer the body can never run into.
+    Continue,
+}
+
+/// Lay out one dialogue line along the bottom of the screen. Pure. The box is
+/// at least as tall as it always was and grows (up to 60% of the screen) for
+/// a long line; past that the text shrinks. "SPACE >" has its own reserved
+/// footer row.
+pub fn layout(speaker: &str, text: &str, screen: (f32, f32)) -> Frame<DialogueId> {
+    let (_, sh) = screen;
+    let area = col()
+        .id(DialogueId::Area)
+        .min_h(170.0 + TAB_OVERHANG)
+        .max_h((sh * 0.6).max(170.0 + TAB_OVERHANG))
+        .min_w(0.0)
+        .child(
+            row().h(34.0).fixed().child(gap_box(15.0, 0.0)).child(
+                row()
+                    .id(DialogueId::Tab)
+                    .h(34.0)
+                    .pad_xy(12.0, 0.0)
+                    .shrink(1.0)
+                    .child(layout::text(speaker, 26, Fit::shrink(14)).id(DialogueId::Speaker)),
+            ),
+        )
+        .child(
+            col()
+                .grow(1.0)
+                .pad_edges(20.0, 12.0, 20.0, 8.0)
+                .gap(6.0)
+                .child(layout::text(text, 28, Fit::wrap(16)).line_gap(4.0).id(DialogueId::Body))
+                .child(spacer())
+                .child(
+                    row().justify(Justify::End).fixed().child(
+                        layout::text("SPACE >", 20, Fit::shrink(14)).id(DialogueId::Continue),
+                    ),
+                ),
+        );
+    let root = col().pad(10.0).justify(Justify::End).child(area);
+    layout::layout(&root, layout::screen_rect(screen))
 }
 
 fn speaker_color(speaker: &str) -> Color {
@@ -149,27 +190,4 @@ fn speaker_color(speaker: &str) -> Color {
         "Old Oak" => Color::from_rgba(165, 214, 167, 255),
         _ => Color::from_rgba(255, 213, 79, 255),
     }
-}
-
-fn word_wrap(text: &str, max_chars: usize) -> Vec<String> {
-    let mut lines = vec![];
-    let mut current = String::new();
-
-    for word in text.split_whitespace() {
-        if current.len() + word.len() + 1 > max_chars && !current.is_empty() {
-            lines.push(current);
-            current = String::new();
-        }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
-    }
-    if !current.is_empty() {
-        lines.push(current);
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-    lines
 }
