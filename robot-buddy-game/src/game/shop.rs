@@ -121,9 +121,13 @@ impl Game {
                         ));
                     }
                     domain_shop::PurchaseOutcome::AlreadyOwned => {
-                        // You can only wear one of each — but give it to a
-                        // buddy and Bolt will happily sell you another.
-                        ash.message = Some("You're already wearing that one!".into());
+                        ash.message = Some(match item.kind {
+                            // A perk is carried, not worn — say it's working.
+                            ItemKind::Upgrade => format!("The {} is already yours!", item.name),
+                            // You can only wear one of each — but give it to a
+                            // buddy and the counter will happily sell another.
+                            _ => "You're already wearing that one!".into(),
+                        });
                     }
                     domain_shop::PurchaseOutcome::UnknownItem => {}
                 }

@@ -145,28 +145,22 @@ impl Game {
             LeapPhase::Found => {
                 // Base rate for the path, +1 for getting the leap size right
                 // first try, +1 more if they've bought Hermie's Diving Net.
-                let payout = track.payout
-                    + if after.was_clean() { 1 } else { 0 }
-                    + if self.has_diving_net() { domain_shop::DIVING_NET_BONUS } else { 0 };
-                self.pearls = self.pearls.saturating_add(payout);
-                self.pearl_hud.flash();
+                let payout = domain_shop::pearl_payout(track.payout, 1, after.was_clean(), &self.upgrades);
+                let line = self.award_pearls(payout);
                 self.events.push(GameEvent::PearlFound {
                     stone: after.puzzle.pearl,
                     size: after.puzzle.size,
                     leaps: after.leaps,
                     resets: after.resets,
-                    pearls: payout,
+                    pearls: payout.total(),
                 });
-                let mut cheer = if after.was_clean() {
-                    format!("Right on it! The pearl was under stone {}!  +{payout} pearls", after.puzzle.pearl)
+                // award_pearls names the net every time it pays, so the kid
+                // can see the twenty pearls still working for them.
+                let cheer = if after.was_clean() {
+                    format!("Right on it! The pearl was under stone {}!  {line}", after.puzzle.pearl)
                 } else {
-                    format!("You found it! Stone {}.  +{payout} pearl", after.puzzle.pearl)
+                    format!("You found it! Stone {}.  {line}", after.puzzle.pearl)
                 };
-                // Name the net every time it pays, so the kid can see the
-                // twenty pearls still working for them.
-                if self.has_diving_net() {
-                    cheer.push_str("  (your net caught one!)");
-                }
                 audio::tts::speak("Shelly", "You found my pearl!");
                 self.track_toast = Some((cheer, 2.4));
                 // Shelly hides it again — a fresh trip next time they launch.

@@ -456,6 +456,8 @@ pub enum GameEvent {
     /// they tried first — the silent read on whether the size was reasoned out
     /// or found by trial (never shown to the kid).
     PearlFound { stone: u8, size: u8, leaps: u8, resets: u8, pearls: u32 },
+    /// Pearls credited to the kid, from any source (a leap, a clean dive).
+    PearlsAwarded { amount: u32 },
     SudokuStarted { grid_size: u8, source: String },
     SudokuResolved {
         correct: bool,
@@ -2580,6 +2582,21 @@ impl Game {
         !self.sparky_parked || self.map.id == self.sparky_map
     }
 
+    /// Hand the kid a pearl find: credit, flash, log. Returns the kid-facing
+    /// "+N pearls" line (naming the net when it paid) so every source words
+    /// it the same way.
+    fn award_pearls(&mut self, payout: domain_shop::PearlPayout) -> String {
+        let amount = payout.total();
+        self.pearls = self.pearls.saturating_add(amount);
+        self.pearl_hud.flash();
+        self.events.push(GameEvent::PearlsAwarded { amount });
+        let mut line = format!("+{}", Currency::Pearls.count(amount));
+        if payout.net > 0 {
+            line.push_str("  (your net caught one!)");
+        }
+        line
+    }
+
     /// Hand the kid Dum Dums they earned: credit, flash, log.
     fn award_dum_dums(&mut self, amount: u32) {
         self.dum_dums = self.dum_dums.saturating_add(amount);
@@ -4306,6 +4323,26 @@ mod tests {
         g2.load_from_save(&data);
         assert!(g2.player_swag().contains("hat"), "hat should persist");
         assert!(g2.player_swag().contains("bow_tie"), "bow tie should persist");
+    }
+
+    // ── Every pearl find is counted and worded the same way ──
+    #[test]
+    fn pearl_payouts_agree_with_their_number() {
+        let mut g = game();
+        let none = std::collections::BTreeSet::new();
+        // A trench find that wasn't clean: base 2, no bonus. Used to read "+2 pearl".
+        assert_eq!(g.award_pearls(domain_shop::pearl_payout(2, 1, false, &none)), "+2 pearls");
+        assert_eq!(g.award_pearls(domain_shop::pearl_payout(1, 1, false, &none)), "+1 pearl");
+        g.upgrades.insert(domain_shop::DIVING_NET.into());
+        let net = g.upgrades.clone();
+        assert_eq!(g.award_pearls(domain_shop::pearl_payout(0, 1, true, &net)),
+            "+2 pearls  (your net caught one!)");
+        assert_eq!(g.pearls, 5);
+        let awarded: Vec<u32> = g.events.iter().filter_map(|e| match e {
+            GameEvent::PearlsAwarded { amount } => Some(*amount),
+            _ => None,
+        }).collect();
+        assert_eq!(awarded, vec![2, 1, 2], "every credit is logged");
     }
 
     // ── A gate guardian you've tamed and recruited stays awake on resume ──

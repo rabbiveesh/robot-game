@@ -188,6 +188,33 @@ pub fn swag_items() -> Vec<ShopItem> {
 /// Extra pearls the Diving Net adds to every find, once it's bought.
 pub const DIVING_NET_BONUS: u32 = 1;
 
+/// What one pearl find is worth, itemised so the game can say why ("your net
+/// caught one!") without re-deriving the rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PearlPayout {
+    /// What the find itself pays (a path's base rate; zero for a dive).
+    pub base: u32,
+    /// Extra for doing it cleanly (right leap size first try, a tidy dive).
+    pub clean: u32,
+    /// Extra from the Diving Net.
+    pub net: u32,
+}
+
+impl PearlPayout {
+    pub fn total(&self) -> u32 {
+        self.base + self.clean + self.net
+    }
+}
+
+/// The one pearl rule every source pays through. The net "catches 1 extra
+/// pearl every time you find one": it adds to a find that pays something, and
+/// never turns a find worth nothing into a pearl.
+pub fn pearl_payout(base: u32, clean_bonus: u32, was_clean: bool, owned: &BTreeSet<String>) -> PearlPayout {
+    let clean = if was_clean { clean_bonus } else { 0 };
+    let net = if base + clean > 0 && owned.contains(DIVING_NET) { DIVING_NET_BONUS } else { 0 };
+    PearlPayout { base, clean, net }
+}
+
 /// Item id of the yield upgrade, so the game can check for it without
 /// hard-coding the string in three places.
 pub const DIVING_NET: &str = "diving_net";
@@ -429,6 +456,17 @@ mod tests {
                 assert!(!i.blurb.is_empty(), "{} must explain itself on the shelf", i.id);
             }
         }
+    }
+
+    #[test]
+    fn the_net_adds_to_a_find_but_never_makes_one() {
+        let net = owned(&[DIVING_NET]);
+        let none = owned(&[]);
+        assert_eq!(pearl_payout(2, 1, true, &none).total(), 3, "base + clean");
+        assert_eq!(pearl_payout(2, 1, false, &net).total(), 3, "base + net");
+        assert_eq!(pearl_payout(0, 1, true, &net).total(), 2, "a clean dive + net");
+        assert_eq!(pearl_payout(0, 1, false, &net).total(), 0,
+            "a scenic dive finds no pearl, so the net has nothing to add to");
     }
 
     #[test]

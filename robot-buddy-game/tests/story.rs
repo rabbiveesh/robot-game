@@ -1951,6 +1951,31 @@ fn hermies_deep_stall_sells_reef_swag_for_pearls() {
         "Tali should be wearing the kelp crown");
 }
 
+/// The Diving Net is carried, not worn, so tapping it again says it's yours,
+/// not that you're "already wearing" it.
+#[test]
+fn tapping_the_diving_net_again_says_it_is_already_yours() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(17);
+    h.start_dev_game();
+    h.game.map = Map::trench();
+    h.game.npcs = npc_mod::npcs_for_map("trench");
+    h.game.npcs_offstage.clear();
+    h.warp_to(22, 9);
+    h.game.pearls = 30;
+    h.walk_to_npc(NpcKind::HermitCrab);
+    h.interact();
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+
+    h.buy_shop_item("diving_net");
+    h.select_shop_item("diving_net");
+    let msg = h.game.active_shop().unwrap().message.clone().unwrap_or_default();
+    assert_eq!(msg, "The Diving Net is already yours!");
+}
+
 /// A counter talks in its own money: Hermie never quotes pearls as Dum Dums.
 #[test]
 fn hermie_counts_in_pearls() {

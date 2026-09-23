@@ -97,17 +97,12 @@ impl Game {
             kicks: ad.session.kicks_used,
             optimal,
         });
-        if ad.session.was_clean() {
-            // A tidy decomposition is worth a pearl. A scenic one costs
-            // nothing — it still opened the door.
-            let bonus = if self.has_diving_net() { domain_shop::DIVING_NET_BONUS } else { 0 };
-            let payout = 1 + bonus;
-            self.pearls = self.pearls.saturating_add(payout);
-            self.pearl_hud.flash();
-            let mut cheer = format!("Perfect dive!  +{payout} pearl");
-            if payout > 1 { cheer.push('s'); }
-            if bonus > 0 { cheer.push_str("  (your net caught one!)"); }
-            self.track_toast = Some((cheer, 2.0));
+        // A tidy decomposition is worth a pearl. A scenic one costs nothing —
+        // it still opened the door.
+        let payout = domain_shop::pearl_payout(0, 1, ad.session.was_clean(), &self.upgrades);
+        if payout.total() > 0 {
+            let line = self.award_pearls(payout);
+            self.track_toast = Some((format!("Perfect dive!  {line}"), 2.0));
         }
         self.set_state(GameState::Playing);
         if let Some(portal) = self.dive_portal() {
