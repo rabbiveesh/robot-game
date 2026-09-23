@@ -1,350 +1,277 @@
+//! The challenge overlay: question, answer buttons, Show me / Tell me, the
+//! celebration, and the teaching walkthrough.
+//!
+//! Layout is declarative (see `ui::layout`): [`layout`] is pure and returns a
+//! `Frame` that `Game::step` hit-tests and `Game::render` paints, so the
+//! buttons you see are exactly the buttons you can tap — a long wrapped word
+//! problem pushes both down together.
+
 use crate::prelude::*;
-use robot_buddy_domain::challenge::challenge_state::{ChallengeState, ChallengeAction};
+use robot_buddy_domain::challenge::challenge_state::{ChallengeAction, ChallengeState};
 use robot_buddy_domain::learning::challenge_generator::Challenge;
 use robot_buddy_domain::types::Phase;
 
 use super::visuals;
 use crate::input::FrameInput;
+use crate::ui::layout::{self, col, paint, region, row, text, Align, Fit, Frame, Justify, Kind, Node};
+pub use crate::ui::layout::UiRect;
 
-// ─── LAYOUT (testable) ─────────────────────────────────
-
-pub struct ChoiceBound {
-    pub rect: (f32, f32, f32, f32), // x, y, w, h
-    pub answer: i32,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChallengeId {
+    Panel,
+    /// Teaching-screen header ("Let's figure it out!").
+    Header,
+    Question,
+    /// The CRA visual (Show me / teaching).
+    Visual,
+    Feedback,
+    Choice(usize),
+    ChoiceKey(usize),
+    ChoiceLabel(usize),
+    ShowMe,
+    ShowMeLabel,
+    TellMe,
+    TellMeLabel,
+    /// Room for the praise and its star burst.
+    Celebrate,
+    Praise,
+    /// Teaching: "= 12".
+    Answer,
+    Dismiss,
 }
 
-pub struct ScaffoldBounds {
-    pub show_me: Option<(f32, f32, f32, f32)>,
-    pub tell_me: Option<(f32, f32, f32, f32)>,
+pub struct ChallengeLayout {
+    pub frame: Frame<ChallengeId>,
 }
 
-/// Pure layout: produces the same rect data that `draw_challenge` used to compute,
-/// without making any macroquad calls. `step()` calls this for hit-testing;
-/// `render()` calls it again and passes it into `draw_challenge_with_layout`.
-pub fn layout(
-    cs: &ChallengeState,
-    challenge: &Challenge,
-    screen: (f32, f32),
-) -> (Vec<ChoiceBound>, ScaffoldBounds) {
-    let (sw, sh) = screen;
-
-    if cs.phase == Phase::Teaching {
-        // Teaching has no clickable choices/scaffold buttons.
-        return (vec![], ScaffoldBounds { show_me: None, tell_me: None });
+impl ChallengeLayout {
+    pub fn choice(&self, index: usize) -> Option<UiRect> {
+        self.frame.rect(ChallengeId::Choice(index))
     }
-
-    let panel_w = (sw - 40.0).min(760.0);
-    let panel_h = if cs.hint_used { 560.0 } else { 420.0 };
-    let panel_x = (sw - panel_w) / 2.0;
-    let panel_y = (sh - panel_h) / 2.0 - 10.0;
-
-    let hint_offset = if cs.hint_used { 80.0 } else { 0.0 };
-    let feedback_offset = if cs.phase == Phase::Feedback && cs.feedback.is_some() { 40.0 } else { 0.0 };
-
-    let btn_w = ((panel_w - 80.0) / 3.0).min(200.0);
-    let btn_h = 88.0;
-    let btn_y = panel_y + 150.0 + hint_offset + feedback_offset;
-    let total_btn_w = btn_w * 3.0 + 20.0 * 2.0;
-    let btn_start_x = panel_x + (panel_w - total_btn_w) / 2.0;
-
-    let choice_bounds: Vec<ChoiceBound> = challenge.choices.iter().enumerate().map(|(i, choice)| {
-        let bx = btn_start_x + i as f32 * (btn_w + 20.0);
-        let answer: i32 = choice.text.parse().unwrap_or(0);
-        ChoiceBound { rect: (bx, btn_y, btn_w, btn_h), answer }
-    }).collect();
-
-    let mut scaffold = ScaffoldBounds { show_me: None, tell_me: None };
-    if cs.phase == Phase::Presented || cs.phase == Phase::Feedback {
-        let scaff_y = btn_y + btn_h + 16.0;
-        let scaff_btn_w = 150.0;
-        let scaff_btn_h = 46.0;
-        let scaff_gap = 12.0;
-
-        let show_me_visible = !cs.hint_used;
-        if show_me_visible {
-            let sm_x = panel_x + panel_w / 2.0 - scaff_btn_w - scaff_gap / 2.0;
-            scaffold.show_me = Some((sm_x, scaff_y, scaff_btn_w, scaff_btn_h));
-        }
-
-        let tm_x = if show_me_visible {
-            panel_x + panel_w / 2.0 + scaff_gap / 2.0
-        } else {
-            panel_x + panel_w / 2.0 - scaff_btn_w / 2.0
-        };
-        scaffold.tell_me = Some((tm_x, scaff_y, scaff_btn_w, scaff_btn_h));
+    pub fn show_me(&self) -> Option<UiRect> {
+        self.frame.rect(ChallengeId::ShowMe)
     }
-
-    (choice_bounds, scaffold)
+    pub fn tell_me(&self) -> Option<UiRect> {
+        self.frame.rect(ChallengeId::TellMe)
+    }
 }
 
-
-// ─── DRAWING ────────────────────────────────────────────
-
-const DARK_BG: Color = Color::new(0.078, 0.078, 0.180, 1.0);       // #141430
-const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0);            // #FFD54F
-const ORANGE: Color = Color::new(1.0, 0.541, 0.396, 1.0);          // #FF8A65
-const BLUE_BTN: Color = Color::new(0.129, 0.588, 0.953, 1.0);      // #2196F3
-const GREEN_BTN: Color = Color::new(0.298, 0.686, 0.314, 1.0);     // #4CAF50
-const DIM_BTN: Color = Color::new(0.216, 0.278, 0.310, 1.0);       // #37474F
-const SCAFFOLD_BG: Color = Color::new(0.329, 0.431, 0.478, 1.0);   // #546E7A
-const SCAFFOLD_DIM: Color = Color::new(0.271, 0.353, 0.392, 1.0);  // #455A64
-const SCAFFOLD_TXT: Color = Color::new(0.690, 0.745, 0.773, 1.0);  // #B0BEC5
-const SCAFFOLD_TXT_DIM: Color = Color::new(0.565, 0.643, 0.682, 1.0); // #90A4AE
-const PRAISE_COLOR: Color = Color::new(1.0, 0.835, 0.310, 1.0);    // #FFD54F
-const GREEN_ANS: Color = Color::new(0.412, 0.941, 0.682, 1.0);     // #69F0AE
-const HINT_GRAY: Color = Color::new(0.471, 0.565, 0.604, 1.0);     // #78909C
+const PANEL_W: f32 = 760.0;
+const MARGIN: f32 = 20.0;
+const PRAISES: [&str; 6] = ["AMAZING!", "WOW!", "GENIUS!", "SO SMART!", "INCREDIBLE!", "YOU GOT IT!"];
 
 /// Replace Unicode math symbols with ASCII equivalents that render in macroquad's default font.
 fn sanitize_math_text(text: &str) -> String {
-    text.replace('\u{2212}', "-")  // minus sign → hyphen-minus
-        .replace('\u{00d7}', "x")  // multiplication sign → letter x
-        .replace('\u{00f7}', "/")  // division sign → slash
+    text.replace('\u{2212}', "-") // minus sign → hyphen-minus
+        .replace('\u{00d7}', "x") // multiplication sign → letter x
+        .replace('\u{00f7}', "/") // division sign → slash
 }
 
-/// Draw the question prompt centered at `cy`, fitting it into `max_w`. Short
-/// prompts ("7 x 3") draw at `max_size`; long scene-framed word problems
-/// ("A frog hops 7 times, then 3 more! How many hops?") shrink toward a floor,
-/// then wrap to two lines if even that won't fit. Returns the vertical space the
-/// prompt consumed below `cy`, so callers can flow content beneath a tall prompt.
-fn draw_question(text: &str, cx: f32, cy: f32, max_w: f32, max_size: f32) -> f32 {
-    const FLOOR: f32 = 24.0;
-    let fits = |size: f32| measure_text(text, None, size as u16, 1.0).width <= max_w;
-
-    // Largest size in [FLOOR, max_size] that fits on one line.
-    let mut size = max_size;
-    while size > FLOOR && !fits(size) {
-        size -= 2.0;
-    }
-    if fits(size) {
-        let w = measure_text(text, None, size as u16, 1.0).width;
-        draw_text(text, cx - w / 2.0, cy, size, WHITE);
-        return 0.0;
-    }
-
-    // Still too wide at the floor — wrap to two lines on word boundaries.
-    let words: Vec<&str> = text.split(' ').collect();
-    let mut split = words.len() / 2;
-    for i in 1..words.len() {
-        let head = words[..i].join(" ");
-        if measure_text(&head, None, FLOOR as u16, 1.0).width > max_w / 2.0 {
-            split = i.max(1);
-            break;
-        }
-    }
-    let line1 = words[..split].join(" ");
-    let line2 = words[split..].join(" ");
-    let line_h = FLOOR + 6.0;
-    for (i, line) in [line1, line2].iter().enumerate() {
-        let w = measure_text(line, None, FLOOR as u16, 1.0).width;
-        draw_text(line, cx - w / 2.0, cy + i as f32 * line_h, FLOOR, WHITE);
-    }
-    line_h
+/// The CRA visual's slot: the panel's full inner width (stretched), `h` tall.
+/// [`layout`] measures the width first, then asks the visual how tall it is
+/// at that width — the same `visuals::plan` that draws it.
+fn visual(h: f32) -> Node<ChallengeId> {
+    region(0.0, h).auto_w().id(ChallengeId::Visual).fixed()
 }
 
-fn round_rect(x: f32, y: f32, w: f32, h: f32, r: f32, color: Color) {
-    // Center rect + corner circles for rounded appearance
-    draw_rectangle(x + r, y, w - 2.0 * r, h, color);
-    draw_rectangle(x, y + r, w, h - 2.0 * r, color);
-    draw_circle(x + r, y + r, r, color);
-    draw_circle(x + w - r, y + r, r, color);
-    draw_circle(x + r, y + h - r, r, color);
-    draw_circle(x + w - r, y + h - r, r, color);
+/// A labelled scaffold button ("Show me" / "Tell me").
+fn scaffold(id: ChallengeId, label_id: ChallengeId, label: &str) -> Node<ChallengeId> {
+    // Preferred 150 wide; squeezes (never clips) on a narrow phone.
+    layout::button(id, label_id, label, 22, Fit::shrink(14)).w(150.0).min_w(96.0).shrink(1.0)
 }
 
-fn round_rect_lines(x: f32, y: f32, w: f32, h: f32, _r: f32, thickness: f32, color: Color) {
-    draw_rectangle_lines(x, y, w, h, thickness, color);
+fn answer_button(i: usize, label: &str) -> Node<ChallengeId> {
+    col()
+        .id(ChallengeId::Choice(i))
+        .hit()
+        .w(200.0)
+        .min_w(64.0)
+        .pad_xy(10.0, 4.0)
+        // Key hint (1, 2, 3) top-left; the answer centered between it and a
+        // matching bottom gap.
+        .child(text(format!("{}", i + 1), 20, Fit::shrink(12)).id(ChallengeId::ChoiceKey(i)).fixed())
+        .child(text(label, 40, Fit::shrink(18)).id(ChallengeId::ChoiceLabel(i)).center_text().grow(1.0))
+        // Balances the key hint; gives way first when a short screen squeezes the button.
+        .child(region(0.0, 20.0).min_h(0.0))
 }
 
-/// Render the full challenge overlay. Returns click bounds for hit testing.
-pub fn draw_challenge(cs: &ChallengeState, challenge: &Challenge, time: f32) -> (Vec<ChoiceBound>, ScaffoldBounds) {
-    let sw = screen_width();
-    let sh = screen_height();
-
-    // Dim background
-    draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.5));
-
-    if cs.phase == Phase::Teaching {
-        return draw_teaching_phase(cs, challenge, time, sw, sh);
+/// Lay the overlay out for `screen`. Pure.
+pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) -> ChallengeLayout {
+    let bounds = layout::screen_rect(screen);
+    let build = |visual_h: f32| tree(cs, challenge, screen, visual_h);
+    let mut frame = layout::layout(&build(0.0), bounds);
+    // Two passes: the first finds how wide the visual's slot is (the panel's
+    // width doesn't depend on its content), the second reserves its height
+    // at that width.
+    if let Some(slot) = frame.rect(ChallengeId::Visual) {
+        frame = layout::layout(&build(visuals::extent(challenge, slot.w).h), bounds);
     }
+    ChallengeLayout { frame }
+}
 
-    let panel_w = (sw - 40.0).min(760.0);
-    let panel_h = if cs.hint_used { 560.0 } else { 420.0 };
-    let panel_x = (sw - panel_w) / 2.0;
-    let panel_y = (sh - panel_h) / 2.0 - 10.0;
-
-    // Panel
-    round_rect(panel_x, panel_y, panel_w, panel_h, 16.0, DARK_BG);
-    round_rect_lines(panel_x, panel_y, panel_w, panel_h, 16.0, 4.0, GOLD);
-
-    // Question (Unicode math symbols sanitized; long word problems shrink/wrap)
+fn tree(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32), visual_h: f32) -> Node<ChallengeId> {
+    let sh = screen.1;
+    // Short windows (640x480) get tighter spacing so a wrapped word problem,
+    // the visual and feedback all fit above the buttons.
+    let compact = sh < 600.0;
+    let (gap, pad_top): (f32, f32) = if compact { (8.0, 18.0) } else { (14.0, 28.0) };
     let q_text = sanitize_math_text(&cs.question.display);
-    let q_extra = draw_question(&q_text, panel_x + panel_w / 2.0, panel_y + 72.0, panel_w - 48.0, 42.0);
 
-    // CRA visual hint (if show-me was used)
-    let mut hint_offset = q_extra;
-    if cs.hint_used {
-        hint_offset = q_extra + 80.0;
-        let viz_cx = panel_x + panel_w / 2.0;
-        let viz_cy = panel_y + 110.0 + q_extra;
-        visuals::draw_visual(challenge, viz_cx, viz_cy, time);
-    }
-
-    // Feedback text
-    let mut feedback_offset = 0.0;
-    if cs.phase == Phase::Feedback {
-        if let Some(fb) = &cs.feedback {
-            feedback_offset = 40.0;
-            let fb_w = measure_text(&fb.display, None, 28, 1.0).width;
-            draw_text(&fb.display, panel_x + panel_w / 2.0 - fb_w / 2.0,
-                panel_y + 140.0 + hint_offset, 28.0, ORANGE);
-        }
-    }
-
-    // Choice buttons
-    let btn_w = ((panel_w - 80.0) / 3.0).min(200.0);
-    let btn_h = 88.0;
-    let btn_y = panel_y + 150.0 + hint_offset + feedback_offset;
-    let total_btn_w = btn_w * 3.0 + 20.0 * 2.0;
-    let btn_start_x = panel_x + (panel_w - total_btn_w) / 2.0;
-
-    let mut choice_bounds = Vec::new();
-    for (i, choice) in challenge.choices.iter().enumerate() {
-        let bx = btn_start_x + i as f32 * (btn_w + 20.0);
-        let by = btn_y;
-
-        let btn_color = if cs.phase == Phase::Complete && cs.correct == Some(true) {
-            if choice.correct { GREEN_BTN } else { DIM_BTN }
-        } else {
-            BLUE_BTN
-        };
-
-        round_rect(bx, by, btn_w, btn_h, 12.0, btn_color);
-        round_rect_lines(bx, by, btn_w, btn_h, 12.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.3));
-
-        let text_size = 40.0;
-        let tw = measure_text(&choice.text, None, text_size as u16, 1.0).width;
-        draw_text(&choice.text, bx + btn_w / 2.0 - tw / 2.0, by + btn_h / 2.0 + 14.0, text_size, WHITE);
-
-        // Key hint (1, 2, 3)
-        let key_label = format!("{}", i + 1);
-        draw_text(&key_label, bx + 10.0, by + 24.0, 20.0, Color::new(1.0, 1.0, 1.0, 0.4));
-
-        let answer: i32 = choice.text.parse().unwrap_or(0);
-        choice_bounds.push(ChoiceBound {
-            rect: (bx, by, btn_w, btn_h),
-            answer,
+    let panel = if cs.phase == Phase::Teaching {
+        let header = if cs.told_me { "Here's how it works!" } else { "Let's figure it out!" };
+        col()
+            .gap(gap.min(10.0))
+            .child(text(header, 28, Fit::shrink(18)).id(ChallengeId::Header).center_text().fixed())
+            .child(text(q_text, 34, Fit::shrink_then_wrap(20, 6)).id(ChallengeId::Question).center_text())
+            .child(visual(visual_h))
+            .child(text(format!("= {}", challenge.correct_answer), 54, Fit::shrink(28)).id(ChallengeId::Answer).center_text())
+            .maybe(cs.feedback.as_ref().map(|fb| {
+                text(fb.display.clone(), 24, Fit::wrap_lines(14, 2)).id(ChallengeId::Feedback).center_text()
+            }))
+            .child(text("Press SPACE or click to continue", 22, Fit::shrink(14)).id(ChallengeId::Dismiss).center_text().fixed())
+    } else {
+        let feedback = (cs.phase == Phase::Feedback).then_some(cs.feedback.as_ref()).flatten();
+        // While the kid is answering, the feedback line is always laid out —
+        // empty until they miss — so "Hmm, not quite!" appearing can't shove
+        // the answer buttons out from under their finger.
+        let answering = cs.phase == Phase::Presented || cs.phase == Phase::Feedback;
+        let feedback_slot = answering.then(|| {
+            let msg = feedback.map(|fb| fb.display.clone()).unwrap_or_default();
+            text(msg, 28, Fit::wrap_lines(16, 2)).id(ChallengeId::Feedback).center_text().reserve_lines(2)
         });
-    }
+        let scaffolds = (cs.phase == Phase::Presented || cs.phase == Phase::Feedback).then(|| {
+            row()
+                .gap(12.0)
+                .justify(Justify::Center)
+                // The row gives up height on a short screen; the buttons stretch to it.
+                .align(Align::Stretch)
+                .h(46.0)
+                .min_h(38.0)
+                // Show me — available until the visual is displayed.
+                .maybe((!cs.hint_used).then(|| scaffold(ChallengeId::ShowMe, ChallengeId::ShowMeLabel, "Show me")))
+                .child(scaffold(ChallengeId::TellMe, ChallengeId::TellMeLabel, "Tell me"))
+        });
+        let complete = cs.phase == Phase::Complete;
+        let praise = (complete && cs.correct == Some(true)).then(|| {
+            let praise = PRAISES[(cs.correct_answer.unsigned_abs() as usize) % PRAISES.len()];
+            row()
+                .id(ChallengeId::Celebrate)
+                .h(100.0)
+                .min_h(30.0)
+                .justify(Justify::Center)
+                .child(text(praise, 44, Fit::shrink(24)).id(ChallengeId::Praise).center_text())
+        });
+        col()
+            .gap(gap)
+            .child(text(q_text, 42, Fit::shrink_then_wrap(22, 6)).id(ChallengeId::Question).center_text())
+            .maybe(cs.hint_used.then(|| visual(visual_h)))
+            .maybe(feedback_slot)
+            .child(
+                row()
+                    .gap(20.0)
+                    .justify(Justify::Center)
+                    .align(Align::Stretch)
+                    .h(88.0)
+                    .min_h(64.0)
+                    .children(challenge.choices.iter().enumerate().map(|(i, c)| answer_button(i, &c.text))),
+            )
+            .maybe(scaffolds)
+            .maybe(praise)
+            // Dismiss hint (for both correct and post-teaching).
+            .maybe(complete.then(|| text("Press SPACE to continue", 22, Fit::shrink(14)).id(ChallengeId::Dismiss).center_text().fixed()))
+    };
 
-    // Scaffold buttons (Show Me / Tell Me)
-    let mut scaffold = ScaffoldBounds { show_me: None, tell_me: None };
-    if cs.phase == Phase::Presented || cs.phase == Phase::Feedback {
-        let scaff_y = btn_y + btn_h + 16.0;
-        let scaff_btn_w = 150.0;
-        let scaff_btn_h = 46.0;
-        let scaff_gap = 12.0;
-
-        // Show Me — available until the visual is displayed
-        let show_me_visible = !cs.hint_used;
-        if show_me_visible {
-            let sm_x = panel_x + panel_w / 2.0 - scaff_btn_w - scaff_gap / 2.0;
-            round_rect(sm_x, scaff_y, scaff_btn_w, scaff_btn_h, 6.0, SCAFFOLD_BG);
-            let sm_tw = measure_text("Show me", None, 22, 1.0).width;
-            draw_text("Show me", sm_x + scaff_btn_w / 2.0 - sm_tw / 2.0, scaff_y + scaff_btn_h / 2.0 + 8.0, 22.0, SCAFFOLD_TXT);
-            scaffold.show_me = Some((sm_x, scaff_y, scaff_btn_w, scaff_btn_h));
-        }
-
-        // Tell Me
-        let tm_x = if show_me_visible {
-            panel_x + panel_w / 2.0 + scaff_gap / 2.0
-        } else {
-            panel_x + panel_w / 2.0 - scaff_btn_w / 2.0
-        };
-        round_rect(tm_x, scaff_y, scaff_btn_w, scaff_btn_h, 6.0, SCAFFOLD_DIM);
-        let tm_tw = measure_text("Tell me", None, 22, 1.0).width;
-        draw_text("Tell me", tm_x + scaff_btn_w / 2.0 - tm_tw / 2.0, scaff_y + scaff_btn_h / 2.0 + 8.0, 22.0, SCAFFOLD_TXT_DIM);
-        scaffold.tell_me = Some((tm_x, scaff_y, scaff_btn_w, scaff_btn_h));
-    }
-
-    // Celebration / Dismiss
-    if cs.phase == Phase::Complete {
-        if cs.correct == Some(true) {
-            let praises = ["AMAZING!", "WOW!", "GENIUS!", "SO SMART!", "INCREDIBLE!", "YOU GOT IT!"];
-            let praise = praises[(cs.correct_answer.unsigned_abs() as usize) % praises.len()];
-            let pw = measure_text(praise, None, 44, 1.0).width;
-            draw_text(praise, panel_x + panel_w / 2.0 - pw / 2.0, btn_y + btn_h + 70.0, 44.0, PRAISE_COLOR);
-            draw_star_burst(panel_x + panel_w / 2.0, btn_y + btn_h + 45.0, time);
-        }
-
-        // Dismiss hint (for both correct and post-teaching)
-        let dismiss = "Press SPACE to continue";
-        let dw = measure_text(dismiss, None, 22, 1.0).width;
-        let blink = (get_time() * 4.0).sin() > 0.0;
-        if blink {
-            let dismiss_y = if cs.correct == Some(true) { btn_y + btn_h + 105.0 } else { btn_y + btn_h + 65.0 };
-            draw_text(dismiss, panel_x + panel_w / 2.0 - dw / 2.0, dismiss_y, 22.0, HINT_GRAY);
-        }
-    }
-
-    (choice_bounds, scaffold)
+    // PANEL_W wide, or the whole screen if that's narrower.
+    // min_h(0): the panel may be shorter than its children's preferred heights
+    // (their own min_h floors then apply) — the CSS "min-height: 0" rule.
+    let panel = panel.id(ChallengeId::Panel).w_pct(1.0).max_w(PANEL_W).min_h(0.0).pad_edges(24.0, pad_top, 24.0, 20.0);
+    layout::centered_on_screen(panel, MARGIN)
 }
 
-fn draw_teaching_phase(cs: &ChallengeState, challenge: &Challenge, time: f32, sw: f32, sh: f32) -> (Vec<ChoiceBound>, ScaffoldBounds) {
-    let panel_w = (sw - 40.0).min(760.0);
-    let panel_h = 460.0;
-    let panel_x = (sw - panel_w) / 2.0;
-    let panel_y = (sh - panel_h) / 2.0 - 10.0;
+// ─── DRAWING ────────────────────────────────────────────
 
-    // Panel with orange border
-    round_rect(panel_x, panel_y, panel_w, panel_h, 16.0, DARK_BG);
-    round_rect_lines(panel_x, panel_y, panel_w, panel_h, 16.0, 4.0, ORANGE);
+const DARK_BG: Color = Color::new(0.078, 0.078, 0.180, 1.0); // #141430
+const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0); // #FFD54F
+const ORANGE: Color = Color::new(1.0, 0.541, 0.396, 1.0); // #FF8A65
+const BLUE_BTN: Color = Color::new(0.129, 0.588, 0.953, 1.0); // #2196F3
+const GREEN_BTN: Color = Color::new(0.298, 0.686, 0.314, 1.0); // #4CAF50
+const DIM_BTN: Color = Color::new(0.216, 0.278, 0.310, 1.0); // #37474F
+const SCAFFOLD_BG: Color = Color::new(0.329, 0.431, 0.478, 1.0); // #546E7A
+const SCAFFOLD_DIM: Color = Color::new(0.271, 0.353, 0.392, 1.0); // #455A64
+const SCAFFOLD_TXT: Color = Color::new(0.690, 0.745, 0.773, 1.0); // #B0BEC5
+const SCAFFOLD_TXT_DIM: Color = Color::new(0.565, 0.643, 0.682, 1.0); // #90A4AE
+const PRAISE_COLOR: Color = Color::new(1.0, 0.835, 0.310, 1.0); // #FFD54F
+const GREEN_ANS: Color = Color::new(0.412, 0.941, 0.682, 1.0); // #69F0AE
+const HINT_GRAY: Color = Color::new(0.471, 0.565, 0.604, 1.0); // #78909C
 
-    // Header
-    let header = if cs.told_me { "Here's how it works!" } else { "Let's figure it out!" };
-    let hw = measure_text(header, None, 28, 1.0).width;
-    draw_text(header, panel_x + panel_w / 2.0 - hw / 2.0, panel_y + 42.0, 28.0, ORANGE);
-
-    // Question (long word problems shrink/wrap to fit the panel)
-    let q_text = sanitize_math_text(&cs.question.display);
-    let q_extra = draw_question(&q_text, panel_x + panel_w / 2.0, panel_y + 86.0, panel_w - 48.0, 34.0);
-
-    // Visual walkthrough (always concrete in teaching)
-    let viz_cx = panel_x + panel_w / 2.0;
-    let viz_cy = panel_y + 120.0 + q_extra;
-    visuals::draw_visual(challenge, viz_cx, viz_cy, time);
-
-    // Answer
-    let answer_text = format!("= {}", challenge.correct_answer);
-    let aw = measure_text(&answer_text, None, 54, 1.0).width;
-    draw_text(&answer_text, panel_x + panel_w / 2.0 - aw / 2.0, panel_y + panel_h - 88.0, 54.0, GREEN_ANS);
-
-    // Feedback text
-    if let Some(fb) = &cs.feedback {
-        let fw = measure_text(&fb.display, None, 24, 1.0).width;
-        draw_text(&fb.display, panel_x + panel_w / 2.0 - fw / 2.0, panel_y + panel_h - 48.0, 24.0, GOLD);
+/// Paint the overlay from its frame.
+pub fn draw(layout: &ChallengeLayout, cs: &ChallengeState, challenge: &Challenge, time: f32) {
+    let f = &layout.frame;
+    paint::dim(f.bounds, 0.5);
+    let teaching = cs.phase == Phase::Teaching;
+    let solved = cs.phase == Phase::Complete && cs.correct == Some(true);
+    for el in f.elements() {
+        let Some(id) = el.id else { continue };
+        let r = el.rect;
+        if let Kind::Text(t) = &el.kind {
+            match id {
+                ChallengeId::Header => paint::text(t, ORANGE),
+                ChallengeId::Feedback if teaching => paint::text(t, GOLD),
+                ChallengeId::Feedback => paint::text(t, ORANGE),
+                ChallengeId::ChoiceKey(_) => paint::text(t, Color::new(1.0, 1.0, 1.0, 0.4)),
+                ChallengeId::ShowMeLabel => paint::text(t, SCAFFOLD_TXT),
+                ChallengeId::TellMeLabel => paint::text(t, SCAFFOLD_TXT_DIM),
+                ChallengeId::Praise => paint::text(t, PRAISE_COLOR),
+                ChallengeId::Answer => paint::text(t, GREEN_ANS),
+                ChallengeId::Dismiss if teaching => paint::text(t, HINT_GRAY),
+                ChallengeId::Dismiss => {
+                    if paint::blink(4.0) {
+                        paint::text(t, HINT_GRAY)
+                    }
+                }
+                _ => paint::text(t, WHITE),
+            }
+            continue;
+        }
+        match id {
+            ChallengeId::Panel => {
+                paint::round_rect(r, 16.0, DARK_BG);
+                paint::outline(r, 4.0, if teaching { ORANGE } else { GOLD });
+            }
+            ChallengeId::Visual => visuals::draw(challenge, r),
+            ChallengeId::Choice(i) => {
+                let correct = challenge.choices.get(i).is_some_and(|c| c.correct);
+                let color = if solved { if correct { GREEN_BTN } else { DIM_BTN } } else { BLUE_BTN };
+                paint::round_rect(r, 12.0, color);
+                paint::outline(r, 2.0, Color::new(1.0, 1.0, 1.0, 0.3));
+            }
+            ChallengeId::ShowMe => paint::round_rect(r, 6.0, SCAFFOLD_BG),
+            ChallengeId::TellMe => paint::round_rect(r, 6.0, SCAFFOLD_DIM),
+            ChallengeId::Celebrate => {
+                let praise = f.rect(ChallengeId::Praise).unwrap_or(r);
+                draw_star_burst(r, praise.center(), time);
+            }
+            _ => {}
+        }
     }
-
-    // Dismiss hint
-    let dismiss = "Press SPACE or click to continue";
-    let dw = measure_text(dismiss, None, 22, 1.0).width;
-    draw_text(dismiss, panel_x + panel_w / 2.0 - dw / 2.0, panel_y + panel_h - 16.0, 22.0, HINT_GRAY);
-
-    (vec![], ScaffoldBounds { show_me: None, tell_me: None })
 }
 
-fn draw_star_burst(cx: f32, cy: f32, time: f32) {
+/// Stars circling the praise, kept inside the celebration box.
+fn draw_star_burst(area: UiRect, (cx, cy): (f32, f32), time: f32) {
+    let c = paint::canvas(area);
+    let room = ((area.h / 2.0).min(area.w / 2.0) - 8.0).max(0.0);
     let num_stars = 8;
     for i in 0..num_stars {
         let angle = (i as f32 / num_stars as f32) * std::f32::consts::TAU + time * 2.0;
-        let dist = 30.0 + (time * 3.0).sin().abs() * 20.0;
+        let dist = (30.0 + (time * 3.0).sin().abs() * 20.0).min(room);
         let sx = cx + angle.cos() * dist;
         let sy = cy + angle.sin() * dist;
         let size = 4.0 + ((time * 5.0 + i as f32).sin().abs()) * 3.0;
         let alpha = 0.5 + ((time * 4.0 + i as f32 * 0.7).sin().abs()) * 0.5;
         let color = Color::new(1.0, 0.835, 0.310, alpha);
-        // Draw a simple 4-point star
-        draw_line(sx - size, sy, sx + size, sy, 2.0, color);
-        draw_line(sx, sy - size, sx, sy + size, 2.0, color);
+        // A simple 4-point star.
+        c.line(sx - size, sy, sx + size, sy, 2.0, color);
+        c.line(sx, sy - size, sx, sy + size, 2.0, color);
     }
 }
 
@@ -378,11 +305,11 @@ pub fn handle_key(cs: &ChallengeState, challenge: &Challenge, input: &FrameInput
 }
 
 pub fn handle_click(
-    mx: f32, my: f32,
+    mx: f32,
+    my: f32,
     cs: &ChallengeState,
-    _challenge: &Challenge,
-    choice_bounds: &[ChoiceBound],
-    scaffold: &ScaffoldBounds,
+    challenge: &Challenge,
+    layout: &ChallengeLayout,
 ) -> Option<ChallengeAction> {
     // Teaching/Complete: click anywhere to dismiss
     if cs.phase == Phase::Teaching {
@@ -391,28 +318,13 @@ pub fn handle_click(
     if cs.phase == Phase::Complete {
         return None; // Signal caller to dismiss
     }
-
-    // Show Me button
-    if let Some((x, y, w, h)) = scaffold.show_me {
-        if mx >= x && mx <= x + w && my >= y && my <= y + h {
-            return Some(ChallengeAction::ShowMe);
+    match layout.frame.hit_at(mx, my)? {
+        ChallengeId::ShowMe => Some(ChallengeAction::ShowMe),
+        ChallengeId::TellMe => Some(ChallengeAction::TellMe),
+        ChallengeId::Choice(i) => {
+            let answer: i32 = challenge.choices.get(i)?.text.parse().unwrap_or(0);
+            Some(ChallengeAction::AnswerSubmitted { answer })
         }
+        _ => None,
     }
-
-    // Tell Me button
-    if let Some((x, y, w, h)) = scaffold.tell_me {
-        if mx >= x && mx <= x + w && my >= y && my <= y + h {
-            return Some(ChallengeAction::TellMe);
-        }
-    }
-
-    // Choice buttons
-    for bound in choice_bounds {
-        let (x, y, w, h) = bound.rect;
-        if mx >= x && mx <= x + w && my >= y && my <= y + h {
-            return Some(ChallengeAction::AnswerSubmitted { answer: bound.answer });
-        }
-    }
-
-    None
 }

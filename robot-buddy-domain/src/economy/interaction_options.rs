@@ -12,6 +12,15 @@ pub struct NpcInfo {
     pub has_shop: Option<bool>,
     #[serde(default)]
     pub is_puzzler: Option<bool>,
+    /// True for the keeper of a dive shaft (Inkwell). She gets a "Dive!" option
+    /// alongside the usual ones — she's still a buddy you can feed and dress up,
+    /// she just also runs the way down.
+    #[serde(default)]
+    pub runs_dive: Option<bool>,
+    /// True while this buddy wears Color Change: they get a "New color?"
+    /// option to pick their outfit colour again.
+    #[serde(default)]
+    pub wears_color_change: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +28,11 @@ pub struct NpcInfo {
 pub struct PlayerState {
     #[serde(default)]
     pub dum_dums: u32,
+    /// How many pieces of shop swag the kid is wearing right now. Anything
+    /// they're wearing can be handed to a buddy, so a non-zero count is what
+    /// puts the "Give Swag" option on the menu.
+    #[serde(default)]
+    pub swag_worn: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +57,36 @@ pub fn get_interaction_options(npc: &NpcInfo, player_state: &PlayerState) -> Vec
             option_type: "give".into(),
             label: "Give Dum Dum".into(),
             key: "2".into(),
+        });
+    }
+
+    // Swag changes hands to anyone who'd take a Dum Dum — dressing up your
+    // buddy is the same gesture as feeding them, just sillier.
+    if can_receive && player_state.swag_worn > 0 {
+        let key = (options.len() + 1).to_string();
+        options.push(InteractionOption {
+            option_type: "swag".into(),
+            label: "Give Swag".into(),
+            key,
+        });
+    }
+
+    // A buddy in Color Change can have their colour picked again, whenever.
+    if npc.wears_color_change.unwrap_or(false) {
+        let key = (options.len() + 1).to_string();
+        options.push(InteractionOption {
+            option_type: "recolor".into(),
+            label: "New color?".into(),
+            key,
+        });
+    }
+
+    if npc.runs_dive.unwrap_or(false) {
+        let key = (options.len() + 1).to_string();
+        options.push(InteractionOption {
+            option_type: "dive".into(),
+            label: "Dive!".into(),
+            key,
         });
     }
 
@@ -92,8 +136,8 @@ mod tests {
     #[test]
     fn always_includes_talk() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None },
-            &PlayerState { dum_dums: 0 },
+            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None, runs_dive: None, wears_color_change: None },
+            &PlayerState { dum_dums: 0, swag_worn: 0 },
         );
         assert_eq!(opts[0].option_type, "talk");
     }
@@ -101,8 +145,8 @@ mod tests {
     #[test]
     fn includes_give_when_has_dum_dums() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None },
-            &PlayerState { dum_dums: 3 },
+            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None, runs_dive: None, wears_color_change: None },
+            &PlayerState { dum_dums: 3, swag_worn: 0 },
         );
         assert_eq!(opts.len(), 2);
         assert_eq!(opts[1].option_type, "give");
@@ -111,8 +155,8 @@ mod tests {
     #[test]
     fn excludes_give_when_zero_dum_dums() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None },
-            &PlayerState { dum_dums: 0 },
+            &NpcInfo { id: "robot".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None, runs_dive: None, wears_color_change: None },
+            &PlayerState { dum_dums: 0, swag_worn: 0 },
         );
         assert_eq!(opts.len(), 1);
     }
@@ -120,8 +164,8 @@ mod tests {
     #[test]
     fn excludes_give_when_cant_receive() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "chest".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: None },
-            &PlayerState { dum_dums: 5 },
+            &NpcInfo { id: "chest".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: None, runs_dive: None, wears_color_change: None },
+            &PlayerState { dum_dums: 5, swag_worn: 0 },
         );
         assert_eq!(opts.len(), 1);
     }
@@ -129,8 +173,8 @@ mod tests {
     #[test]
     fn includes_puzzle_when_npc_is_puzzler() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "sage".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: Some(true) },
-            &PlayerState { dum_dums: 0 },
+            &NpcInfo { id: "sage".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: Some(true), runs_dive: None, wears_color_change: None },
+            &PlayerState { dum_dums: 0, swag_worn: 0 },
         );
         assert!(opts.iter().any(|o| o.option_type == "puzzle"),
             "puzzler NPCs should expose a 'puzzle' option, got: {:?}",
@@ -140,8 +184,8 @@ mod tests {
     #[test]
     fn includes_pattern_when_npc_is_puzzler() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "sage".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: Some(true) },
-            &PlayerState { dum_dums: 0 },
+            &NpcInfo { id: "sage".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: Some(true), runs_dive: None, wears_color_change: None },
+            &PlayerState { dum_dums: 0, swag_worn: 0 },
         );
         assert!(opts.iter().any(|o| o.option_type == "pattern"),
             "puzzler NPCs should expose a 'pattern' option, got: {:?}",
@@ -151,17 +195,86 @@ mod tests {
     #[test]
     fn non_puzzler_has_no_pattern_option() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "robot".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: Some(false) },
-            &PlayerState { dum_dums: 0 },
+            &NpcInfo { id: "robot".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: Some(false), runs_dive: None, wears_color_change: None },
+            &PlayerState { dum_dums: 0, swag_worn: 0 },
         );
         assert!(!opts.iter().any(|o| o.option_type == "pattern"));
     }
 
     #[test]
+    fn includes_swag_when_wearing_something_giftable() {
+        let opts = get_interaction_options(
+            &NpcInfo { id: "dolphin".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None, runs_dive: None, wears_color_change: None },
+            &PlayerState { dum_dums: 0, swag_worn: 2 },
+        );
+        assert!(opts.iter().any(|o| o.option_type == "swag"),
+            "wearing swag should offer to hand it over, got: {:?}",
+            opts.iter().map(|o| &o.option_type).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn excludes_swag_when_wearing_nothing() {
+        let opts = get_interaction_options(
+            &NpcInfo { id: "dolphin".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None, runs_dive: None, wears_color_change: None },
+            &PlayerState { dum_dums: 0, swag_worn: 0 },
+        );
+        assert!(!opts.iter().any(|o| o.option_type == "swag"));
+    }
+
+    #[test]
+    fn excludes_swag_for_someone_who_takes_no_gifts() {
+        let opts = get_interaction_options(
+            &NpcInfo { id: "chest".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: None, runs_dive: None, wears_color_change: None },
+            &PlayerState { dum_dums: 5, swag_worn: 3 },
+        );
+        assert!(!opts.iter().any(|o| o.option_type == "swag"));
+    }
+
+    #[test]
+    fn the_dive_keeper_still_takes_gifts_and_swag() {
+        // Inkwell runs the shaft, but she's a reef buddy first — short-cutting
+        // straight to the dive would mean you could never hand her a hat.
+        let opts = get_interaction_options(
+            &NpcInfo {
+                id: "octopus".into(),
+                can_receive_gifts: Some(true),
+                has_shop: None,
+                is_puzzler: None,
+                runs_dive: Some(true),
+                wears_color_change: None,
+            },
+            &PlayerState { dum_dums: 4, swag_worn: 1 },
+        );
+        let kinds: Vec<&str> = opts.iter().map(|o| o.option_type.as_str()).collect();
+        assert!(kinds.contains(&"dive"), "she has to offer the way down: {kinds:?}");
+        assert!(kinds.contains(&"give"), "...and still take a Dum Dum: {kinds:?}");
+        assert!(kinds.contains(&"swag"), "...and still take a hat: {kinds:?}");
+        let keys: Vec<&str> = opts.iter().map(|o| o.key.as_str()).collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), keys.len(), "menu keys must be unique: {keys:?}");
+    }
+
+    #[test]
+    fn new_colour_only_for_a_buddy_wearing_color_change() {
+        let buddy = |wears| NpcInfo {
+            id: "kid_1".into(), can_receive_gifts: None, has_shop: None, is_puzzler: None,
+            runs_dive: None, wears_color_change: Some(wears),
+        };
+        let kid = PlayerState { dum_dums: 0, swag_worn: 0 };
+        let opts = get_interaction_options(&buddy(true), &kid);
+        let recolor = opts.iter().find(|o| o.option_type == "recolor").expect("Tali in Color Change gets a new colour");
+        assert_eq!(recolor.label, "New color?");
+        assert!(!get_interaction_options(&buddy(false), &kid).iter().any(|o| o.option_type == "recolor"),
+            "nothing to recolour on a buddy who isn't wearing it");
+    }
+
+    #[test]
     fn includes_balance_when_npc_is_puzzler() {
         let opts = get_interaction_options(
-            &NpcInfo { id: "sage".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: Some(true) },
-            &PlayerState { dum_dums: 0 },
+            &NpcInfo { id: "sage".into(), can_receive_gifts: Some(false), has_shop: None, is_puzzler: Some(true), runs_dive: None, wears_color_change: None },
+            &PlayerState { dum_dums: 0, swag_worn: 0 },
         );
         assert!(opts.iter().any(|o| o.option_type == "balance"),
             "puzzler NPCs should expose a 'balance' option, got: {:?}",

@@ -23,22 +23,7 @@ pub const INTRO_STEPS: u8 = 3;
 
 // ─── Layout types ───────────────────────────────────────
 
-#[derive(Debug, Clone, Copy)]
-pub struct UiRect {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-}
-
-impl UiRect {
-    pub fn contains(&self, mx: f32, my: f32) -> bool {
-        mx >= self.x && mx <= self.x + self.w && my >= self.y && my <= self.y + self.h
-    }
-    pub fn center(&self) -> (f32, f32) {
-        (self.x + self.w / 2.0, self.y + self.h / 2.0)
-    }
-}
+pub use crate::ui::layout::UiRect;
 
 pub struct PickerBound {
     pub rect: UiRect,

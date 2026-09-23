@@ -7,8 +7,11 @@ edition = "2021"
 robot-buddy-domain = { path = "../robot-buddy-domain" }
 macroquad = "0.4"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 rand = { version = "0.8", default-features = false, features = ["small_rng"] }
+# Headless text metrics for UI layout: the same rasterizer macroquad uses
+# (already a transitive dep via macroquad, so this adds no code to the WASM).
+fontdue = "0.9"
 
 # No wasm-specific deps — macroquad uses sapp-wasm, not wasm-bindgen.
 # localStorage access is via extern "C" functions defined in index.html.
@@ -21,3 +24,5 @@ robot-buddy-domain = { path = "../robot-buddy-domain" }
 # source for rendered string/char literals (syn).
 ttf-parser = "0.21"
 syn = { version = "2", features = ["full", "visit"] }
+# Layout discipline test: walk macro token streams for forbidden calls.
+proc-macro2 = "1"

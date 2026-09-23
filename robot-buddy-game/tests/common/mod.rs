@@ -35,6 +35,15 @@ impl Harness {
         }
     }
 
+    /// Start on the title screen over existing storage, as if a browser
+    /// already held saves. Keep a clone of `backend` to inspect what's
+    /// written — clones share one store.
+    pub fn with_backend(seed: u64, backend: InMemoryBackend) -> Self {
+        let mut game = Game::with_backend(seed, Box::new(backend));
+        game.refresh_save_slots();
+        Harness { game }
+    }
+
     // ─── Primitive frame drivers ─────────────────────────
 
     /// One frame with the given input.
@@ -282,6 +291,10 @@ impl Harness {
             3 => KeyCode::Key3,
             4 => KeyCode::Key4,
             5 => KeyCode::Key5,
+            6 => KeyCode::Key6,
+            7 => KeyCode::Key7,
+            8 => KeyCode::Key8,
+            9 => KeyCode::Key9,
             n => panic!("unsupported option key {}", n),
         };
         self.press(key);
@@ -506,35 +519,35 @@ impl Harness {
 
     /// Click the catalog row for the item with `item_id` in the open shop.
     pub fn select_shop_item(&mut self, item_id: &str) {
-        let (x, y) = {
+        let idx = {
             let ash = self.game.active_shop().expect("select_shop_item: shop not open");
-            // Browsing view (no item selected yet).
-            let view = ui::shop::ShopView::Browsing;
-            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
-            let idx = ash.catalog.iter().position(|i| i.id == item_id)
-                .unwrap_or_else(|| panic!("no shop item {item_id}"));
-            let row = layout.items.iter().find(|r| r.index == idx)
-                .expect("item row not visible (already buying?)").rect;
-            (row.x + row.w / 2.0, row.y + row.h / 2.0)
+            ash.catalog.iter().position(|i| i.id == item_id)
+                .unwrap_or_else(|| panic!("no shop item {item_id}"))
         };
-        self.click(x, y);
+        // Page through the shelf like a kid would until the row is on screen.
+        for _ in 0..8 {
+            let layout = self.game.shop_layout(SCREEN).expect("shop open");
+            if let Some(row) = layout.item(idx) {
+                let (x, y) = row.center();
+                self.click(x, y);
+                return;
+            }
+            let more = layout.frame.rect(ui::shop::ShopId::NextPage)
+                .expect("item row not visible and no More button (already buying?)");
+            let (x, y) = more.center();
+            self.click(x, y);
+        }
+        panic!("never found the {item_id} row");
     }
 
     /// Tap the answer tile with value `value` during a purchase subtraction.
     pub fn answer_shop_math(&mut self, value: u32) {
         let (x, y) = {
-            let ash = self.game.active_shop().expect("answer_shop_math: shop not open");
-            let i = ash.selected.expect("answer_shop_math: not currently buying");
-            let view = ui::shop::ShopView::Buying {
-                item: &ash.catalog[i],
-                balance: ash.balance_before,
-                cost: ash.cost,
-                choices: &ash.choices,
-            };
-            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
-            let tile = layout.answers.iter().find(|t| t.value == value)
-                .unwrap_or_else(|| panic!("no answer tile {value}")).rect;
-            (tile.x + tile.w / 2.0, tile.y + tile.h / 2.0)
+            let model = self.game.shop_model().expect("answer_shop_math: shop not open");
+            assert!(!model.view.choices().is_empty(), "answer_shop_math: no sum on the counter");
+            ui::shop::layout(&model, SCREEN).answer(&model.view, value)
+                .unwrap_or_else(|| panic!("no answer tile {value}"))
+                .center()
         };
         self.click(x, y);
     }
@@ -549,21 +562,224 @@ impl Harness {
         self.answer_shop_math(answer);
     }
 
-    /// Click the shop's "Done" button to leave and return to Playing.
+    /// Click the shop's "Done" button (twice if the colour picker is up —
+    /// the first Done backs out of the swatches) and return to Playing.
     pub fn close_shop(&mut self) {
+        for _ in 0..2 {
+            let Some(layout) = self.game.shop_layout(SCREEN) else { break };
+            let (x, y) = layout.done().expect("Done laid out").center();
+            self.click(x, y);
+        }
+        self.wait_until(|g| g.state == GameState::Playing);
+    }
+
+    /// Tap the swatch for outfit colour `color` in the shop's colour picker.
+    pub fn pick_shop_color(&mut self, color: &str) {
+        let i = outfit_color_index(color);
+        let (x, y) = self.game.shop_layout(SCREEN).expect("pick_shop_color: shop not open")
+            .swatch(i).expect("pick_shop_color: the colour picker isn't up").center();
+        self.click(x, y);
+    }
+
+    // ─── Shelly's pearl-leap helpers ─────────────────────
+
+    /// Commit to a leap size by pressing the number key Shelly's bubble lists
+    /// it under. Panics if the size isn't on offer.
+    pub fn pick_leap_size(&mut self, size: u8) {
+        let key_no = {
+            let s = self.game.leap_session().expect("pick_leap_size: no pearl trip going");
+            s.puzzle.choices.iter().position(|c| *c == size)
+                .unwrap_or_else(|| panic!("{size} isn't on offer (choices: {:?})", s.puzzle.choices))
+        };
+        let key = match key_no {
+            0 => KeyCode::Key1,
+            1 => KeyCode::Key2,
+            2 => KeyCode::Key3,
+            _ => KeyCode::Key4,
+        };
+        self.press(key);
+    }
+
+    /// One leap east, waiting out the slide.
+    pub fn leap(&mut self) {
+        self.press(KeyCode::Right);
+        self.run_until(|g| !g.player.moving, 120);
+    }
+
+    /// Swim back to the launch stone, waiting out the slide.
+    pub fn swim_back(&mut self) {
+        self.press(KeyCode::Left);
+        self.run_until(|g| !g.player.moving, 120);
+    }
+
+    /// Stand the player on a tile outright (for setting up on a far-off map).
+    pub fn warp_to(&mut self, col: usize, row: usize) {
+        self.game.player.tile_x = col;
+        self.game.player.tile_y = row;
+        self.game.player.x = col as f32 * 48.0;
+        self.game.player.y = row as f32 * 48.0;
+        self.game.player.target_x = self.game.player.x;
+        self.game.player.target_y = self.game.player.y;
+        self.game.player.moving = false;
+        self.idle();
+    }
+
+    // ─── Descent helpers ─────────────────────────────────
+
+    /// Click one kick button in the open descent. `down` sinks, else rises.
+    pub fn kick(&mut self, n: u8, down: bool) {
         let (x, y) = {
-            let ash = self.game.active_shop().expect("close_shop: shop not open");
-            let view = match ash.selected {
-                Some(i) => ui::shop::ShopView::Buying {
-                    item: &ash.catalog[i], balance: ash.balance_before, cost: ash.cost, choices: &ash.choices,
-                },
-                None => ui::shop::ShopView::Browsing,
-            };
-            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
-            (layout.close_btn.x + layout.close_btn.w / 2.0, layout.close_btn.y + layout.close_btn.h / 2.0)
+            let ad = self.game.active_descent().expect("kick: not diving");
+            let layout = ui::descent::layout(&ad.session, SCREEN);
+            let b = layout.kicks.iter().find(|b| b.n == n && b.down == down)
+                .unwrap_or_else(|| panic!("no {} kick of {n} in this shaft",
+                    if down { "sink" } else { "rise" }));
+            (b.rect.x + b.rect.w / 2.0, b.rect.y + b.rect.h / 2.0)
         };
         self.click(x, y);
+    }
+
+    /// Play the shaft's shortest route by tapping the real kick buttons, then
+    /// dismiss the landing beat. Leaves the game wherever the door led.
+    pub fn dive_to_the_door(&mut self) {
+        use robot_buddy_domain::logic::descent::DiveAction;
+        let route = {
+            let ad = self.game.active_descent().expect("dive_to_the_door: not diving");
+            ad.session.puzzle.best_route().expect("the shaft should be divable")
+        };
+        for action in route {
+            match action {
+                DiveAction::Sink { n } => self.kick(n, true),
+                DiveAction::Rise { n } => self.kick(n, false),
+            }
+        }
+        // Landing holds a short beat; a tap skips it.
+        for _ in 0..30 {
+            if self.game.active_descent().is_none() { return; }
+            self.press(KeyCode::Space);
+        }
+        panic!("the descent never resolved after landing on the door");
+    }
+
+    // ─── Buddy helpers ───────────────────────────────────
+
+    /// Make `kind` (from `home_map`'s roster) the buddy following the player,
+    /// standing on an open tile beside them. Sparky waits at home, as he does
+    /// whenever someone else is tagging along.
+    pub fn bring_buddy(&mut self, kind: NpcKind, home_map: &'static str) {
+        let mut buddy = robot_buddy_game::npc::npcs_for_map(home_map).into_iter()
+            .find(|n| n.kind == kind)
+            .unwrap_or_else(|| panic!("no {kind:?} in the {home_map} roster"));
+        let (px, py) = (self.game.player.tile_x, self.game.player.tile_y);
+        let (bx, by) = [(px + 1, py), (px.wrapping_sub(1), py), (px, py + 1), (px, py.wrapping_sub(1))]
+            .into_iter()
+            .find(|&(x, y)| !self.game.map.is_solid(x, y)
+                && !self.game.npcs.iter().any(|n| (n.entity.tile_x, n.entity.tile_y) == (x, y)))
+            .expect("no open tile beside the player for the buddy");
+        buddy.entity.tile_x = bx;
+        buddy.entity.tile_y = by;
+        buddy.entity.x = bx as f32 * 48.0;
+        buddy.entity.y = by as f32 * 48.0;
+        buddy.entity.target_x = buddy.entity.x;
+        buddy.entity.target_y = buddy.entity.y;
+        buddy.start_following();
+        self.game.companion = Some(buddy);
+        self.game.sparky_parked = true;
+    }
+
+    /// Turn to the buddy following us and talk to them. They're always right
+    /// beside the player after a warp, so no walking is needed.
+    pub fn talk_to_buddy(&mut self) {
+        let (bx, by) = {
+            let c = self.game.companion.as_ref().expect("talk_to_buddy: nobody's following");
+            (c.entity.tile_x, c.entity.tile_y)
+        };
+        let dx = bx as i32 - self.game.player.tile_x as i32;
+        let dy = by as i32 - self.game.player.tile_y as i32;
+        let key = match (dx, dy) {
+            (0, -1) => KeyCode::Up,
+            (0, 1)  => KeyCode::Down,
+            (-1, 0) => KeyCode::Left,
+            (1, 0)  => KeyCode::Right,
+            _ => panic!("the buddy isn't beside the player (offset {dx},{dy})"),
+        };
+        self.hold(key);
+        self.interact();
+    }
+
+    /// Ask the buddy for a dive and play it cleanly to the bottom.
+    pub fn dive_with_buddy(&mut self) {
+        self.talk_to_buddy();
+        self.select_option("dive");
+        assert_eq!(self.game.state, GameState::Descent, "asking the buddy for a dive opens the descent");
+        self.dive_to_the_door();
+    }
+
+    /// Walk onto the map's rising bubble column and ride it up to `dest_map`.
+    pub fn rise_to(&mut self, dest_map: &str) {
+        use robot_buddy_game::tilemap::Tile;
+        let map = &self.game.map;
+        let (rx, ry) = (0..map.height)
+            .flat_map(|y| (0..map.width).map(move |x| (x, y)))
+            .find(|&(x, y)| map.tiles[y][x] == Tile::RiseSpot)
+            .unwrap_or_else(|| panic!("no bubble column on '{}'", map.id));
+        // Walk to the tile above the column, then step down into it.
+        self.walk_to(rx, ry - 1);
+        self.step_through_portal(KeyCode::Down, dest_map);
+    }
+
+    // ─── Give-Swag helpers ───────────────────────────────
+
+    /// Click the row for `item_id` in the open "Give Swag" picker, handing it
+    /// to whoever the kid is talking to.
+    pub fn give_swag(&mut self, item_id: &str) {
+        let idx = {
+            let asw = self.game.active_swag().expect("give_swag: picker not open");
+            asw.items.iter().position(|i| i.id == item_id)
+                .unwrap_or_else(|| panic!("the kid isn't wearing {item_id} (has: {:?})",
+                    asw.items.iter().map(|i| &i.id).collect::<Vec<_>>()))
+        };
+        for _ in 0..8 {
+            let layout = self.game.swag_layout(SCREEN).expect("picker open");
+            if let Some(row) = layout.item(idx) {
+                let (x, y) = row.center();
+                self.click(x, y);
+                return;
+            }
+            let (x, y) = layout.frame.rect(ui::swag::SwagId::NextPage)
+                .expect("row not visible and no More button").center();
+            self.click(x, y);
+        }
+        panic!("never found the {item_id} row");
+    }
+
+    /// Click the swag picker's "Done" button (twice if a buddy's colour
+    /// swatches are up) and return to Playing.
+    pub fn close_swag(&mut self) {
+        for _ in 0..2 {
+            let Some(layout) = self.game.swag_layout(SCREEN) else { break };
+            let (x, y) = layout.done().expect("Done laid out").center();
+            self.click(x, y);
+        }
         self.wait_until(|g| g.state == GameState::Playing);
+    }
+
+    /// Tap the swatch for outfit colour `color` in the swag panel's colour
+    /// picker (up after handing over Color Change, or from "New color?").
+    pub fn pick_swag_color(&mut self, color: &str) {
+        let i = outfit_color_index(color);
+        let (x, y) = self.game.swag_layout(SCREEN).expect("pick_swag_color: panel not open")
+            .swatch(i).expect("pick_swag_color: no colour swatches up").center();
+        self.click(x, y);
+    }
+
+    /// Put the kid on another map outright, with its roster, standing on
+    /// (`col`, `row`) — for stories that move between far-apart places.
+    pub fn visit_map(&mut self, map_id: &'static str, col: usize, row: usize) {
+        self.game.map = robot_buddy_game::tilemap::Map::by_id(map_id);
+        self.game.npcs = robot_buddy_game::npc::npcs_for_map(map_id);
+        self.game.npcs_offstage.clear();
+        self.warp_to(col, row);
     }
 
     // ─── Settings / parent overlay helpers ──────────────
@@ -591,6 +807,12 @@ impl Harness {
     /// Click a feature toggle in the (revealed) parent section.
     pub fn toggle_feature_in_settings(&mut self, feature: robot_buddy_game::ui::settings_overlay::Feature) {
         let (x, y) = robot_buddy_game::ui::settings_overlay::feature_toggle_center(SCREEN, feature);
+        self.click(x, y);
+    }
+
+    /// Click an arcade-pace button in the open parent panel.
+    pub fn set_arcade_pace(&mut self, pace: robot_buddy_domain::types::GamePace) {
+        let (x, y) = robot_buddy_game::ui::settings_overlay::pace_button_center(SCREEN, pace);
         self.click(x, y);
     }
 
@@ -689,4 +911,10 @@ fn bfs(
         }
     }
     None
+}
+
+/// Index of outfit colour `color` in the palette (panics on an unknown id).
+pub fn outfit_color_index(color: &str) -> usize {
+    robot_buddy_game::sprites::player::OUTFIT_COLORS.iter().position(|(id, _)| *id == color)
+        .unwrap_or_else(|| panic!("no outfit colour {color}"))
 }

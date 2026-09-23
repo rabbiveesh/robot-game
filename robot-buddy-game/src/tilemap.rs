@@ -30,7 +30,9 @@ pub enum Tile {
     Kelp = 21,     // solid kelp/seaweed wall
     Bubble = 22,   // walkable bubble vent (decorative)
     // Portal markers — walkable tiles that visibly flag a special exit. A
-    // reusable family: each themed map gets its own (DiveSpot today).
+    // reusable family: each themed map gets its own. Every portal a kid is
+    // expected to find gets a marker — a portal on a plain floor tile is
+    // invisible.
     DiveSpot = 23, // swirling whirlpool → reef dive portal
     // Space tiles (hub + planets, and future cosmic maps)
     Space = 24,       // deep-space floor (walkable, dark)
@@ -43,6 +45,12 @@ pub enum Tile {
     MoonGround = 31,  // walkable gray crater floor
     MarsGround = 32,  // walkable red dust
     StationFloor = 33,// walkable metal station floor
+    RiseSpot = 34,    // rising bubble column → surface from an underwater map
+    GoyishPad = 35,   // hub marker → the Goyish Map (arcade shooter)
+    /// A rip current running between Shelly's pearl stones. Solid — you can't
+    /// swim across it, which is what forces the stones to be *leapt* rather
+    /// than strolled along. See `number_track` and `logic::leap`.
+    Current = 36,
     // Glitch-only tiles (doghouse)
     Glitch95 = 95,
     Glitch96 = 96,
@@ -52,6 +60,20 @@ pub enum Tile {
 }
 
 pub const TILE_SIZE: f32 = 48.0;
+
+/// Lay the rip current between Shelly's stones on a map that has a pearl path.
+/// The stones themselves stay walkable floor — they're drawn as stones by the
+/// path overlay — so this only fills the gaps a kid has to leap over.
+fn paint_pearl_current(map_id: &str, tiles: &mut [Vec<Tile>]) {
+    let Some(track) = crate::number_track::track_for_map(map_id) else { return };
+    for (x, y) in track.current_tiles() {
+        tiles[y][x] = Tile::Current;
+    }
+    // Clear the stones themselves in case map texture landed on one.
+    for &(x, y) in track.tiles {
+        tiles[y][x] = Tile::Sand;
+    }
+}
 
 // ─── PORTALS ────────────────────────────────────────────
 
@@ -71,61 +93,77 @@ pub struct Portal {
     /// Fuel spent each time the player takes this portal (0 = free). Unlike
     /// `cost` this is charged every trip — it's how rocket jumps burn fuel.
     pub fuel_cost: u32,
+    /// True when this portal is a dive shaft: stepping onto it opens the
+    /// descent minigame instead of transferring, and the transfer only happens
+    /// once the diver rests on the door. Charged every trip — the dive IS the
+    /// gate. Reusable for any "earn your way through" doorway.
+    pub dive: bool,
 }
 
 /// All portals in the game. Checked after each player move.
 pub fn all_portals() -> &'static [Portal] {
     &[
         // Home: overworld door → home interior, home door → overworld
-        Portal { from_map: "overworld", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "home", from_x: 4, from_y: 6, to_map: "overworld", to_x: 5, to_y: 8, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "home", from_x: 4, from_y: 6, to_map: "overworld", to_x: 5, to_y: 8, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Lab: overworld east house → lab interior
-        Portal { from_map: "overworld", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "lab", from_x: 5, from_y: 7, to_map: "overworld", to_x: 22, to_y: 6, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "lab", from_x: 5, from_y: 7, to_map: "overworld", to_x: 22, to_y: 6, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Shop: overworld south house → shop interior
-        Portal { from_map: "overworld", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "shop", from_x: 4, from_y: 6, to_map: "overworld", to_x: 24, to_y: 18, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "shop", from_x: 4, from_y: 6, to_map: "overworld", to_x: 24, to_y: 18, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // SECRET: Dream world — water tile past bridge
-        Portal { from_map: "overworld", from_x: 16, from_y: 14, to_map: "dream", to_x: 14, to_y: 13, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "dream", from_x: 16, from_y: 14, to_map: "overworld", to_x: 13, to_y: 14, dir: Dir::Left, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 16, from_y: 14, to_map: "dream", to_x: 14, to_y: 13, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream", from_x: 16, from_y: 14, to_map: "overworld", to_x: 13, to_y: 14, dir: Dir::Left, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Dream-mode mirrors of overworld portals (same doors work in dream)
-        Portal { from_map: "dream", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "dream", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "dream", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "dream", from_x: 5, from_y: 7, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream", from_x: 22, from_y: 5, to_map: "lab", to_x: 5, to_y: 6, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream", from_x: 24, from_y: 17, to_map: "shop", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // SECRET: Doghouse land — roof tile behind home
-        Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "dream", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        // The Dogfish House's bubble column. Its real destination is wherever
+        // the kid dove from (`Game::dive_return`); this entry is the fallback
+        // for when that's unknown, and the marker the column needs to exist.
+        Portal { from_map: DOGFISH_HOUSE, from_x: DOGFISH_RISE.0, from_y: DOGFISH_RISE.1, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // SECRET: Hidden grove — tree at top border
-        Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "dream", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "grove", from_x: 5, from_y: 8, to_map: "overworld", to_x: 15, to_y: 1, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "grove", from_x: 5, from_y: 8, to_map: "overworld", to_x: 15, to_y: 1, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Dev → Control Room (knob bay for testing puzzle parameters in isolation)
-        Portal { from_map: "dev", from_x: 1, from_y: 9, to_map: "control", to_x: 6, to_y: 1, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "control", from_x: 6, from_y: 7, to_map: "dev", to_x: 1, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "dev", from_x: 1, from_y: 9, to_map: "control", to_x: 6, to_y: 1, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "control", from_x: 6, from_y: 7, to_map: "dev", to_x: 1, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Dev → Annex (validation field for new-map genericity)
-        Portal { from_map: "dev", from_x: 13, from_y: 10, to_map: "annex", to_x: 4, to_y: 5, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "annex", from_x: 4, from_y: 6, to_map: "dev", to_x: 13, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "dev", from_x: 13, from_y: 10, to_map: "annex", to_x: 4, to_y: 5, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "annex", from_x: 4, from_y: 6, to_map: "dev", to_x: 13, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // SECRET: Coral reef — dive spot at the south edge of the pond. Costs a
         // few Dum Dums to dive in (the reef's toll); resurface for free.
-        Portal { from_map: "overworld", from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0 },
-        Portal { from_map: "dream",     from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0 },
-        Portal { from_map: "reef", from_x: 8, from_y: 10, to_map: "overworld", to_x: 17, to_y: 16, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
-        // Reef dive-gauge → the trench: hop down the depth-stones to the deepest
-        // (24,13) and the descent fires. Surface again at the shaft top (24,8).
-        Portal { from_map: "reef", from_x: 24, from_y: 13, to_map: "trench", to_x: 8, to_y: 2, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "trench", from_x: 8, from_y: 12, to_map: "reef", to_x: 24, to_y: 8, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "overworld", from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0, dive: false },
+        Portal { from_map: "dream",     from_x: 17, from_y: 15, to_map: "reef", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 3, fuel_cost: 0, dive: false },
+        Portal { from_map: "reef", from_x: 8, from_y: 10, to_map: "overworld", to_x: 17, to_y: 16, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        // Reef → the trench. There's no tile to step on: Inkwell the octopus
+        // runs this shaft, and `from_x`/`from_y` are just her ledge so the
+        // portal has a home map. Opened from her menu — see `Npc::diving`.
+        Portal { from_map: "reef", from_x: 36, from_y: 7, to_map: "trench", to_x: 13, to_y: 2, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0, dive: true },
+        Portal { from_map: "trench", from_x: 10, from_y: 2, to_map: "reef", to_x: 36, to_y: 8, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        // Reef village: Myrtle's shell cottage door → cove_home interior
+        Portal { from_map: "reef", from_x: 27, from_y: 18, to_map: "cove_home", to_x: 5, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "cove_home", from_x: 5, from_y: 6, to_map: "reef", to_x: 27, to_y: 19, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // SPACE: Gizmo's lab launchpad → the orbital hub, and back.
-        Portal { from_map: "lab", from_x: 10, from_y: 2, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "space_hub", from_x: 8, from_y: 10, to_map: "lab", to_x: 10, to_y: 3, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "lab", from_x: 10, from_y: 2, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "space_hub", from_x: 8, from_y: 10, to_map: "lab", to_x: 10, to_y: 3, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Hub → planets. The Moon is a free hop; deeper worlds burn fuel.
-        Portal { from_map: "space_hub", from_x: 3,  from_y: 2, to_map: "moon",          to_x: 6, to_y: 2, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "space_hub", from_x: 11, from_y: 2, to_map: "mars",          to_x: 6, to_y: 7, dir: Dir::Up,   secret: false, cost: 0, fuel_cost: 3 },
-        Portal { from_map: "space_hub", from_x: 8,  from_y: 4, to_map: "asteroid_base", to_x: 6, to_y: 2, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 4 },
+        Portal { from_map: "space_hub", from_x: 3,  from_y: 2, to_map: "moon",          to_x: 6, to_y: 2, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "space_hub", from_x: 11, from_y: 2, to_map: "mars",          to_x: 6, to_y: 7, dir: Dir::Up,   secret: false, cost: 0, fuel_cost: 3, dive: false },
+        Portal { from_map: "space_hub", from_x: 8,  from_y: 4, to_map: "asteroid_base", to_x: 6, to_y: 2, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 4, dive: false },
         // Planet return pads → back to the hub (free).
-        Portal { from_map: "moon",          from_x: 6, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "mars",          from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
-        Portal { from_map: "asteroid_base", from_x: 3, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0 },
+        Portal { from_map: "moon",          from_x: 6, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "mars",          from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "asteroid_base", from_x: 3, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        // Hub → the Goyish Map arcade deck (free, so the kid can replay it), and back.
+        Portal { from_map: "space_hub", from_x: 4, from_y: 5, to_map: "goyish_map", to_x: 6, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "goyish_map", from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
     ]
 }
 
@@ -170,7 +208,33 @@ pub enum RenderMode {
     /// Space theme — dark void + twinkling starfield overlay. Used by the hub
     /// and every planet surface; per-tile colors carry each world's look.
     Cosmic,
+    /// Glitch AND Aquatic at once — the Dogfish House, where a dive from a map
+    /// with no shaft lands. Glitch tiles flicker in sea colors, everything else
+    /// is washed teal, and both overlays run (scanlines + tears over drifting
+    /// bubbles). The glitch is the joke; the water says where you are.
+    SunkenGlitch,
 }
+
+impl RenderMode {
+    /// Submerged maps: bubbles, blue tint, and the rule that every visible
+    /// exit sits on a marker tile.
+    pub fn is_underwater(self) -> bool {
+        matches!(self, RenderMode::Aquatic | RenderMode::SunkenGlitch)
+    }
+
+    /// Maps whose glitch tiles flicker and whose screen tears.
+    pub fn is_glitchy(self) -> bool {
+        matches!(self, RenderMode::Glitch | RenderMode::SunkenGlitch)
+    }
+}
+
+/// Where a dive lands when the map it started on has no shaft of its own.
+pub const DOGFISH_HOUSE: &str = "dogfish_house";
+/// The tile a diver arrives on in the Dogfish House (top of the room, like
+/// the doghouse's roof drop).
+pub const DOGFISH_ARRIVAL: (usize, usize) = (7, 1);
+/// The bubble column home — where the doghouse had its door.
+pub const DOGFISH_RISE: (usize, usize) = (7, 10);
 
 impl Map {
     pub fn pixel_width(&self) -> f32 { self.width as f32 * TILE_SIZE }
@@ -180,7 +244,7 @@ impl Map {
         if col >= self.width || row >= self.height { return true; }
         if is_secret_walkable(self.id, col, row) { return false; }
         let tile = self.tiles[row][col];
-        matches!(tile, Tile::Water | Tile::Wall | Tile::Tree | Tile::HouseWall | Tile::Roof | Tile::Window | Tile::Fence | Tile::Sign | Tile::Chest | Tile::Table | Tile::Bookshelf | Tile::GlitchWall | Tile::Coral | Tile::Kelp | Tile::SpaceRock)
+        matches!(tile, Tile::Water | Tile::Wall | Tile::Tree | Tile::HouseWall | Tile::Roof | Tile::Window | Tile::Fence | Tile::Sign | Tile::Chest | Tile::Table | Tile::Bookshelf | Tile::GlitchWall | Tile::Coral | Tile::Kelp | Tile::SpaceRock | Tile::Current)
     }
 
     #[allow(non_snake_case)]
@@ -304,6 +368,26 @@ impl Map {
         }
     }
 
+    /// The doghouse, sunk. Same room, same chest, same glitch tiles — but
+    /// underwater, with a bubble column where the door was and a little kelp
+    /// and a few bubble vents so it reads as the sea floor at a glance.
+    pub fn dogfish_house() -> Self {
+        use Tile::*;
+        let mut m = Self::doghouse();
+        m.id = DOGFISH_HOUSE;
+        m.render_mode = RenderMode::SunkenGlitch;
+        m.tiles[DOGFISH_RISE.1][DOGFISH_RISE.0] = RiseSpot;
+        // Kelp tucked into the corners (solid, off every path) and bubble
+        // vents on open floor.
+        for (x, y) in [(1, 9), (14, 9), (1, 3), (14, 3)] {
+            m.tiles[y][x] = Kelp;
+        }
+        for (x, y) in [(3, 8), (12, 8), (4, 2), (10, 3)] {
+            m.tiles[y][x] = Bubble;
+        }
+        m
+    }
+
     #[allow(non_snake_case)]
     pub fn grove() -> Self {
         use Tile::*;
@@ -401,18 +485,21 @@ impl Map {
     }
 
     /// Coral reef — the first underwater map. A lower arrival lagoon, a coral
-    /// wall with a single gap guarded by a napping shark, and a treasure cove
-    /// up top. Border is solid kelp. `RenderMode::Aquatic` paints it teal and
-    /// floats bubbles. Built as plain data so future water maps copy the shape.
+    /// wall with a single gap guarded by a napping shark, a treasure cove up
+    /// top, a shell-cottage village in the south-east, and Inkwell's shaft down
+    /// to the trench on the east edge. Border is solid kelp. `RenderMode::
+    /// Aquatic` paints it teal and floats bubbles. Built as plain data so
+    /// future water maps copy the shape.
     #[allow(non_snake_case)]
     pub fn reef() -> Self {
         use Tile::*;
-        // A big 28×20 lagoon, built programmatically so it's easy to grow. A
+        // A big 40×26 lagoon, built programmatically so it's easy to grow. A
         // coral wall (row 5) with a single gap at col 8 is the shark's gate to
-        // the treasure cove above (chest at (7,2)). The wide lower basin holds
+        // the treasure cove above (chest at (7,2)). The wide middle basin holds
         // the ambient number-line stepping-stones (row 13, see number_track)
-        // plus the friendly sea folk. Entry/exit portals land at (8,9)/(8,10).
-        let (w, h) = (28usize, 20usize);
+        // plus the friendly sea folk; Inkwell's dive shaft down to the trench is
+        // col 36. Entry lands at (8,9); the rise spot home is at (8,10).
+        let (w, h) = (40usize, 26usize);
         let mut tiles = vec![vec![SeaFloor; w]; h];
         for x in 0..w {
             tiles[0][x] = Kelp;
@@ -427,28 +514,63 @@ impl Map {
             tiles[5][x] = Coral;
         }
         tiles[5][8] = SeaFloor;
-        // Treasure cove chest, above the wall.
+        // Treasure cove chest, above the wall, plus cove texture so the long
+        // strip doesn't read empty.
         tiles[2][7] = Chest;
-        // Scattered coral / sand beds / bubble vents for texture — kept clear of
-        // the creatures' spots, the portals, and the number-line row (13).
-        for &(x, y) in &[(2, 3), (14, 3), (22, 4), (3, 16), (20, 11), (24, 14)] {
+        for &(x, y) in &[(14, 3), (25, 2), (34, 3), (2, 3)] {
             tiles[y][x] = Coral;
         }
-        for &(x, y) in &[(18, 8), (19, 8), (18, 9), (19, 9), (23, 16), (24, 16)] {
+        for &(x, y) in &[(20, 2), (21, 3), (30, 3)] {
             tiles[y][x] = Sand;
         }
-        for &(x, y) in &[(2, 8), (25, 8), (6, 17), (21, 17)] {
+        tiles[2][30] = Bubble;
+        // Kelp clumps mid-basin — something to swim around on the way east.
+        for &(x, y) in &[(20, 8), (20, 9), (28, 7), (29, 7), (24, 16), (25, 16)] {
+            tiles[y][x] = Kelp;
+        }
+        // Scattered coral / sand beds / bubble vents for texture — kept clear of
+        // the creatures' spots, the portals, the number-line row (13) and the
+        // Inkwell's ledge (col 36, row 7).
+        for &(x, y) in &[(22, 4), (3, 16), (20, 11), (30, 11), (33, 15), (18, 16), (12, 18), (6, 20), (15, 21)] {
+            tiles[y][x] = Coral;
+        }
+        for &(x, y) in &[(18, 8), (19, 8), (18, 9), (19, 9), (23, 16), (26, 12), (27, 12), (12, 17)] {
+            tiles[y][x] = Sand;
+        }
+        for &(x, y) in &[(2, 8), (25, 8), (6, 17), (21, 17), (32, 8), (10, 21)] {
             tiles[y][x] = Bubble;
         }
+        // The shell-cottage village, south-east: three little houses grown out
+        // of the reef. Only Myrtle's (the one with a door, at cols 26–28) opens
+        // — its door portals into the cove_home interior.
+        for (x0, y0) in [(26usize, 17usize), (32, 18), (28, 21)] {
+            for dx in 0..3 {
+                tiles[y0][x0 + dx] = Roof;
+                tiles[y0 + 1][x0 + dx] = Window;
+            }
+            tiles[y0 + 1][x0 + 1] = HouseWall;
+        }
+        tiles[18][27] = Door; // Myrtle's front door
+        // Sandy village paths between the cottages.
+        for &(x, y) in &[(27, 19), (27, 20), (28, 20), (29, 20), (30, 20), (31, 20), (33, 20), (29, 23), (30, 23)] {
+            tiles[y][x] = Sand;
+        }
+        // Shelly's pearl stones along row 13, with rip current in the gaps so
+        // the path can only be leapt. Painted from `number_track` itself, so
+        // the terrain and the marks can never drift apart.
+        paint_pearl_current("reef", &mut tiles);
+        // The way home: the surface portal at (8,10) is a visible rise spot.
+        tiles[10][8] = RiseSpot;
         Map { id: "reef", width: w, height: h, render_mode: RenderMode::Aquatic, tiles }
     }
 
-    /// The trench — the reef's deeper zone, reached by hopping the dive gauge to
-    /// the bottom. A richer pearl path (the descent payoff) plus a way back up
-    /// at (8,12).
+    /// The trench — the reef's deeper zone, reached by diving Inkwell's shaft
+    /// to the bottom. A winding canyon: an arrival ledge up top (with the rise
+    /// spot home), a wide middle basin holding the richer pearl path, a walled
+    /// east pocket, and a lower vent field hiding a treasure chest.
     pub fn trench() -> Self {
         use Tile::*;
-        let (w, h) = (16usize, 14usize);
+        let (w, h) = (26usize, 18usize);
         let mut tiles = vec![vec![SeaFloor; w]; h];
         for x in 0..w {
             tiles[0][x] = Coral;
@@ -458,10 +580,71 @@ impl Map {
             row[0] = Coral;
             row[w - 1] = Coral;
         }
-        for &(x, y) in &[(3, 3), (12, 3), (3, 10), (12, 10)] {
+        // Upper ridge under the arrival ledge — open in the middle (and at the
+        // far edges) so the ledge spills into the basin.
+        for x in 2..=9 {
+            tiles[5][x] = Coral;
+        }
+        for x in 16..=23 {
+            tiles[5][x] = Coral;
+        }
+        // Rock spur off the upper ridge walls off an east pocket (reach it
+        // around the top at col 24, or from the vent field below).
+        for y in 6..=10 {
+            tiles[y][20] = Coral;
+        }
+        // Lower ridge shelters the vent field + treasure; two gaps in.
+        for x in 6..=19 {
+            if x != 8 && x != 17 {
+                tiles[12][x] = Coral;
+            }
+        }
+        // A short spur splits the vent field so it winds instead of opening up.
+        for y in 13..=15 {
+            tiles[y][13] = Coral;
+        }
+        // Landmarks: sand beds, glowing vents, coral heads.
+        for &(x, y) in &[(10, 10), (11, 10), (22, 3), (5, 3), (3, 14)] {
+            tiles[y][x] = Sand;
+        }
+        for &(x, y) in &[(3, 15), (7, 14), (19, 3), (24, 6), (18, 15)] {
+            tiles[y][x] = Bubble;
+        }
+        for &(x, y) in &[(7, 3), (18, 9), (3, 7), (24, 10), (15, 16), (12, 3)] {
             tiles[y][x] = Coral;
         }
+        // The deep pearl path (row 8), currents and all — same rules as the
+        // reef's, and a deep pearl is worth double.
+        paint_pearl_current("trench", &mut tiles);
+        // Treasure pocket: a chest deep in the south-east vent field.
+        tiles[15][23] = Chest;
+        // The way back up: a bright rise spot on the arrival ledge.
+        tiles[2][10] = RiseSpot;
         Map { id: "trench", width: w, height: h, render_mode: RenderMode::Aquatic, tiles }
+    }
+
+    /// Myrtle's shell cottage — the one reef-village house with a door. A cozy
+    /// sand-floored room; the Door tile at (5,6) is the way back out.
+    pub fn cove_home() -> Self {
+        use Tile::*;
+        let (w, h) = (10usize, 8usize);
+        let mut tiles = vec![vec![SeaFloor; w]; h];
+        for x in 0..w {
+            tiles[0][x] = Coral;
+            tiles[h - 1][x] = Coral;
+        }
+        for row in tiles.iter_mut() {
+            row[0] = Coral;
+            row[w - 1] = Coral;
+        }
+        tiles[1][2] = Bookshelf; // Myrtle's shelf of shells
+        tiles[2][6] = Table;
+        tiles[5][7] = Bubble;    // a bubbling kettle vent
+        for &(x, y) in &[(4, 4), (5, 4)] {
+            tiles[y][x] = Sand;  // sand rug
+        }
+        tiles[6][5] = Door;      // back out to the village
+        Map { id: "cove_home", width: w, height: h, render_mode: RenderMode::Aquatic, tiles }
     }
 
     /// Orbital hub — the flyable starfield. You pilot the rocket (arrow keys)
@@ -471,7 +654,7 @@ impl Map {
     pub fn space_hub() -> Self {
         use Tile::*;
         let (SR, Sp, St, Lp) = (SpaceRock, Space, Star, Launchpad);
-        let (Mo, Ma, As) = (MoonPad, MarsPad, AsteroidPad);
+        let (Mo, Ma, As, Gy) = (MoonPad, MarsPad, AsteroidPad, GoyishPad);
         Map {
             id: "space_hub", width: 16, height: 12, render_mode: RenderMode::Cosmic,
             tiles: vec![
@@ -480,7 +663,7 @@ impl Map {
                 vec![SR,Sp,Sp,Mo,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Ma,Sp,Sp,Sp,SR],
                 vec![SR,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,St,Sp,Sp,Sp,Sp,Sp,SR],
                 vec![SR,Sp,Sp,Sp,Sp,Sp,Sp,Sp,As,Sp,Sp,Sp,Sp,Sp,Sp,SR],
-                vec![SR,Sp,St,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,SR],
+                vec![SR,Sp,St,Sp,Gy,Sp,Sp,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,SR],
                 vec![SR,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,SR],
                 vec![SR,Sp,Sp,Sp,St,Sp,Sp,Sp,Sp,Sp,St,Sp,Sp,Sp,Sp,SR],
                 vec![SR,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,Sp,SR],
@@ -556,6 +739,30 @@ impl Map {
         }
     }
 
+    /// The Goyish Map — a neon arcade deck in orbit. The kid walks to Blaster
+    /// Bubbe's cabinet and taps in to play the number-bond space shooter. A
+    /// launch pad in the corner drops back to the hub. Cosmic render mode floats
+    /// a starfield over the metal deck.
+    #[allow(non_snake_case)]
+    pub fn goyish_map() -> Self {
+        use Tile::*;
+        let (SR, ST, Lp) = (SpaceRock, StationFloor, Launchpad);
+        Map {
+            id: "goyish_map", width: 12, height: 9, render_mode: RenderMode::Cosmic,
+            tiles: vec![
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,ST,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,ST,Lp,ST,ST,ST,ST,ST,ST,ST,ST,SR],
+                vec![SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR,SR],
+            ],
+        }
+    }
+
     pub fn by_id(id: &str) -> Self {
         match id {
             "overworld" => Self::overworld(),
@@ -564,16 +771,19 @@ impl Map {
             "shop" => Self::shop(),
             "dream" => Self::dream(),
             "doghouse" => Self::doghouse(),
+            DOGFISH_HOUSE => Self::dogfish_house(),
             "grove" => Self::grove(),
             "dev" => Self::dev(),
             "control" => Self::control(),
             "annex" => Self::annex(),
             "reef" => Self::reef(),
             "trench" => Self::trench(),
+            "cove_home" => Self::cove_home(),
             "space_hub" => Self::space_hub(),
             "moon" => Self::moon(),
             "mars" => Self::mars(),
             "asteroid_base" => Self::asteroid_base(),
+            "goyish_map" => Self::goyish_map(),
             _ => Self::overworld(),
         }
     }
@@ -581,9 +791,13 @@ impl Map {
 
 /// Tile color. Glitch mode uses shifting colors for high IDs.
 pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
-    if mode == RenderMode::Glitch && matches!(tile, Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98 | Tile::GlitchWall) {
+    if mode == RenderMode::Glitch && is_glitch_tile(tile) {
         let shift = ((time * 3.0 + (tile as u8) as f32 * 0.7).sin() * 127.0 + 128.0) as u8;
         return Color::from_rgba(shift, 255 - shift, shift / 2, 255);
+    }
+
+    if mode == RenderMode::SunkenGlitch {
+        return tile_color_sunken_glitch(tile, time);
     }
 
     if mode == RenderMode::Dream {
@@ -598,6 +812,7 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
             Tile::Grass     => dream_grass,
             Tile::Path      => Color::from_rgba(180, 160, 200, 255), // misty path
             Tile::Water     => dream_water,
+            Tile::Current   => dream_water,
             Tile::Tree      => dream_grass,
             Tile::Flower    => dream_grass,
             Tile::Fence     => dream_grass,
@@ -619,9 +834,10 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
             Tile::Kelp      => dream_grass,
             Tile::Bubble    => dream_water,
             Tile::DiveSpot  => dream_water,
+            Tile::RiseSpot  => dream_water,
             Tile::Space | Tile::Star => dream_dark,
             Tile::SpaceRock => dream_dark,
-            Tile::Launchpad | Tile::MoonPad | Tile::MarsPad | Tile::AsteroidPad
+            Tile::Launchpad | Tile::MoonPad | Tile::MarsPad | Tile::AsteroidPad | Tile::GoyishPad
                             => dream_cream,
             Tile::MoonGround | Tile::MarsGround | Tile::StationFloor => dream_grass,
             Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98
@@ -641,6 +857,46 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
     tile_color_normal(tile)
 }
 
+fn is_glitch_tile(tile: Tile) -> bool {
+    matches!(tile, Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98 | Tile::GlitchWall)
+}
+
+/// The Dogfish House palette: Glitch and Aquatic composed. Glitch tiles still
+/// cycle, but through sea colors (teal <-> hot magenta) instead of the
+/// doghouse's green <-> red. Every other tile takes its underwater color, or
+/// its land color washed toward deep teal — so the doghouse's wood floor and
+/// rug read as a sunken room rather than turning into plain sea.
+fn tile_color_sunken_glitch(tile: Tile, time: f32) -> Color {
+    if is_glitch_tile(tile) {
+        let k = (time * 3.0 + (tile as u8) as f32 * 0.7).sin() * 0.5 + 0.5;
+        let (teal, magenta) = ((20.0, 200.0, 190.0), (230.0, 60.0, 200.0));
+        let mix = |a: f32, b: f32| (a + (b - a) * k) / 255.0;
+        let dim = if tile == Tile::GlitchWall { 0.55 } else { 1.0 };
+        return Color::new(
+            mix(teal.0, magenta.0) * dim,
+            mix(teal.1, magenta.1) * dim,
+            mix(teal.2, magenta.2) * dim,
+            1.0,
+        );
+    }
+    match tile {
+        // Dedicated sea tiles already have their real look.
+        Tile::SeaFloor | Tile::Sand | Tile::Coral | Tile::Kelp | Tile::Bubble
+        | Tile::Current | Tile::RiseSpot | Tile::DiveSpot => tile_color_aquatic(tile),
+        _ => {
+            let land = tile_color_normal(tile);
+            let sea = Color::from_rgba(24, 112, 132, 255);
+            let w = 0.55;
+            Color::new(
+                land.r + (sea.r - land.r) * w,
+                land.g + (sea.g - land.g) * w,
+                land.b + (sea.b - land.b) * w,
+                1.0,
+            )
+        }
+    }
+}
+
 /// Space palette. Dark void with per-world ground colors so the hub, Moon,
 /// Mars and the station each read distinctly under one Cosmic render mode.
 fn tile_color_cosmic(tile: Tile) -> Color {
@@ -653,6 +909,7 @@ fn tile_color_cosmic(tile: Tile) -> Color {
         Tile::MoonPad      => Color::from_rgba(40, 44, 70, 255),
         Tile::MarsPad      => Color::from_rgba(40, 44, 70, 255),
         Tile::AsteroidPad  => Color::from_rgba(40, 44, 70, 255),
+        Tile::GoyishPad    => Color::from_rgba(40, 44, 70, 255),
         Tile::MoonGround   => Color::from_rgba(120, 120, 130, 255), // lunar gray
         Tile::MarsGround   => Color::from_rgba(160, 78, 54, 255),   // rusty red
         Tile::StationFloor => Color::from_rgba(70, 78, 96, 255),    // metal deck
@@ -676,10 +933,21 @@ fn tile_color_aquatic(tile: Tile) -> Color {
         Tile::Coral     => coral,
         Tile::Kelp      => kelp,
         Tile::Bubble    => floor,
+        // The rip current between pearl stones: darker and colder than the
+        // floor, so the gap reads as "not for walking" at a glance.
+        Tile::Current   => Color::from_rgba(16, 82, 116, 255),
+        // Sunlit shaft — brighter than the floor so it reads from far away.
+        Tile::RiseSpot  => Color::from_rgba(64, 156, 176, 255),
         Tile::Water     => deep,
         Tile::Grass     => floor,
         Tile::Path      => sand,
         Tile::Bridge    => sand,
+        // Shell-cottage palette for the reef village: sandstone walls under a
+        // shell-pink roof, so houses read as grown from the reef, not sunk.
+        Tile::HouseWall => Color::from_rgba(216, 196, 156, 255),
+        Tile::Door      => Color::from_rgba(216, 196, 156, 255),
+        Tile::Window    => Color::from_rgba(216, 196, 156, 255),
+        Tile::Roof      => Color::from_rgba(226, 132, 144, 255),
         // Anything else a future water map drops in tints toward deep water so
         // it never flashes a jarring land color underwater.
         _               => deep,
@@ -691,6 +959,7 @@ fn tile_color_normal(tile: Tile) -> Color {
         Tile::Grass     => Color::from_rgba(76, 175, 80, 255),     // grass
         Tile::Path      => Color::from_rgba(222, 184, 135, 255),   // path (sandy)
         Tile::Water     => Color::from_rgba(66, 165, 245, 255),    // water
+        Tile::Current   => Color::from_rgba(40, 120, 190, 255),    // rip current
         Tile::Wall      => Color::from_rgba(121, 85, 72, 255),     // wall
         Tile::Tree      => Color::from_rgba(76, 175, 80, 255),     // tree (grass base)
         Tile::Flower    => Color::from_rgba(76, 175, 80, 255),     // flower (grass base)
@@ -712,9 +981,10 @@ fn tile_color_normal(tile: Tile) -> Color {
         Tile::Kelp      => Color::from_rgba(34, 110, 80, 255),     // kelp
         Tile::Bubble    => Color::from_rgba(38, 120, 140, 255),    // bubble vent (sea floor base)
         Tile::DiveSpot  => Color::from_rgba(66, 165, 245, 255),    // dive spot (water base)
+        Tile::RiseSpot  => Color::from_rgba(64, 156, 176, 255),    // rise spot (lit water base)
         Tile::Space | Tile::Star => Color::from_rgba(10, 12, 28, 255),
         Tile::SpaceRock => Color::from_rgba(58, 54, 74, 255),
-        Tile::Launchpad | Tile::MoonPad | Tile::MarsPad | Tile::AsteroidPad
+        Tile::Launchpad | Tile::MoonPad | Tile::MarsPad | Tile::AsteroidPad | Tile::GoyishPad
                         => Color::from_rgba(40, 44, 70, 255),
         Tile::MoonGround => Color::from_rgba(120, 120, 130, 255),
         Tile::MarsGround => Color::from_rgba(160, 78, 54, 255),
@@ -739,6 +1009,9 @@ pub fn draw_map(map: &Map, cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, tim
             let y = row as f32 * TILE_SIZE;
             draw_rectangle(x, y, TILE_SIZE, TILE_SIZE, color);
             draw_tile_detail(tile, x, y, time, map.render_mode);
+            if map.render_mode == RenderMode::SunkenGlitch && is_glitch_tile(tile) {
+                draw_sunken_glitch_tile(x, y, time, col, row);
+            }
         }
     }
 
@@ -747,14 +1020,19 @@ pub fn draw_map(map: &Map, cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, tim
         draw_dream_sparkles(cam_x, cam_y, view_w, view_h, time);
     }
 
-    // Glitch scanlines + screen tear
-    if map.render_mode == RenderMode::Glitch {
-        draw_glitch_overlay(cam_x, cam_y, view_w, view_h, time);
+    // Underwater bubbles + a soft blue light tint. Drawn before the glitch
+    // pass so, in the Dogfish House, the scanlines and tears cut across the
+    // bubbles too — the whole picture glitches, water included.
+    if map.render_mode.is_underwater() {
+        draw_aquatic_overlay(cam_x, cam_y, view_w, view_h, time);
+    }
+    if map.render_mode == RenderMode::SunkenGlitch {
+        draw_sunken_glitch_overlay(cam_x, cam_y, view_w, view_h, time);
     }
 
-    // Underwater bubbles + a soft blue light tint
-    if map.render_mode == RenderMode::Aquatic {
-        draw_aquatic_overlay(cam_x, cam_y, view_w, view_h, time);
+    // Glitch scanlines + screen tear
+    if map.render_mode.is_glitchy() {
+        draw_glitch_overlay(cam_x, cam_y, view_w, view_h, time);
     }
 
     // Twinkling starfield drifting over space
@@ -790,6 +1068,75 @@ fn draw_aquatic_overlay(cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, time: 
     }
 }
 
+/// The Dogfish House's extra layer: glitched bubbles. Chunky square "pixel"
+/// bubbles rise with a red/cyan channel split, and a band of the water keeps
+/// jumping sideways. Bubbles say underwater; the split says glitch.
+fn draw_sunken_glitch_overlay(cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, time: f32) {
+    // A stronger sea wash than the reef — this room is deep and dim.
+    draw_rectangle(cam_x, cam_y, view_w, view_h, Color::new(0.02, 0.30, 0.50, 0.14));
+    // Sunlight slanting down through the water: a few soft, swaying shafts.
+    for i in 0..4 {
+        let top_x = cam_x + view_w * (0.12 + i as f32 * 0.26) + (time * 0.4 + i as f32).sin() * 18.0;
+        let (w, lean) = (46.0 + i as f32 * 10.0, view_h * 0.35);
+        let shaft = Color::new(0.75, 0.95, 1.0, 0.07);
+        draw_triangle(vec2(top_x, cam_y), vec2(top_x + w, cam_y), vec2(top_x + lean + w * 1.8, cam_y + view_h), shaft);
+        draw_triangle(vec2(top_x, cam_y), vec2(top_x + lean, cam_y + view_h), vec2(top_x + lean + w * 1.8, cam_y + view_h), shaft);
+    }
+    // Big round bubbles wobbling up — the plain "we're underwater" read.
+    for i in 0..10 {
+        let seed = i as f32 * 61.7 + 5.0;
+        let bx = cam_x + ((seed * 5.1).sin() * 0.5 + 0.5) * view_w + (time * 1.1 + seed).sin() * 8.0;
+        let rise = ((time * 0.12 + seed * 0.093) % 1.0).abs();
+        let by = cam_y + view_h - rise * view_h;
+        let r = 6.0 + (seed * 0.7).sin().abs() * 6.0;
+        draw_circle(bx, by, r, Color::new(0.85, 0.97, 1.0, 0.18));
+        draw_circle_lines(bx, by, r, 1.5, Color::new(0.9, 1.0, 1.0, 0.6));
+        draw_circle(bx - r * 0.35, by - r * 0.35, r * 0.25, Color::new(1.0, 1.0, 1.0, 0.7));
+    }
+    for i in 0..18 {
+        let seed = i as f32 * 97.3 + 11.0;
+        let bx = cam_x + ((seed * 3.7).sin() * 0.5 + 0.5) * view_w;
+        let rise = ((time * 0.18 + seed * 0.071) % 1.0).abs();
+        let by = cam_y + view_h - rise * view_h;
+        let size = 5.0 + (seed * 0.9).sin().abs() * 7.0;
+        // Snap to a coarse grid so the bubbles step instead of glide.
+        let (bx, by) = ((bx / 4.0).floor() * 4.0, (by / 4.0).floor() * 4.0);
+        let split = 2.0 + ((time * 7.0 + seed).sin() * 1.5).abs();
+        draw_rectangle(bx - split, by, size, size, Color::new(1.0, 0.2, 0.5, 0.35));
+        draw_rectangle(bx + split, by, size, size, Color::new(0.2, 1.0, 0.95, 0.35));
+        draw_rectangle_lines(bx, by, size, size, 1.5, Color::new(0.9, 1.0, 1.0, 0.55));
+    }
+    // A slow, rolling band of displaced water — always somewhere on screen,
+    // so a still frame shows the tear as well as a moving one.
+    let band_y = cam_y + ((time * 0.23) % 1.0) * view_h;
+    let shift = (time * 9.0).sin() * 10.0;
+    draw_rectangle(cam_x + shift, band_y, view_w, 6.0, Color::new(0.3, 1.0, 0.9, 0.18));
+    draw_rectangle(cam_x - shift, band_y + 9.0, view_w, 3.0, Color::new(1.0, 0.3, 0.8, 0.16));
+}
+
+/// A glitch tile in the Dogfish House: flat color isn't glitchy enough on its
+/// own once it's teal. Each tile gets a couple of torn horizontal slices with
+/// a red/cyan fringe and a sprinkle of dead pixels, re-rolled a few times a
+/// second so it flickers in steps rather than smoothly.
+fn draw_sunken_glitch_tile(x: f32, y: f32, time: f32, col: usize, row: usize) {
+    let tick = (time * 6.0).floor() as i32;
+    let r = |k: i32| seeded_random(col as f32, row as f32, tick * 7 + k);
+    for k in 0..2 {
+        let sy = y + r(k) * (TILE_SIZE - 6.0);
+        let h = 2.0 + r(k + 10) * 5.0;
+        let shift = (r(k + 20) - 0.5) * 14.0;
+        draw_rectangle(x, sy, TILE_SIZE, h, Color::new(0.02, 0.10, 0.16, 0.35));
+        draw_rectangle(x + shift.max(0.0), sy, TILE_SIZE - shift.abs(), h * 0.5, Color::new(1.0, 0.25, 0.55, 0.55));
+        draw_rectangle(x + (-shift).max(0.0), sy + h * 0.5, TILE_SIZE - shift.abs(), h * 0.5, Color::new(0.2, 1.0, 0.95, 0.55));
+    }
+    for k in 0..5 {
+        let px = x + (r(k + 30) * (TILE_SIZE / 4.0)).floor() * 4.0;
+        let py = y + (r(k + 40) * (TILE_SIZE / 4.0)).floor() * 4.0;
+        let c = if k % 2 == 0 { Color::new(1.0, 1.0, 1.0, 0.8) } else { Color::new(0.0, 0.05, 0.1, 0.7) };
+        draw_rectangle(px, py, 4.0, 4.0, c);
+    }
+}
+
 /// Stable pseudo-random for per-tile variation (same as old JS seededRandom)
 fn seeded_random(x: f32, y: f32, seed: i32) -> f32 {
     let mut h = (x as i32).wrapping_mul(374761393)
@@ -801,7 +1148,7 @@ fn seeded_random(x: f32, y: f32, seed: i32) -> f32 {
 
 fn draw_tile_detail(tile: Tile, x: f32, y: f32, time: f32, mode: RenderMode) {
     // Skip details for glitch tiles
-    if mode == RenderMode::Glitch && matches!(tile, Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98 | Tile::GlitchWall) { return; }
+    if mode.is_glitchy() && is_glitch_tile(tile) { return; }
 
     match tile {
         Tile::Grass     => draw_grass_detail(x, y),
@@ -810,10 +1157,10 @@ fn draw_tile_detail(tile: Tile, x: f32, y: f32, time: f32, mode: RenderMode) {
         Tile::Wall      => draw_wall_detail(x, y),
         Tile::Tree      => draw_tree_detail(x, y, time, mode),
         Tile::Flower    => draw_flower_detail(x, y, time),
-        Tile::HouseWall => draw_house_wall_detail(x, y),
-        Tile::Roof      => draw_roof_detail(x, y),
-        Tile::Door      => draw_door_detail(x, y),
-        Tile::Window    => draw_window_detail(x, y),
+        Tile::HouseWall => draw_house_wall_detail(x, y, mode),
+        Tile::Roof      => draw_roof_detail(x, y, mode),
+        Tile::Door      => draw_door_detail(x, y, mode),
+        Tile::Window    => draw_window_detail(x, y, mode),
         Tile::Fence     => draw_fence_detail(x, y),
         Tile::Sign      => draw_sign_detail(x, y),
         Tile::Bridge    => draw_bridge_detail(x, y),
@@ -827,13 +1174,17 @@ fn draw_tile_detail(tile: Tile, x: f32, y: f32, time: f32, mode: RenderMode) {
         Tile::Coral     => draw_coral_detail(x, y, time),
         Tile::Kelp      => draw_kelp_detail(x, y, time),
         Tile::Bubble    => draw_bubble_vent_detail(x, y, time),
+        Tile::Current   => draw_current_detail(x, y, time),
         Tile::DiveSpot  => draw_dive_spot_detail(x, y, time),
+        Tile::RiseSpot  => draw_rise_spot_detail(x, y, time),
         Tile::Star      => draw_star_detail(x, y, time),
         Tile::SpaceRock => draw_space_rock_detail(x, y),
         Tile::Launchpad => draw_launchpad_detail(x, y, time),
         Tile::MoonPad   => draw_planet_pad_detail(x, y, time, Color::from_rgba(200, 200, 210, 255)),
         Tile::MarsPad   => draw_planet_pad_detail(x, y, time, Color::from_rgba(230, 110, 70, 255)),
         Tile::AsteroidPad => draw_planet_pad_detail(x, y, time, Color::from_rgba(150, 140, 120, 255)),
+        // The Goyish Map's marker floats a neon-purple arcade "world" over the pad.
+        Tile::GoyishPad => draw_planet_pad_detail(x, y, time, Color::from_rgba(190, 95, 210, 255)),
         Tile::MoonGround => draw_moon_ground_detail(x, y),
         Tile::MarsGround => draw_mars_ground_detail(x, y),
         Tile::StationFloor => draw_station_floor_detail(x, y),
@@ -945,6 +1296,35 @@ fn draw_dive_spot_detail(x: f32, y: f32, time: f32) {
         vec2(cx - 5.0, cy - 3.0 + bob),
         vec2(cx + 5.0, cy - 3.0 + bob),
         vec2(cx, cy + 5.0 + bob),
+        ac,
+    );
+}
+
+/// The DiveSpot's mirror: a bright sunlit column with bubbles streaming UP and
+/// an upward arrow — "stand here to surface". Sits on every underwater exit
+/// portal so the way back is never invisible.
+fn draw_rise_spot_detail(x: f32, y: f32, time: f32) {
+    let cx = x + TILE_SIZE / 2.0;
+    let cy = y + TILE_SIZE / 2.0;
+    // Sunlit pool, brighter toward the center — reads as shallower water.
+    draw_circle(cx, cy, 22.0, Color::from_rgba(110, 200, 220, 255));
+    draw_circle(cx, cy, 15.0, Color::from_rgba(165, 230, 245, 255));
+    // A steady stream of bubbles rising off the tile.
+    let bubble = Color::from_rgba(240, 252, 255, 225);
+    for i in 0..8 {
+        let t = i as f32 * 0.125;
+        let phase = ((time * 0.7 + t) % 1.0).abs();
+        let bx = cx + (time * 1.4 + i as f32 * 2.4).sin() * 6.0;
+        let by = y + TILE_SIZE - phase * TILE_SIZE;
+        draw_circle(bx, by, 1.5 + phase * 2.5, bubble);
+    }
+    // Gentle upward arrow at the center — "go up".
+    let bob = (time * 2.0).sin() * 2.0;
+    let ac = Color::from_rgba(16, 86, 130, 235);
+    draw_triangle(
+        vec2(cx - 5.0, cy + 4.0 + bob),
+        vec2(cx + 5.0, cy + 4.0 + bob),
+        vec2(cx, cy - 5.0 + bob),
         ac,
     );
 }
@@ -1100,26 +1480,45 @@ fn draw_flower_detail(x: f32, y: f32, time: f32) {
     }
 }
 
-fn draw_house_wall_detail(x: f32, y: f32) {
-    // Orange border
-    draw_rectangle_lines(x + 1.0, y + 1.0, TILE_SIZE - 2.0, TILE_SIZE - 2.0, 2.0,
-        Color::from_rgba(239, 108, 0, 255));
+/// House-family palette per render mode: (wall base, trim, shingle). Aquatic
+/// houses are shell cottages (sandstone + teal trim + rose shingles); every
+/// other mode keeps the land look. One seam so no detail fn can flash a land
+/// color underwater.
+fn house_palette(mode: RenderMode) -> (Color, Color, Color) {
+    if mode.is_underwater() {
+        (
+            Color::from_rgba(216, 196, 156, 255), // sandstone wall
+            Color::from_rgba(26, 110, 130, 255),  // teal trim
+            Color::from_rgba(196, 96, 110, 255),  // rose shingle
+        )
+    } else {
+        (
+            Color::from_rgba(255, 204, 128, 255), // warm cream wall
+            Color::from_rgba(239, 108, 0, 255),   // orange trim
+            Color::from_rgba(183, 28, 28, 255),   // red shingle
+        )
+    }
 }
 
-fn draw_roof_detail(x: f32, y: f32) {
+fn draw_house_wall_detail(x: f32, y: f32, mode: RenderMode) {
+    let (_, trim, _) = house_palette(mode);
+    draw_rectangle_lines(x + 1.0, y + 1.0, TILE_SIZE - 2.0, TILE_SIZE - 2.0, 2.0, trim);
+}
+
+fn draw_roof_detail(x: f32, y: f32, mode: RenderMode) {
     // Shingle lines
-    let shingle = Color::from_rgba(183, 28, 28, 255);
+    let (_, _, shingle) = house_palette(mode);
     for i in 0..3 {
         let ly = y + 12.0 + i as f32 * 14.0;
         draw_line(x, ly, x + TILE_SIZE, ly, 1.0, shingle);
     }
 }
 
-fn draw_door_detail(x: f32, y: f32) {
+fn draw_door_detail(x: f32, y: f32, mode: RenderMode) {
+    let (wall, trim, _) = house_palette(mode);
     // House wall base (already drawn as tile color = door brown, so draw house wall underneath)
-    draw_rectangle(x, y, TILE_SIZE, TILE_SIZE, Color::from_rgba(255, 204, 128, 255));
-    draw_rectangle_lines(x + 1.0, y + 1.0, TILE_SIZE - 2.0, TILE_SIZE - 2.0, 2.0,
-        Color::from_rgba(239, 108, 0, 255));
+    draw_rectangle(x, y, TILE_SIZE, TILE_SIZE, wall);
+    draw_rectangle_lines(x + 1.0, y + 1.0, TILE_SIZE - 2.0, TILE_SIZE - 2.0, 2.0, trim);
     // Door
     draw_rectangle(x + 14.0, y + 10.0, 20.0, 38.0, Color::from_rgba(93, 64, 55, 255));
     draw_rectangle(x + 16.0, y + 12.0, 16.0, 34.0, Color::from_rgba(141, 110, 99, 255));
@@ -1127,16 +1526,16 @@ fn draw_door_detail(x: f32, y: f32) {
     draw_circle(x + 28.0, y + 30.0, 3.0, Color::from_rgba(255, 213, 79, 255));
 }
 
-fn draw_window_detail(x: f32, y: f32) {
+fn draw_window_detail(x: f32, y: f32, mode: RenderMode) {
+    let (_, trim, _) = house_palette(mode);
     // House wall border already drawn. Add window.
-    draw_rectangle_lines(x + 1.0, y + 1.0, TILE_SIZE - 2.0, TILE_SIZE - 2.0, 2.0,
-        Color::from_rgba(239, 108, 0, 255));
+    draw_rectangle_lines(x + 1.0, y + 1.0, TILE_SIZE - 2.0, TILE_SIZE - 2.0, 2.0, trim);
     // Window pane
     draw_rectangle(x + 12.0, y + 12.0, 24.0, 20.0, Color::from_rgba(129, 212, 250, 255));
-    draw_rectangle_lines(x + 12.0, y + 12.0, 24.0, 20.0, 2.0, Color::from_rgba(239, 108, 0, 255));
+    draw_rectangle_lines(x + 12.0, y + 12.0, 24.0, 20.0, 2.0, trim);
     // Crossbar
-    draw_line(x + 24.0, y + 12.0, x + 24.0, y + 32.0, 2.0, Color::from_rgba(239, 108, 0, 255));
-    draw_line(x + 12.0, y + 22.0, x + 36.0, y + 22.0, 2.0, Color::from_rgba(239, 108, 0, 255));
+    draw_line(x + 24.0, y + 12.0, x + 24.0, y + 32.0, 2.0, trim);
+    draw_line(x + 12.0, y + 22.0, x + 36.0, y + 22.0, 2.0, trim);
 }
 
 fn draw_fence_detail(x: f32, y: f32) {
@@ -1300,5 +1699,19 @@ fn draw_glitch_overlay(cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, time: f
         let shift = (time * 100.0).sin() * 8.0;
         draw_rectangle(cam_x + shift, tear_y, view_w, tear_h,
             Color::new(0.0, 1.0, 0.5, 0.15));
+    }
+}
+
+/// The rip current between Shelly's pearl stones: fast pale streaks sliding
+/// across the tile. Reads as moving water you'd be swept along by — the visual
+/// reason the stones have to be leapt instead of walked.
+fn draw_current_detail(x: f32, y: f32, time: f32) {
+    let streak = Color::new(0.62, 0.86, 0.95, 0.5);
+    for i in 0..3 {
+        let lane = y + 10.0 + i as f32 * 14.0;
+        // Each lane slides at its own speed and wraps within the tile.
+        let drift = ((time * (26.0 + i as f32 * 9.0) + i as f32 * 17.0) % (TILE_SIZE + 22.0)) - 22.0;
+        let w = 16.0 + i as f32 * 3.0;
+        draw_line(x + drift, lane, x + drift + w, lane, 2.5, streak);
     }
 }

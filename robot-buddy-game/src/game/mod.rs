@@ -27,6 +27,7 @@ use robot_buddy_domain::learning::intake_assessor::{
     IntakeAnswer, generate_intake_question, process_intake_results, next_intake_band, intake_complete,
 };
 use robot_buddy_domain::economy::give;
+use robot_buddy_domain::economy::rewards;
 use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
 use robot_buddy_domain::logic::kenken::{
     self, KenKenAction, KenKenPhase, KenKenSession, cage_ops_for_band, generate_kenken,
@@ -37,13 +38,23 @@ use robot_buddy_domain::logic::patterns::{
 use robot_buddy_domain::logic::balance::{
     self, BalancePhase, BalanceSession, generate_for_band as generate_balance_for_band,
 };
+use robot_buddy_domain::logic::descent::{
+    DiveAction, DiveNudge, DivePhase, DiveSession, dive_reducer, generate_dive,
+};
+use robot_buddy_domain::logic::leap::{
+    Clue, LeapAction, LeapPhase, LeapPuzzle, LeapSession, generate_leap, leap_reducer,
+};
+use robot_buddy_domain::logic::shooter::{
+    ShooterSession, ShooterAction, ShooterPhase, ShotSource, shooter_reducer,
+};
 use robot_buddy_domain::logic::sudoku::{
     self, SudokuPhase, SudokuSession, generate_for_level as generate_sudoku_for_level,
 };
-use robot_buddy_domain::economy::shop::{self, ShopItem};
+use robot_buddy_domain::economy::shop::{self as domain_shop, Currency, ItemKind, ShopItem, ShopKind};
+use robot_buddy_domain::economy::wardrobe::{self, HandOver, Wardrobe};
 use robot_buddy_domain::world::encounters::{self, EncounterConfig, EncounterKind};
 use robot_buddy_domain::quest::{self, Quest, QuestAction, QuestSession, QuestStatus, QuestStep};
-use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel, Operation};
+use robot_buddy_domain::types::{Phase, CraStage, FrustrationLevel, GamePace, Operation};
 use robot_buddy_domain::world::movement::{
     Direction, EntityId, EntityState, GridDims, MoveIntent, MoveResolution,
     Solidity, resolve_moves,
@@ -52,18 +63,26 @@ use robot_buddy_domain::world::movement::{
 use crate::tilemap::{self, Map, TILE_SIZE};
 use crate::sprites::{self, Dir};
 use crate::follower::Follower;
-use crate::npc::{self, NpcKind};
+use crate::npc::{self, NpcKind, npc_dialogue_lines};
 use crate::number_track;
 use crate::ui;
 use crate::ui::dialogue::{DialogueBox, DialogueLine};
-use crate::ui::challenge::{ChoiceBound, ScaffoldBounds};
 use crate::ui::title_screen::{TitleAction, NewGameAction, NewGameForm};
 use crate::ui::hud::{DumDumHud, PearlHud, DebugOverlay};
 use crate::ui::interaction_menu::MenuOption;
-use crate::save::{self, CompanionSave, SaveBackend, SaveData, SaveSlots, Gender};
+use crate::save::{self, CompanionSave, DiveReturn, SaveBackend, SaveData, SaveSlots, Gender};
 use crate::audio;
 use crate::session;
 use crate::input::FrameInput;
+
+mod descent;
+mod leap;
+mod puzzles;
+mod shooter;
+mod shop;
+
+use self::leap::{draw_number_track, leap_call};
+use self::puzzles::{start_balance, start_kenken, start_pattern, start_sudoku};
 
 pub const GAME_W: f32 = 960.0;
 pub const GAME_H: f32 = 720.0;
@@ -93,7 +112,13 @@ pub enum GameState {
     Balance,
     Sudoku,
     Shop,
+    /// Handing a piece of shop swag to a buddy.
+    Swag,
+    /// Diving the shaft to the trench — the descent minigame.
+    Descent,
     Quest,
+    /// The Goyish Map's number-bond space shooter (real-time minigame).
+    Shooter,
 }
 
 /// Opt-in toggles for in-development paths that aren't ready for default play.
@@ -143,8 +168,6 @@ impl IntakeState {
 struct ActiveChallenge {
     state: ChallengeState,
     challenge: Challenge,
-    choice_bounds: Vec<ChoiceBound>,
-    scaffold: ScaffoldBounds,
     complete_timer: f32,
     start_time: f32,
 }
@@ -183,6 +206,19 @@ pub struct ActiveSudoku {
     pub source_npc: String,
 }
 
+/// The number-bond space shooter, live. The domain `ShooterSession` holds all
+/// the game state (ship, aliens, waves, the ordered attempt log); the rest is UI-only bookkeeping
+/// mirroring the other `Active*` structs.
+pub struct ActiveShooter {
+    pub session: ShooterSession,
+    /// Where the ship is drawn: glides after `session.ship_x`, which snaps
+    /// lane to lane. View-only; never read by the game logic.
+    pub ship_draw_x: f32,
+    pub complete_timer: f32,
+    pub start_time: f32,
+    pub source_npc: String,
+}
+
 /// Inline multiple-choice for a quest's MathPuzzle step (kept self-contained so
 /// quests never hand control to the challenge state and back).
 #[derive(Clone)]
@@ -199,8 +235,11 @@ pub struct ActiveQuest {
 }
 
 pub struct ActiveShop {
+    /// Which counter this is — decides the currency, the title, and whether
+    /// `owned` means "worn" (Bolt's swag) or "bought" (Hermie's upgrades).
+    pub shop: ShopKind,
     pub catalog: Vec<ShopItem>,
-    pub owned: std::collections::HashSet<String>,
+    pub owned: std::collections::BTreeSet<String>,
     /// `Some(index)` while solving the purchase subtraction for that catalog
     /// item; `None` while browsing.
     pub selected: Option<usize>,
@@ -213,6 +252,41 @@ pub struct ActiveShop {
     /// True while the outfit-color swatches are up (after buying Color
     /// Change, or re-opened from its catalog row).
     pub picking_color: bool,
+    /// The quote on the counter while the kid works out a pearl trade.
+    pub trading: Option<domain_shop::TradeQuote>,
+    /// Catalog page on screen, when the window is too short for the shelf.
+    pub page: usize,
+}
+
+/// A live "Give Swag" session: the kid is picking which of the pieces they're
+/// wearing to hand to `recipient_id`. Rebuilt from the wardrobe after every
+/// hand-over, so the list always shows what's still on the kid.
+pub struct ActiveSwag {
+    pub recipient_id: String,
+    pub recipient_name: String,
+    /// Sprite to preview the recipient with. `None` is Sparky, who's a robot
+    /// rather than a roster NPC.
+    pub recipient_sprite: Option<npc::SpriteType>,
+    /// Catalog entries for the swag the kid is wearing, cheapest first.
+    pub items: Vec<ShopItem>,
+    pub message: Option<String>,
+    /// List page on screen, when the window is too short for every piece.
+    pub page: usize,
+    /// Swatches are up: the kid is picking the recipient's Color Change colour.
+    pub picking_color: bool,
+    /// Opened straight to the swatches from the buddy's "New color?" option,
+    /// so Done closes the panel rather than going back to the list.
+    pub recolor_only: bool,
+}
+
+/// A live descent: the kid is kicking down the shaft looking for the trench
+/// door. Lives only while `GameState::Descent` is up; bailing drops it.
+pub struct ActiveDescent {
+    pub session: DiveSession,
+    /// Beat held after landing so the kid sees the door open before the map
+    /// swaps out from under them.
+    pub landed_timer: f32,
+    pub message: Option<String>,
 }
 
 // ─── Sprites/movement ───────────────────────────────────
@@ -228,6 +302,9 @@ pub struct Entity {
     pub moving: bool,
     pub dir: Dir,
     pub frame: u32,
+    /// Pixels per second for the move in flight. Walking pace by default; a
+    /// leap raises it for one hop and it resets on arrival.
+    pub speed: f32,
 }
 
 impl Entity {
@@ -242,6 +319,7 @@ impl Entity {
             moving: false,
             dir: Dir::Down,
             frame: 0,
+            speed: MOVE_SPEED,
         }
     }
 
@@ -250,7 +328,7 @@ impl Entity {
         let dx = self.target_x - self.x;
         let dy = self.target_y - self.y;
         let dist = (dx * dx + dy * dy).sqrt();
-        let step = MOVE_SPEED * dt;
+        let step = self.speed * dt;
         // Clamp to the remaining distance. Without this, a single huge dt
         // (e.g. browser tab regaining focus after being backgrounded) sends
         // pixel position thousands of px past the target, and subsequent
@@ -261,12 +339,24 @@ impl Entity {
             self.x = self.target_x;
             self.y = self.target_y;
             self.moving = false;
+            self.speed = MOVE_SPEED; // a one-off leap speed never sticks
             self.frame += 1;
             return true;
         }
         self.x += dx / dist * step;
         self.y += dy / dist * step;
         false
+    }
+
+    /// Send this entity to a tile at a one-off speed, so a multi-tile leap
+    /// takes about as long as a single step instead of trudging across the
+    /// gap. Speed resets to walking pace on arrival.
+    pub fn start_leap(&mut self, nx: usize, ny: usize, seconds: f32) {
+        let dx = nx as f32 * TILE_SIZE - self.x;
+        let dy = ny as f32 * TILE_SIZE - self.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        self.start_move(nx, ny);
+        self.speed = (dist / seconds.max(0.05)).max(MOVE_SPEED);
     }
 
     pub fn start_move(&mut self, nx: usize, ny: usize) {
@@ -344,13 +434,40 @@ pub enum GameEvent {
     },
     /// A shop purchase succeeded: the kid solved the cost subtraction.
     DumDumsSpent { amount: u32, item: String },
+    /// Pearls spent at Hermie's deep stall.
+    PearlsSpent { amount: u32, item: String },
+    /// A trip to Hermie's trade desk: pearls in, Dum Dums out, remainder kept.
+    PearlsTraded { pearls: u32, dum_dums: u32, left_over: u32 },
+    /// A piece of shop swag changed hands: the kid took it off, `recipient`
+    /// (an NPC id or "sparky") put it on and keeps it from here on.
+    SwagGiven { item: String, recipient: String },
+    /// `wearer` (the kid is "player") picked `color` for their Color Change.
+    OutfitColorPicked { wearer: String, color: String },
+    /// A descent started: the shaft's door depth and the fewest kicks that
+    /// reach it.
+    DescentStarted { door: u8, optimal: u8 },
+    /// The diver rested on the trench door. `kicks` vs `optimal` is the silent
+    /// read on how efficiently they decomposed the depth.
+    DescentLanded { door: u8, kicks: u8, optimal: u8 },
     /// A random encounter fired ("flavor" | "dum_dum" | "challenge" | "sighting").
     EncounterTriggered { kind: String },
     /// A quest run reached its final step.
     QuestCompleted,
-    /// The kid hopped to the goal stone of an ambient number-line path. `mark`
-    /// is the stone's number (the target index walked to).
-    NumberLineReached { mark: u8 },
+    /// The kid found Shelly's pearl: landed on the called-out stone of a
+    /// number path. `mark` is the stone's number; `jumps` is how many stone-
+    /// to-stone hops the kid took vs the `optimal` straight count-on from
+    /// where they stepped onto the path — silent efficiency signal for the
+    /// adaptive system (never shown to the kid).
+    NumberLineReached { mark: u8, jumps: u8, optimal: u8 },
+    /// Shelly set up a pearl trip: the pearl's stone and the leap size/count
+    /// that reaches it.
+    LeapTripOffered { pearl: u8, size: u8, count: u8 },
+    /// The kid landed on Shelly's pearl. `resets` is how many wrong leap sizes
+    /// they tried first — the silent read on whether the size was reasoned out
+    /// or found by trial (never shown to the kid).
+    PearlFound { stone: u8, size: u8, leaps: u8, resets: u8, pearls: u32 },
+    /// Pearls credited to the kid, from any source (a leap, a clean dive).
+    PearlsAwarded { amount: u32 },
     SudokuStarted { grid_size: u8, source: String },
     SudokuResolved {
         correct: bool,
@@ -358,6 +475,15 @@ pub enum GameEvent {
         constraint_violations: u8,
         response_ms: f64,
     },
+    /// The number-bond space shooter launched from the Goyish Map.
+    ShooterStarted { band: u8, source: String },
+    /// A shooter wave was fully cleared; `wave` is the just-cleared wave index.
+    ShooterWaveCleared { wave: u8 },
+    /// The shooter run ended. `waves` is how many were cleared; `hits`/`misses`
+    /// are correct/incorrect number-bond pairings (stealth-assessment signal).
+    /// `clean_waves` were paired off with no wrong pairs; each paid one extra
+    /// Dum Dum on top of the run's base payout.
+    ShooterResolved { waves: u8, hits: u32, misses: u32, clean_waves: u8, response_ms: f64 },
 }
 
 // ─── The Game ───────────────────────────────────────────
@@ -391,14 +517,11 @@ pub struct Game {
     /// or gets pushed onto a portal tile he travels through it, so this tracks
     /// where he ended up. Only meaningful while `sparky_parked`.
     sparky_map: &'static str,
-    /// True while the player is standing on the goal stone of the current map's
-    /// ambient number-line path — so the pearl is collected once on arrival,
-    /// not every frame they linger on it.
-    track_on_target: bool,
-    /// Current goal stone (index along the path) holding the pearl. Starts at
-    /// the track's static target; hops to a new stone after each pearl is
-    /// collected, so the path is a repeatable counting game.
-    track_goal: usize,
+    /// The pearl trip in progress on this map's stone path — Shelly's chosen
+    /// leap size and where the kid has leapt to. Only lives while they're
+    /// standing on the stone it thinks they're on, so walking around the path
+    /// can never pass for leaping it. See `check_number_track_landing`.
+    leap_session: Option<LeapSession>,
     /// Brief floating cheer text + remaining seconds, shown after a collection.
     track_toast: Option<(String, f32)>,
     /// Reef-local currency, earned hopping the number path and (later) from the
@@ -436,12 +559,18 @@ pub struct Game {
     active_pattern: Option<ActivePattern>,
     active_balance: Option<ActiveBalance>,
     active_sudoku: Option<ActiveSudoku>,
+    active_shooter: Option<ActiveShooter>,
     active_shop: Option<ActiveShop>,
+    active_swag: Option<ActiveSwag>,
+    active_descent: Option<ActiveDescent>,
     active_quest: Option<ActiveQuest>,
     /// Cosmetics bought from Bolt (persisted in the save).
-    shop_owned: std::collections::HashSet<String>,
-    /// Outfit color id for the Color Change cosmetic (persisted in the save).
-    color_choice: String,
+    /// Who's wearing which shop swag — the kid included, under
+    /// `wardrobe::PLAYER`. Swag handed to a buddy leaves the kid's outfit
+    /// (which is what frees Bolt to sell them another one) and stays on that
+    /// buddy whether or not they're the one currently tagging along.
+    /// Each wearer's Color Change colour lives here too, the kid's included.
+    wardrobe: Wardrobe,
     /// Opt-in in-development feature toggles (default all off).
     pub features: FeatureFlags,
     /// Tiles walked since the last random encounter (for encounter pacing).
@@ -456,6 +585,21 @@ pub struct Game {
     /// Destination map ids whose one-time entry toll has been paid. After the
     /// first paid trip, that portal is free forever. Persisted. Reusable.
     paid_tolls: std::collections::HashSet<String>,
+    /// Secret map ids whose arrival cutscene has already played. Persisted, so
+    /// the long "we're UNDERWATER!" speech is a first-time thrill instead of a
+    /// toll paid on every dive.
+    seen_intros: std::collections::HashSet<String>,
+    /// Where the Dogfish House's bubble column leads — the map and tile of the
+    /// dive that landed there. Set by a dive from a map with no shaft, spent by
+    /// the column. Persisted. See `game/descent.rs`.
+    dive_return: Option<DiveReturn>,
+    /// How fast the arcade cabinet runs. A parent dial, set in the parent
+    /// section of settings and persisted per save slot — the kid never sees a
+    /// label for it (Invariant 6). It changes the clock, never the numbers.
+    pub game_pace: GamePace,
+    /// Permanent perks bought at a counter (currently Hermie's Diving Net).
+    /// Not wearable and never given away — once bought, always on. Persisted.
+    upgrades: std::collections::BTreeSet<String>,
     /// Rocket fuel for space jumps. Spent per fuel-costed portal, refilled by
     /// solving Tank the fuel droid's puzzle. Persisted.
     fuel: u32,
@@ -473,8 +617,14 @@ pub struct Game {
     pub dum_dums: u32,
     pub gifts_given: HashMap<String, u32>,
     save_slots: SaveSlots,
+    /// Slots whose JSON this build can't read. The title screen shows them as
+    /// napping (no Load/New) so a kid can't start a game over a real save.
+    resting_slots: ui::title_screen::RestingSlots,
     active_slot: usize,
     auto_save_timer: f32,
+    /// Whether the tab was hidden last frame, so hiding saves once (on the
+    /// edge) instead of every frame the tab stays hidden.
+    page_was_hidden: bool,
     save_backend: Box<dyn SaveBackend>,
 
     // Profile / learning
@@ -534,8 +684,7 @@ impl Game {
             companion: None,
             sparky_parked: false,
             sparky_map: SPARKY_HOME_MAP,
-            track_on_target: false,
-            track_goal: number_track::track_for_map("reef").map(|t| t.target).unwrap_or(0),
+            leap_session: None,
             track_toast: None,
             pearls: 0,
             pearl_hud: PearlHud::new(),
@@ -550,16 +699,22 @@ impl Game {
             active_pattern: None,
             active_balance: None,
             active_sudoku: None,
+            active_shooter: None,
             active_shop: None,
+            active_swag: None,
+            active_descent: None,
             active_quest: None,
-            shop_owned: std::collections::HashSet::new(),
-            color_choice: sprites::player::OUTFIT_COLORS[0].0.to_string(),
+            wardrobe: Wardrobe::new(),
             features: FeatureFlags::default(),
             steps_since_encounter: 0,
             pending_challenge: false,
             opening_gate: None,
             satisfied_gates: std::collections::HashSet::new(),
             paid_tolls: std::collections::HashSet::new(),
+            seen_intros: std::collections::HashSet::new(),
+            dive_return: None,
+            game_pace: GamePace::default(),
+            upgrades: std::collections::BTreeSet::new(),
             fuel: FUEL_MAX,
             pending_refuel: false,
             fuel_flash: 0.0,
@@ -569,8 +724,10 @@ impl Game {
             dum_dums: 0,
             gifts_given: HashMap::new(),
             save_slots: [None, None, None],
+            resting_slots: ui::title_screen::NO_RESTING_SLOTS,
             active_slot: 0,
             auto_save_timer: 0.0,
+            page_was_hidden: false,
             save_backend,
             profile: LearnerProfile::new(),
             behavior_signals: Vec::new(),
@@ -594,6 +751,7 @@ impl Game {
     /// at startup so the title screen reflects what's on disk.
     pub fn refresh_save_slots(&mut self) {
         self.save_slots = self.save_backend.load_all();
+        self.resting_slots = self.save_backend.unreadable_slots();
     }
 
     // ─── Test-friendly accessors ────────────────────────
@@ -675,9 +833,26 @@ impl Game {
         self.active_sudoku.as_ref()
     }
 
+    pub fn active_shooter(&self) -> Option<&ActiveShooter> {
+        self.active_shooter.as_ref()
+    }
+
     /// Read-only view of the active shop session (None if the shop is closed).
     pub fn active_shop(&self) -> Option<&ActiveShop> {
         self.active_shop.as_ref()
+    }
+
+    pub fn active_swag(&self) -> Option<&ActiveSwag> {
+        self.active_swag.as_ref()
+    }
+
+    /// The pearl trip in progress, if the kid is standing on Shelly's stones.
+    pub fn leap_session(&self) -> Option<&LeapSession> {
+        self.leap_session.as_ref()
+    }
+
+    pub fn active_descent(&self) -> Option<&ActiveDescent> {
+        self.active_descent.as_ref()
     }
 
     /// Read-only view of the active quest run (None if not on a quest).
@@ -754,8 +929,13 @@ impl Game {
             self.parent_panel_open = true;
         }
 
-        // Backtick toggles the dev debug overlay (moved off P).
-        if !self.settings_open && input.pressed(KeyCode::GraveAccent)
+        // Backtick toggles the dev debug overlay. Accept both the keycode and
+        // the typed '`' char — on web these arrive via independent browser
+        // events (keydown vs. keypress), so honoring either is robust to
+        // keyboard-mapping quirks. (Session export is also on the parent panel,
+        // reachable by mouse, if the key still won't cooperate.)
+        let backtick = input.pressed(KeyCode::GraveAccent) || input.chars_typed.contains(&'`');
+        if !self.settings_open && backtick
             && self.state != GameState::Title && self.state != GameState::NewGame
         {
             self.debug_overlay.toggle();
@@ -772,7 +952,10 @@ impl Game {
             self.active_pattern = None;
             self.active_balance = None;
             self.active_sudoku = None;
+            self.active_shooter = None;
             self.active_shop = None;
+            self.active_swag = None;
+            self.active_descent = None;
             self.active_quest = None;
             self.pending_challenge = false;
         }
@@ -788,10 +971,11 @@ impl Game {
         if !self.settings_open && self.state != GameState::Title && self.state != GameState::NewGame {
             self.play_time += dt;
             self.auto_save_timer += dt;
-            if (self.auto_save_timer >= 30.0 || self.save_backend.is_page_hidden()) && self.map.id != "dev" {
-                self.auto_save_timer = 0.0;
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
+            let hidden = self.save_backend.is_page_hidden();
+            let just_hid = hidden && !self.page_was_hidden;
+            self.page_was_hidden = hidden;
+            if self.auto_save_timer >= 30.0 || just_hid {
+                self.persist();
             }
         }
 
@@ -883,8 +1067,8 @@ impl Game {
 
         // Buddies heading off-map blink home once they've walked out of view.
         if self.state == GameState::Playing {
-            self.evict_offscreen_leavers();
-            self.check_number_track_landing();
+            self.evict_offscreen_leavers(screen);
+            self.check_number_track_landing(dt);
         }
 
         // Interaction menu input (layout from step-side; render() draws separately)
@@ -921,7 +1105,10 @@ impl Game {
             GameState::Pattern => { self.step_pattern(input, dt, screen); false }
             GameState::Balance => { self.step_balance(input, dt, screen); false }
             GameState::Sudoku => { self.step_sudoku(input, dt, screen); false }
+            GameState::Shooter => { self.step_shooter(input, dt, screen); false }
             GameState::Shop => { self.step_shop(input, screen); false }
+            GameState::Swag => { self.step_swag(input, screen); false }
+            GameState::Descent => { self.step_descent(input, dt, screen); false }
             GameState::Quest => { self.step_quest(input, screen); false }
         }
     }
@@ -929,7 +1116,7 @@ impl Game {
     // ─── State arms ─────────────────────────────────────
 
     fn step_title(&mut self, input: &FrameInput, screen: (f32, f32)) {
-        let layout = ui::title_screen::layout_title(&self.save_slots, screen);
+        let layout = ui::title_screen::layout_title(&self.save_slots, &self.resting_slots, screen);
         let action = ui::title_screen::handle_title_input(&layout, input);
         if let Some(action) = action {
             match action {
@@ -961,7 +1148,7 @@ impl Game {
                 }
                 TitleAction::DeleteSlot(slot) => {
                     self.save_backend.delete(slot);
-                    self.save_slots = self.save_backend.load_all();
+                    self.refresh_save_slots();
                 }
             }
         }
@@ -1033,7 +1220,7 @@ impl Game {
 
                         let save_data = self.gather_save_data();
                         self.save_backend.save_to(slot, &save_data);
-                        self.save_slots = self.save_backend.load_all();
+                        self.refresh_save_slots();
                         self.auto_save_timer = 0.0;
 
                         self.intake = Some(IntakeState::new(form.math_band));
@@ -1068,13 +1255,6 @@ impl Game {
             Some(s) => s,
             None => return,
         };
-
-        // Populate hit-test bounds from the pure layout fn so step doesn't depend on render.
-        if let Some(ref mut ac) = iq.challenge {
-            let (bounds, scaffold) = ui::challenge::layout(&ac.state, &ac.challenge, screen);
-            ac.choice_bounds = bounds;
-            ac.scaffold = scaffold;
-        }
 
         match iq.phase {
             IntakePhase::Intro => {
@@ -1119,7 +1299,8 @@ impl Game {
                         let (mx, my) = input.mouse_pos;
                         if let Some(action) = ui::challenge::handle_click(
                             mx, my, &ac.state, &ac.challenge,
-                            &ac.choice_bounds, &ac.scaffold,
+                            // Same pure layout render paints — hit rects can't drift.
+                            &ui::challenge::layout(&ac.state, &ac.challenge, screen),
                         ) {
                             ac.state = challenge_reducer(ac.state.clone(), action);
                             speak_challenge_feedback(&ac.state, "Sparky");
@@ -1327,6 +1508,12 @@ impl Game {
 
     fn step_playing(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         // ── Movement: collect intents, resolve, apply ───────────────────
+        // On Shelly's stones the kid leaps rather than walks — the current in
+        // the gaps makes ordinary steps impossible anyway. Handled first so a
+        // tap on her panel never doubles as a click-to-walk.
+        if self.handle_leap_input(input, screen) {
+            return;
+        }
         // A tap on the map sets a walk path (click-to-walk); keyboard input
         // overrides it. The debug overlay owns clicks when it's up.
         if input.mouse_clicked && !self.debug_overlay.visible {
@@ -1451,13 +1638,13 @@ impl Game {
         // Snapshot the camera rect once so the wander gate doesn't re-borrow
         // self mid-iteration. Off-screen wanderers freeze: no cooldown tick,
         // no random direction roll. The kid you can't see isn't burning RNG.
-        let cam = (self.camera.x, self.camera.y);
+        let view = visible_world_rect((self.camera.x, self.camera.y), screen);
         for (i, n) in self.npcs.iter_mut().enumerate() {
             let intent = if n.homing {
                 // A buddy walking back to its spot finishes the trip even if it
                 // strolls off-screen — it's a short, finite route.
                 n.next_homing_intent()
-            } else if npc_in_camera(cam, n) {
+            } else if npc_in_camera(view, n) {
                 n.next_intent(dt, &mut self.rng)
             } else {
                 MoveIntent::Stay
@@ -1532,8 +1719,8 @@ impl Game {
             } else if let Some(target) = npc::get_interact_target_with_companion(
                 self.player.tile_x, self.player.tile_y, self.player.dir,
                 &self.npcs, self.companion.as_ref(),
-            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n.gate, n.gate_id, n.refuel, n)) {
-                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, is_gate, gate_id, is_refuel, target_ref) = target;
+            ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n.gate, n.gate_id, n.refuel, n.launch_shooter, n.dive, n)) {
+                let (target_kind, can_receive_gifts, never_challenge, is_puzzler, is_gate, gate_id, is_refuel, is_launch_shooter, is_dive, target_ref) = target;
                 let target_id = target_kind.as_str().to_string();
                 let target_name = target_kind.display_name().to_string();
 
@@ -1577,13 +1764,23 @@ impl Game {
                     return;
                 }
 
+                // The arcade operator launches the number-bond shooter straight
+                // away — a self-contained minigame that never routes through the
+                // challenge/dialogue states and back.
+                if is_launch_shooter {
+                    self.start_shooter(target_name);
+                    return;
+                }
+
                 let npc_info = NpcInfo {
                     id: target_id.clone(),
                     can_receive_gifts: Some(can_receive_gifts),
-                    has_shop: Some(target_kind == npc::NpcKind::Shopkeeper),
+                    has_shop: Some(target_kind.shop().is_some()),
                     is_puzzler: Some(is_puzzler),
+                    runs_dive: Some(is_dive),
+                    wears_color_change: Some(self.wears_color_change(&target_id)),
                 };
-                let player_st = PlayerState { dum_dums: self.dum_dums };
+                let player_st = PlayerState { dum_dums: self.dum_dums, swag_worn: self.player_swag().len() as u32 };
                 let opts = interaction_options::get_interaction_options(&npc_info, &player_st);
 
                 self.menu_target_id = target_id;
@@ -1614,8 +1811,10 @@ impl Game {
                     can_receive_gifts: Some(true),
                     has_shop: None,
                     is_puzzler: Some(false),
+                    runs_dive: None,
+                    wears_color_change: Some(self.wears_color_change("sparky")),
                 };
-                let player_st = PlayerState { dum_dums: self.dum_dums };
+                let player_st = PlayerState { dum_dums: self.dum_dums, swag_worn: self.player_swag().len() as u32 };
                 let opts = interaction_options::get_interaction_options(&npc_info, &player_st);
                 self.menu_target_id = "sparky".into();
                 self.menu_target_name = "Sparky".into();
@@ -1626,6 +1825,42 @@ impl Game {
                         self.pending_challenge = true;
                     }
                     let lines = sparky_dialogue_lines(&mut self.rng);
+                    self.start_dialogue(lines);
+                    self.set_state(GameState::Dialogue);
+                } else {
+                    self.menu_options = opts.iter().enumerate().map(|(i, o)| MenuOption {
+                        option_type: o.option_type.clone(),
+                        label: o.label.clone(),
+                        key: i + 1,
+                    }).collect();
+                    self.set_state(GameState::InteractionMenu);
+                }
+            } else if self.companion.as_ref().is_some_and(|c| c.is_rideable()) {
+                // You're sitting ON this buddy, so there's no tile to face them
+                // from — reaching out over their nose is the only way to talk to
+                // (or dress up) your own mount.
+                let (kind, can_gift, never_challenge) = {
+                    let c = self.companion.as_ref().unwrap();
+                    (c.kind, c.can_receive_gifts, c.never_challenge)
+                };
+                let npc_info = NpcInfo {
+                    id: kind.as_str().to_string(),
+                    can_receive_gifts: Some(can_gift),
+                    has_shop: None,
+                    is_puzzler: Some(false),
+                    runs_dive: None,
+                    wears_color_change: Some(self.wears_color_change(kind.as_str())),
+                };
+                let player_st = PlayerState { dum_dums: self.dum_dums, swag_worn: self.player_swag().len() as u32 };
+                let opts = interaction_options::get_interaction_options(&npc_info, &player_st);
+                self.menu_target_id = kind.as_str().to_string();
+                self.menu_target_name = kind.display_name().to_string();
+                self.menu_can_challenge = !never_challenge;
+
+                if opts.len() == 1 {
+                    let lines = self.companion.as_ref()
+                        .map(|c| npc_dialogue_lines(c, &mut self.rng))
+                        .unwrap_or_default();
                     self.start_dialogue(lines);
                     self.set_state(GameState::Dialogue);
                 } else {
@@ -1718,12 +1953,6 @@ impl Game {
         // Whoever's tagging along narrates the challenge feedback. Bound up
         // front so it doesn't clash with the mutable borrow of active_challenge.
         let buddy = self.current_buddy_name();
-        // Populate hit-test bounds from the pure layout fn.
-        if let Some(ref mut ac) = self.active_challenge {
-            let (bounds, scaffold) = ui::challenge::layout(&ac.state, &ac.challenge, screen);
-            ac.choice_bounds = bounds;
-            ac.scaffold = scaffold;
-        }
 
         let mut dismiss = false;
         if let Some(ref mut ac) = self.active_challenge {
@@ -1745,7 +1974,8 @@ impl Game {
                 let (mx, my) = input.mouse_pos;
                 if let Some(action) = ui::challenge::handle_click(
                     mx, my, &ac.state, &ac.challenge,
-                    &ac.choice_bounds, &ac.scaffold,
+                    // Same pure layout render paints — hit rects can't drift.
+                    &ui::challenge::layout(&ac.state, &ac.challenge, screen),
                 ) {
                     ac.state = challenge_reducer(ac.state.clone(), action);
                     speak_challenge_feedback(&ac.state, &buddy);
@@ -1809,9 +2039,7 @@ impl Game {
                 }
 
                 if let Some(ref reward) = ac.state.reward {
-                    self.dum_dums += reward.amount;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: reward.amount });
+                    self.award_dum_dums(reward.amount);
                 }
 
                 self.events.push(GameEvent::ChallengeResolved {
@@ -1843,11 +2071,7 @@ impl Game {
             }
             self.set_state(GameState::Playing);
 
-            if self.map.id != "dev" {
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
-                self.auto_save_timer = 0.0;
-            }
+            self.persist();
         }
     }
 
@@ -1986,14 +2210,17 @@ impl Game {
         };
         self.events.push(GameEvent::EncounterTriggered { kind: label.into() });
         match kind {
-            EncounterKind::FlavorDialogue { speaker, text } => {
-                self.start_dialogue(vec![DialogueLine { speaker, text }]);
+            EncounterKind::FlavorDialogue { text } => {
+                // Whoever's tagging along does the chattering — Sparky or the
+                // current NPC buddy.
+                self.start_dialogue(vec![DialogueLine {
+                    speaker: self.current_buddy_name(),
+                    text,
+                }]);
                 self.set_state(GameState::Dialogue);
             }
             EncounterKind::FoundDumDum => {
-                self.dum_dums += 1;
-                self.dum_dum_hud.flash();
-                self.events.push(GameEvent::DumDumsAwarded { amount: 1 });
+                self.award_dum_dums(1);
                 self.start_dialogue(vec![DialogueLine {
                     speaker: self.current_buddy_name(),
                     text: "Ooh! A shiny Dum Dum, just sitting here!".into(),
@@ -2058,12 +2285,12 @@ impl Game {
         let intent = {
             let aq = self.active_quest.as_ref().unwrap();
             let Some(view) = quest_view(aq) else { return };
-            let layout = ui::quest::layout(&view, screen);
             if input.mouse_clicked {
                 let (mx, my) = input.mouse_pos;
-                ui::quest::handle_click(mx, my, &layout)
+                let layout = ui::quest::layout(&view, &aq.session.quest.title, aq.message.as_deref(), screen);
+                ui::quest::handle_click(mx, my, &layout, &view)
             } else {
-                ui::quest::handle_key(input, &layout)
+                ui::quest::handle_key(input, &view)
             }
         };
         let Some(intent) = intent else { return };
@@ -2077,9 +2304,7 @@ impl Game {
                     act = Some(QuestAction::ArriveAt { map: map.clone(), x: *x, y: *y })
                 }
                 QuestStep::Reward { dum_dums } => {
-                    self.dum_dums += *dum_dums;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: *dum_dums });
+                    self.award_dum_dums(*dum_dums);
                     act = Some(QuestAction::AdvanceStep);
                 }
                 // A normal Choice is made via Choose; an empty (degenerate)
@@ -2129,407 +2354,12 @@ impl Game {
         }
     }
 
-    fn step_kenken(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
-        // Intro overlay swallows all input until the kid taps past the last
-        // step. Only on completion do we fire the profile event so this never
-        // fires again.
-        let mut intro_finished = false;
-        if let Some(ref mut ak) = self.active_kenken {
-            if let Some(step) = ak.intro_step {
-                if input.mouse_clicked || input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) {
-                    let next = step + 1;
-                    if next >= ui::kenken::INTRO_STEPS {
-                        ak.intro_step = None;
-                        intro_finished = true;
-                        // Reset start_time so the kid's intro reading time
-                        // doesn't pollute the puzzle response measurement.
-                        ak.start_time = self.game_time;
-                    } else {
-                        ak.intro_step = Some(next);
-                    }
-                }
-                if !intro_finished {
-                    return; // skip puzzle logic while intro is showing
-                }
-            }
-        }
-        if intro_finished {
-            self.profile = learner_reducer(self.profile.clone(), LearnerEvent::KenKenIntroSeen);
-        }
-
-        let mut dismiss = false;
-        if let Some(ref mut ak) = self.active_kenken {
-            // Auto-dismiss timer once solved.
-            if ak.session.phase == KenKenPhase::Complete {
-                ak.complete_timer += dt;
-                if ak.complete_timer >= 2.5 { dismiss = true; }
-                // Accept any input to dismiss — Space/Enter or a click
-                // anywhere on the panel. Keeps the celebration screen feeling
-                // tap-friendly for kids.
-                if input.pressed(KeyCode::Space)
-                    || input.pressed(KeyCode::Enter)
-                    || input.mouse_clicked
-                {
-                    dismiss = true;
-                }
-            }
-
-            if !dismiss {
-                let layout = ui::kenken::layout(&ak.session, screen);
-
-                // Keyboard input (number 1..N to fill the selected cell).
-                if let Some(intent) = ui::kenken::handle_key(&ak.session, input, ak.selected) {
-                    apply_kenken_intent(ak, intent);
-                }
-
-                // Mouse click → select cell, place value, hint, or clear.
-                if input.mouse_clicked {
-                    let (mx, my) = input.mouse_pos;
-                    if let Some(intent) = ui::kenken::handle_click(mx, my, &ak.session, &layout, ak.selected) {
-                        apply_kenken_intent(ak, intent);
-                    }
-                }
-            }
-        }
-
-        if dismiss {
-            if let Some(ak) = self.active_kenken.take() {
-                let was_correct = ak.session.phase == KenKenPhase::Complete;
-                let response_ms = ((self.game_time - ak.start_time) as f64 * 1000.0).min(120000.0);
-                let grid_size = ak.session.puzzle.grid_size;
-                let hints_used = ak.session.hints_used;
-                let violations = ak.session.constraint_violations;
-
-                self.profile = learner_reducer(self.profile.clone(), LearnerEvent::KenKenAttempted {
-                    correct: was_correct,
-                    grid_size,
-                    hints_used,
-                    constraint_violations: violations,
-                    response_time_ms: Some(response_ms),
-                });
-
-                if was_correct {
-                    // Same reward shape as a correct arithmetic challenge: 1 Dum Dum.
-                    let award = 1u32;
-                    self.dum_dums += award;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
-                }
-
-                self.events.push(GameEvent::KenKenResolved {
-                    correct: was_correct,
-                    grid_size,
-                    hints_used,
-                    constraint_violations: violations,
-                    response_ms,
-                });
-            }
-            self.set_state(GameState::Playing);
-
-            if self.map.id != "dev" {
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
-                self.auto_save_timer = 0.0;
-            }
-        }
-    }
-
-    fn step_pattern(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
-        let mut dismiss = false;
-        if let Some(ref mut ap) = self.active_pattern {
-            if ap.session.phase == PatternPhase::Complete {
-                // Celebrate, then auto-dismiss — or let any input move on.
-                ap.complete_timer += dt;
-                if ap.complete_timer >= 2.0 {
-                    dismiss = true;
-                }
-                if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) || input.mouse_clicked {
-                    dismiss = true;
-                }
-            } else {
-                let layout = ui::patterns::layout(&ap.session, screen);
-                if let Some(ui::patterns::PatternInput::Action(action)) =
-                    ui::patterns::handle_key(&ap.session, input)
-                {
-                    ap.session = patterns::pattern_reducer(ap.session.clone(), action);
-                } else if input.mouse_clicked {
-                    let (mx, my) = input.mouse_pos;
-                    if let Some(ui::patterns::PatternInput::Action(action)) =
-                        ui::patterns::handle_click(mx, my, &ap.session, &layout)
-                    {
-                        ap.session = patterns::pattern_reducer(ap.session.clone(), action);
-                    }
-                }
-            }
-        }
-
-        if dismiss {
-            if let Some(ap) = self.active_pattern.take() {
-                let was_correct = ap.session.phase == PatternPhase::Complete;
-                let response_ms = ((self.game_time - ap.start_time) as f64 * 1000.0).min(120000.0);
-                let level = self.profile.pattern_level;
-                let attempts = ap.session.attempts;
-
-                self.profile = learner_reducer(self.profile.clone(), LearnerEvent::PatternAttempted {
-                    correct: was_correct,
-                    level,
-                    attempts,
-                    response_time_ms: Some(response_ms),
-                });
-
-                if was_correct {
-                    // Same reward shape as a correct challenge or kenken: 1 Dum Dum.
-                    let award = 1u32;
-                    self.dum_dums += award;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
-                }
-
-                self.events.push(GameEvent::PatternResolved {
-                    correct: was_correct,
-                    level,
-                    attempts,
-                    response_ms,
-                });
-            }
-            self.set_state(GameState::Playing);
-
-            if self.map.id != "dev" {
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
-                self.auto_save_timer = 0.0;
-            }
-        }
-    }
-
-    fn step_balance(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
-        let mut dismiss = false;
-        if let Some(ref mut ab) = self.active_balance {
-            if ab.session.phase == BalancePhase::Complete {
-                ab.complete_timer += dt;
-                if ab.complete_timer >= 2.0 {
-                    dismiss = true;
-                }
-                if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) || input.mouse_clicked {
-                    dismiss = true;
-                }
-            } else {
-                let layout = ui::balance::layout(&ab.session, screen);
-                if let Some(ui::balance::BalanceInput::Action(action)) =
-                    ui::balance::handle_key(&ab.session, input)
-                {
-                    ab.session = balance::balance_reducer(ab.session.clone(), action);
-                } else if input.mouse_clicked {
-                    let (mx, my) = input.mouse_pos;
-                    if let Some(ui::balance::BalanceInput::Action(action)) =
-                        ui::balance::handle_click(mx, my, &ab.session, &layout)
-                    {
-                        ab.session = balance::balance_reducer(ab.session.clone(), action);
-                    }
-                }
-            }
-        }
-
-        if dismiss {
-            if let Some(ab) = self.active_balance.take() {
-                let was_correct = ab.session.phase == BalancePhase::Complete;
-                let response_ms = ((self.game_time - ab.start_time) as f64 * 1000.0).min(120000.0);
-                let level = balance::balance_level_for_band(self.profile.math_band);
-                let attempts = ab.session.attempts;
-
-                if was_correct {
-                    let award = 1u32;
-                    self.dum_dums += award;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
-                }
-
-                self.events.push(GameEvent::BalanceResolved {
-                    correct: was_correct,
-                    level,
-                    attempts,
-                    response_ms,
-                });
-            }
-            self.set_state(GameState::Playing);
-
-            if self.map.id != "dev" {
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
-                self.auto_save_timer = 0.0;
-            }
-        }
-    }
-
-    fn step_sudoku(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
-        let mut dismiss = false;
-        if let Some(ref mut asd) = self.active_sudoku {
-            if asd.session.phase == SudokuPhase::Complete {
-                asd.complete_timer += dt;
-                if asd.complete_timer >= 2.5 {
-                    dismiss = true;
-                }
-                if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) || input.mouse_clicked {
-                    dismiss = true;
-                }
-            } else {
-                let layout = ui::sudoku::layout(&asd.session, screen);
-                if let Some(intent) = ui::sudoku::handle_key(&asd.session, input, asd.selected) {
-                    apply_sudoku_intent(asd, intent);
-                }
-                if input.mouse_clicked {
-                    let (mx, my) = input.mouse_pos;
-                    if let Some(intent) = ui::sudoku::handle_click(mx, my, &asd.session, &layout, asd.selected) {
-                        apply_sudoku_intent(asd, intent);
-                    }
-                }
-            }
-        }
-
-        if dismiss {
-            if let Some(asd) = self.active_sudoku.take() {
-                let was_correct = asd.session.phase == SudokuPhase::Complete;
-                let response_ms = ((self.game_time - asd.start_time) as f64 * 1000.0).min(120000.0);
-                let grid_size = asd.session.puzzle.grid_size;
-                let violations = asd.session.constraint_violations;
-
-                if was_correct {
-                    let award = 1u32;
-                    self.dum_dums += award;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsAwarded { amount: award });
-                }
-
-                self.events.push(GameEvent::SudokuResolved {
-                    correct: was_correct,
-                    grid_size,
-                    constraint_violations: violations,
-                    response_ms,
-                });
-            }
-            self.set_state(GameState::Playing);
-
-            if self.map.id != "dev" {
-                let save_data = self.gather_save_data();
-                self.save_backend.save_to(self.active_slot, &save_data);
-                self.auto_save_timer = 0.0;
-            }
-        }
-    }
-
-    fn step_shop(&mut self, input: &FrameInput, screen: (f32, f32)) {
-        let Some(ash) = self.active_shop.as_ref() else { return };
-        let view = shop_view(ash, &self.color_choice);
-        let layout = ui::shop::layout(&ash.catalog, &view, screen);
-
-        let intent = if input.mouse_clicked {
-            let (mx, my) = input.mouse_pos;
-            ui::shop::handle_click(mx, my, &layout)
-        } else {
-            ui::shop::handle_key(input, &layout)
-        };
-        let Some(intent) = intent else { return };
-
-        match intent {
-            ui::shop::ShopInput::Close => {
-                // "Done" dismisses the nearest thing: the color picker if it's
-                // up, otherwise the whole shop.
-                let ash = self.active_shop.as_mut().unwrap();
-                if ash.picking_color {
-                    ash.picking_color = false;
-                    ash.message = None;
-                    return;
-                }
-                if let Some(ash) = self.active_shop.take() {
-                    self.shop_owned = ash.owned;
-                }
-                self.set_state(GameState::Playing);
-            }
-            ui::shop::ShopInput::SelectItem(i) => {
-                let ash = self.active_shop.as_mut().unwrap();
-                if ash.selected.is_some() || ash.picking_color {
-                    return; // already solving a purchase or picking a color
-                }
-                let item = ash.catalog[i].clone();
-                // An owned Color Change re-opens the picker — buying it once
-                // means you get to change colors whenever you like.
-                if item.id == "color_change" && ash.owned.contains(&item.id) {
-                    ash.picking_color = true;
-                    ash.message = None;
-                    return;
-                }
-                match shop::process_purchase(self.dum_dums, &item.id, &ash.owned) {
-                    shop::PurchaseOutcome::Bought { result } => {
-                        ash.selected = Some(i);
-                        ash.cost = result.spent;
-                        ash.answer = result.new_balance;
-                        ash.balance_before = self.dum_dums;
-                        ash.message = None;
-                        let choices = subtraction_choices(self.dum_dums, result.spent, &mut self.rng);
-                        ash.choices = choices;
-                    }
-                    shop::PurchaseOutcome::CantAfford { shortfall } => {
-                        ash.message = Some(format!("You need {shortfall} more Dum Dums!"));
-                    }
-                    shop::PurchaseOutcome::AlreadyOwned => {
-                        ash.message = Some("Sparky already has that one!".into());
-                    }
-                    shop::PurchaseOutcome::UnknownItem => {}
-                }
-            }
-            ui::shop::ShopInput::Answer(v) => {
-                // Resolve the guess on the shop session, then drop that borrow
-                // before touching `self` (balance, events, save).
-                let purchase = {
-                    let ash = self.active_shop.as_mut().unwrap();
-                    let Some(i) = ash.selected else { return };
-                    if v == ash.answer {
-                        let item = ash.catalog[i].clone();
-                        ash.owned.insert(item.id.clone());
-                        ash.selected = None;
-                        ash.choices.clear();
-                        if item.id == "color_change" {
-                            // The fun part of Color Change is choosing — go
-                            // straight to the swatches.
-                            ash.picking_color = true;
-                            ash.message = Some("You got it! Pick your color!".into());
-                        } else {
-                            ash.message = Some(format!("Sparky LOVES the {}!", item.name));
-                        }
-                        Some((item.id, ash.cost, ash.answer))
-                    } else {
-                        // Natural consequence, not punishment — recount and retry.
-                        ash.message = Some("Hmm, let me count again...".into());
-                        None
-                    }
-                };
-                if let Some((item_id, cost, new_balance)) = purchase {
-                    self.dum_dums = new_balance;
-                    self.dum_dum_hud.flash();
-                    self.events.push(GameEvent::DumDumsSpent { amount: cost, item: item_id });
-                    // Persist immediately so the cosmetic (and the spent Dum
-                    // Dums) survive a reload even if the kid quits right now.
-                    if let Some(ash) = self.active_shop.as_ref() {
-                        self.shop_owned = ash.owned.clone();
-                    }
-                    if self.map.id != "dev" {
-                        let save_data = self.gather_save_data();
-                        self.save_backend.save_to(self.active_slot, &save_data);
-                    }
-                }
-            }
-            ui::shop::ShopInput::PickColor(i) => {
-                let Some((id, _)) = sprites::player::OUTFIT_COLORS.get(i) else { return };
-                self.color_choice = id.to_string();
-                let ash = self.active_shop.as_mut().unwrap();
-                ash.message = Some("Looking good!".into());
-                // Persist right away, same as a purchase — the new outfit
-                // should survive a reload even if the kid quits now.
-                if self.map.id != "dev" {
-                    let save_data = self.gather_save_data();
-                    self.save_backend.save_to(self.active_slot, &save_data);
-                }
-            }
+    /// What the settings overlay shows.
+    fn settings_model(&self) -> ui::settings_overlay::SettingsModel {
+        ui::settings_overlay::SettingsModel {
+            features: self.features,
+            parent_open: self.parent_panel_open,
+            pace: self.game_pace,
         }
     }
 
@@ -2548,7 +2378,10 @@ impl Game {
                         self.start_dialogue(lines);
                     } else {
                         // Pull lines first to free the borrow before start_dialogue.
-                        let lines = self.npcs.iter().find(|n| n.id_str() == self.menu_target_id)
+                        // The companion is checked too: a mount you're riding
+                        // isn't in the roster, but it's still who you're talking to.
+                        let lines = self.npcs.iter().chain(self.companion.iter())
+                            .find(|n| n.id_str() == self.menu_target_id)
                             .map(|target| {
                                 let lines = npc_dialogue_lines(target, &mut self.rng);
                                 lines
@@ -2602,11 +2435,17 @@ impl Game {
                     self.active_sudoku = Some(asd);
                     self.set_state(GameState::Sudoku);
                 }
+                "dive" => {
+                    self.start_descent();
+                }
                 "shop" => {
                     let source = self.menu_target_id.clone();
+                    // The menu only offers "shop" for an NPC that runs one.
+                    let Some(shop) = npc::NpcKind::from_id(&source).and_then(|k| k.shop()) else { return };
                     self.active_shop = Some(ActiveShop {
-                        catalog: shop::shop_catalog(),
-                        owned: self.shop_owned.clone(),
+                        shop,
+                        catalog: shop.catalog(),
+                        owned: self.shop_owned_for(shop),
                         selected: None,
                         choices: Vec::new(),
                         answer: 0,
@@ -2615,9 +2454,14 @@ impl Game {
                         message: None,
                         source_npc: source,
                         picking_color: false,
+                        trading: None,
+                        page: 0,
                     });
                     self.set_state(GameState::Shop);
                 }
+                "swag" => self.open_swag(false),
+                // Same panel, straight to the swatches for this buddy.
+                "recolor" => self.open_swag(true),
                 "give" => {
                     if !give::can_give(self.dum_dums) {
                         self.set_state(GameState::Playing);
@@ -2645,9 +2489,7 @@ impl Game {
                         // previous companion returns home.
                         let swap = self.maybe_swap_companion_from_gift();
 
-                        let save_data = self.gather_save_data();
-                        self.save_backend.save_to(self.active_slot, &save_data);
-                        self.auto_save_timer = 0.0;
+                        self.persist();
 
                         let reaction = give_reaction_dialogue(
                             &self.menu_target_id, &self.menu_target_name,
@@ -2674,7 +2516,7 @@ impl Game {
     fn handle_settings_input(&mut self, input: &FrameInput, screen: (f32, f32)) {
         if self.settings_open {
             use ui::settings_overlay::{Feature, SettingsResult};
-            if let Some(result) = ui::settings_overlay::handle_input(input, screen, self.parent_panel_open) {
+            if let Some(result) = ui::settings_overlay::handle_input(input, screen, self.settings_model()) {
                 match result {
                     // These stay in the overlay — just mutate state, don't close.
                     SettingsResult::ToggleParentPanel => {
@@ -2684,6 +2526,22 @@ impl Game {
                         Feature::Encounters => self.features.encounters = !self.features.encounters,
                         Feature::Quest => self.features.quest = !self.features.quest,
                     },
+                    // Mouse-reachable session export (parent dashboard). Same
+                    // payload as the debug overlay's Export button.
+                    // Parent dial: slow the arcade down (or speed it up) and
+                    // persist it, without touching which numbers get asked.
+                    SettingsResult::SetPace(pace) => {
+                        self.game_pace = pace;
+                        self.persist();
+                    }
+                    SettingsResult::ExportSession => {
+                        let json = session::build_export(
+                            &self.player_name, &self.session_log, &self.gifts_given,
+                            self.dum_dums, self.play_time, &self.profile, self.map.id,
+                        );
+                        let filename = format!("robot-buddy-session-{}.json", self.play_time as u64);
+                        session::download_json(&json, &filename);
+                    }
                     SettingsResult::Close => {
                         self.settings_open = false;
                         self.parent_panel_open = false;
@@ -2699,6 +2557,8 @@ impl Game {
                         self.active_balance = None;
                         self.active_sudoku = None;
                         self.active_shop = None;
+                        self.active_swag = None;
+                        self.active_descent = None;
                         self.active_quest = None;
                         self.pending_challenge = false;
                         self.set_state(GameState::Title);
@@ -2718,6 +2578,79 @@ impl Game {
     /// he should not render, soft-block, or be interactable.
     pub fn sparky_is_here(&self) -> bool {
         !self.sparky_parked || self.map.id == self.sparky_map
+    }
+
+    /// The one way the game changes who wears what (Invariant 2: the
+    /// wardrobe only moves through its reducer). Public so tests and dev
+    /// tooling can dress somebody without walking them through the shop.
+    pub fn dress(&mut self, action: wardrobe::WardrobeAction) -> HandOver {
+        let (w, outcome) = wardrobe::wardrobe_reducer(std::mem::take(&mut self.wardrobe), action);
+        self.wardrobe = w;
+        outcome
+    }
+
+    /// The Color Change colour id `who` shows. Someone who never picked one
+    /// shows the kid's (which is what every wearer showed before colours were
+    /// per-wearer), and a kid who never picked shows the original tint.
+    pub fn outfit_color(&self, who: &str) -> &str {
+        self.wardrobe.color_of(who)
+            .or_else(|| self.wardrobe.color_of(wardrobe::PLAYER))
+            .unwrap_or(sprites::player::OUTFIT_COLORS[0].0)
+    }
+
+    fn wears_color_change(&self, who: &str) -> bool {
+        self.wardrobe.is_wearing(who, domain_shop::COLOR_CHANGE)
+    }
+
+    /// Hand the kid a pearl find: credit, flash, log. Returns the kid-facing
+    /// "+N pearls" line (naming the net when it paid) so every source words
+    /// it the same way.
+    fn award_pearls(&mut self, payout: domain_shop::PearlPayout) -> String {
+        let amount = payout.total();
+        self.pearls = self.pearls.saturating_add(amount);
+        self.pearl_hud.flash();
+        self.events.push(GameEvent::PearlsAwarded { amount });
+        let mut line = format!("+{}", Currency::Pearls.count(amount));
+        if payout.net > 0 {
+            line.push_str("  (your net caught one!)");
+        }
+        line
+    }
+
+    /// Hand the kid Dum Dums they earned: credit, flash, log.
+    fn award_dum_dums(&mut self, amount: u32) {
+        self.dum_dums = self.dum_dums.saturating_add(amount);
+        self.dum_dum_hud.flash();
+        self.events.push(GameEvent::DumDumsAwarded { amount });
+    }
+
+    /// The permanent perks the kid is carrying — drawn on them, but never in
+    /// the wardrobe, so they can't be handed to a buddy.
+    pub fn gear_worn(&self) -> &std::collections::BTreeSet<String> {
+        &self.upgrades
+    }
+
+    /// The floating cheer currently on screen, if any. Lets tests read the
+    /// feedback a kid would actually see.
+    pub fn track_toast_text(&self) -> Option<&str> {
+        self.track_toast.as_ref().map(|(msg, _)| msg.as_str())
+    }
+
+    /// True once the kid owns Hermie's Diving Net, which pays a bonus pearl on
+    /// every find from then on — the grind rewarding the grind.
+    pub fn has_diving_net(&self) -> bool {
+        self.upgrades.contains(domain_shop::DIVING_NET)
+    }
+
+    /// Everything the kid is wearing right now. Swag they've handed to a
+    /// buddy isn't in here any more — that's the whole point.
+    pub fn player_swag(&self) -> &std::collections::BTreeSet<String> {
+        self.wardrobe.worn_by(wardrobe::PLAYER)
+    }
+
+    /// What `who` (an NPC id, `"sparky"`, or `wardrobe::PLAYER`) is wearing.
+    pub fn swag_worn_by(&self, who: &str) -> &std::collections::BTreeSet<String> {
+        self.wardrobe.worn_by(who)
     }
 
     /// Stable id string for the entity currently following the player. Used
@@ -2787,21 +2720,41 @@ impl Game {
     fn load_map_roster(&mut self, map_id: &'static str) -> Vec<npc::Npc> {
         let mut roster = self.npcs_offstage
             .remove(map_id)
-            .unwrap_or_else(|| npc::npcs_for_map(map_id));
+            .unwrap_or_else(|| self.fresh_roster(map_id));
         if let Some(c) = self.companion.as_ref() {
-            let companion_kind = c.kind;
-            roster.retain(|n| n.kind != companion_kind);
+            // Drop only the companion's OWN home-roster entry so they don't also
+            // appear back home. A same-kind NPC that lives on a *different* map
+            // (e.g. the reef's Shelly vs. the trench's Shelly, both `Clam`) is a
+            // different creature and must stay — matching on kind alone made
+            // recruiting one erase the other.
+            let (kind, home) = (c.kind, c.home_map);
+            roster.retain(|n| !(n.kind == kind && n.home_map == home));
         }
-        // A gate the kid already solved stays open: clear the guardian's `gate`
-        // flag so it's pushable and won't re-pose its puzzle.
         for n in roster.iter_mut() {
-            if let Some(id) = n.gate_id {
-                if self.satisfied_gates.contains(id) {
-                    n.gate = false;
-                }
-            }
+            self.settle_gate(n);
         }
         roster
+    }
+
+    /// `map_id`'s residents as the template spawns them, with the kid's
+    /// progress applied. Every NPC built from a template goes through here —
+    /// the map roster, the rehydrated companion, a stash seeded for a portal
+    /// push — so a tamed guardian can't come back gated (and asleep) just
+    /// because one path forgot to check.
+    fn fresh_roster(&self, map_id: &'static str) -> Vec<npc::Npc> {
+        let mut roster = npc::npcs_for_map(map_id);
+        for n in roster.iter_mut() {
+            self.settle_gate(n);
+        }
+        roster
+    }
+
+    /// A gate the kid already solved stays open: clear the guardian's `gate`
+    /// flag so it's pushable, awake, and won't re-pose its puzzle.
+    fn settle_gate(&self, n: &mut npc::Npc) {
+        if n.gate_id.is_some_and(|id| self.satisfied_gates.contains(id)) {
+            n.gate = false;
+        }
     }
 
     /// Resolve the gift recipient (held in `self.menu_target_id`) into a
@@ -2976,44 +2929,14 @@ impl Game {
         }
     }
 
-    /// Ambient number-line path: when the kid hops onto the goal stone (the one
-    /// with the pearl), collect it — +1 pearl, a cheer, and the pearl hops to a
-    /// fresh stone so the path is a repeatable counting game. Rising-edge so it
-    /// fires once per arrival. Pure reward; never gates progress.
-    fn check_number_track_landing(&mut self) {
-        let track = match number_track::track_for_map(self.map.id) {
-            Some(t) => t,
-            None => { self.track_on_target = false; return; }
-        };
-        let goal = self.track_goal.min(track.tiles.len() - 1);
-        let goal_tile = track.tiles[goal];
-        let on_goal = (self.player.tile_x, self.player.tile_y) == goal_tile;
-
-        if on_goal && !self.track_on_target {
-            self.pearls = self.pearls.saturating_add(1);
-            self.pearl_hud.flash();
-            self.events.push(GameEvent::NumberLineReached { mark: goal as u8 });
-            self.track_toast = Some((format!("You hopped to {goal}!  +1 pearl"), 1.8));
-            // Hop the pearl to a different stone for the next round.
-            if track.tiles.len() > 1 {
-                let mut next = goal;
-                while next == goal {
-                    next = self.rng.gen_range(0..track.tiles.len());
-                }
-                self.track_goal = next;
-            }
-        }
-        self.track_on_target = on_goal;
-    }
-
     /// Whisk any swapped-out buddy that's `leaving_map` off to its real home the
     /// moment it walks off-screen or reaches the exit doorway. Until then it's a
     /// normal roster NPC strolling toward the door. Keeps the "walk out, then
     /// teleport" illusion without ever stranding a buddy on the wrong map.
-    fn evict_offscreen_leavers(&mut self) {
-        let cam = (self.camera.x, self.camera.y);
+    fn evict_offscreen_leavers(&mut self, screen: (f32, f32)) {
+        let view = visible_world_rect((self.camera.x, self.camera.y), screen);
         let gone: Vec<usize> = self.npcs.iter().enumerate()
-            .filter(|(_, n)| n.leaving_map && (!npc_in_camera(cam, n) || !n.homing))
+            .filter(|(_, n)| n.leaving_map && (!npc_in_camera(view, n) || !n.homing))
             .map(|(i, _)| i)
             .collect();
         for i in gone.into_iter().rev() {
@@ -3214,10 +3137,11 @@ impl Game {
             // the pushed NPC, and `load_map_roster` (which prefers an existing
             // stash over `npcs_for_map`) would spawn the map with its regular
             // residents missing.
-            self.npcs_offstage
-                .entry(dest_map.to_string())
-                .or_insert_with(|| npc::npcs_for_map(dest_map))
-                .push(npc_obj);
+            if !self.npcs_offstage.contains_key(dest_map) {
+                let roster = self.fresh_roster(dest_map);
+                self.npcs_offstage.insert(dest_map.to_string(), roster);
+            }
+            self.npcs_offstage.get_mut(dest_map).unwrap().push(npc_obj);
         }
     }
 
@@ -3262,6 +3186,20 @@ impl Game {
             Some(p) => p,
             None => return,
         };
+        // The Dogfish House's bubble column goes back where the dive began.
+        let portal = if portal.from_map == tilemap::DOGFISH_HOUSE {
+            self.dogfish_exit(*portal)
+        } else {
+            *portal
+        };
+        self.take_portal(portal);
+    }
+
+    /// Travel through `portal`: tolls, fuel, the transfer itself, and the
+    /// arrival beat. Split out from `handle_portal` because a dive ends
+    /// somewhere the kid isn't standing — Inkwell sends them down the shaft
+    /// from her ledge, so there's no tile underfoot to look the portal up from.
+    fn take_portal(&mut self, portal: tilemap::Portal) {
         let secret = portal.secret;
         let mut dest_map = portal.to_map;
         let dest_x = portal.to_x;
@@ -3300,20 +3238,16 @@ impl Game {
             self.start_dialogue(vec![DialogueLine {
                 speaker: self.current_buddy_name(),
                 text: format!(
-                    "Ooh, a dive spot! The first splash in costs {cost} Dum Dums. We need {need} more — let's go find some, boss!"
+                    "Ooh, a dive spot! The first splash in costs {}. We need {need} more — let's go find some, boss!",
+                    Currency::DumDums.count(cost),
                 ),
             }]);
             self.set_state(GameState::Dialogue);
             return;
         }
         if toll_due {
-            self.dum_dums -= cost;
             self.paid_tolls.insert(toll_id);
-            self.dum_dum_hud.flash();
-            self.events.push(GameEvent::DumDumsSpent {
-                amount: cost,
-                item: format!("dive:{dest_map}"),
-            });
+            self.spend(Currency::DumDums, cost, format!("dive:{dest_map}"));
         }
 
         if dest_map == "dream" {
@@ -3337,8 +3271,8 @@ impl Game {
         self.npcs = self.load_map_roster(dest_id);
 
         // Reset the ambient pearl to the new map's path start (if any).
-        self.track_goal = number_track::track_for_map(dest_id).map(|t| t.target).unwrap_or(0);
-        self.track_on_target = false;
+        // A pearl trip belongs to the map it started on.
+        self.leap_session = None;
 
         self.player.tile_x = dest_x;
         self.player.tile_y = dest_y;
@@ -3365,7 +3299,10 @@ impl Game {
             to: self.map.id.to_string(),
         });
 
-        if secret {
+        // The arrival cutscene is a first-time-only thrill. Once a map's intro
+        // has played it's remembered (and persisted), so a kid who dives the
+        // reef every session doesn't sit through the same speech every time.
+        if secret && self.seen_intros.insert(self.map.id.to_string()) {
             let lines = secret_entry_dialogue(self.map.id, &self.current_buddy_name());
             if !lines.is_empty() {
                 self.start_dialogue(lines);
@@ -3375,6 +3312,14 @@ impl Game {
     }
 
     // ─── Rendering ─────────────────────────────────────
+
+    /// Paint whatever `who` is wearing over the sprite just drawn for them.
+    /// No-op for anyone who's been given nothing, which is almost everyone.
+    fn draw_swag_on(&self, who: &str, x: f32, y: f32, dir: Dir, fit: sprites::swag::SwagFit) {
+        let worn = self.wardrobe.worn_by(who);
+        if worn.is_empty() { return; }
+        sprites::swag::draw_swag(x, y, dir, 0.0, worn, self.outfit_color(who), fit);
+    }
 
     fn render_world(&mut self, screen: (f32, f32)) {
         let (sw, sh) = screen;
@@ -3398,7 +3343,10 @@ impl Game {
 
             if let Some(ref iq) = self.intake {
                 if let Some(ref ac) = iq.challenge {
-                    ui::challenge::draw_challenge(&ac.state, &ac.challenge, self.game_time);
+                    {
+                        let layout = ui::challenge::layout(&ac.state, &ac.challenge, screen);
+                        ui::challenge::draw(&layout, &ac.state, &ac.challenge, self.game_time);
+                    }
                 }
             }
         } else {
@@ -3409,20 +3357,18 @@ impl Game {
             });
 
             clear_background(Color::from_rgba(26, 26, 46, 255));
-            tilemap::draw_map(&self.map, self.camera.x, self.camera.y, GAME_W, GAME_H, self.game_time);
+            // Draw the tiles the camera actually shows — the whole window, not
+            // just the logical 960×720 frame. This is the structural guarantee
+            // that nothing world-space (stones, sprites, markers) can ever be
+            // visible over undrawn void: wherever the camera looks, tiles are.
+            let view = visible_world_rect((self.camera.x, self.camera.y), (sw, sh));
+            tilemap::draw_map(&self.map, view.x, view.y, view.w, view.h, self.game_time);
 
             // Embodied number line: stepping-stones drawn on the ground (under
             // the sprites) so the kid hops across the numbers.
             if let Some(track) = number_track::track_for_map(self.map.id) {
                 let here = track.index_of((self.player.tile_x, self.player.tile_y));
-                draw_number_track(&track, here, self.track_goal, self.game_time);
-            }
-            // The dive gauge (reef): count down the depth-stones; the deepest
-            // glows as the trench door.
-            if let Some(dive) = number_track::dive_track_for_map(self.map.id) {
-                let here = dive.tiles.iter()
-                    .position(|&t| t == (self.player.tile_x, self.player.tile_y));
-                draw_dive_shaft(&dive, here, self.game_time);
+                draw_number_track(&track, here, self.leap_session.as_ref(), self.game_time);
             }
 
             // Click-to-walk destination marker: a pulsing ring on the tapped
@@ -3437,7 +3383,10 @@ impl Game {
                 draw_circle(cx, cy, 4.0, gold);
             }
 
-            enum SpriteKind<'a> { Player, Sparky, Npc(&'a npc::Npc) }
+            // `Mount` is the rideable *companion* only — never a roster NPC, so a
+            // wild/gate shark that happens to be rideable still draws normally at
+            // its own tile instead of teleporting under the player.
+            enum SpriteKind<'a> { Player, Sparky, Npc(&'a npc::Npc), Mount(&'a npc::Npc) }
             struct Renderable<'a> { y: f32, kind: SpriteKind<'a> }
             let mut renderables: Vec<Renderable> = vec![];
 
@@ -3446,19 +3395,19 @@ impl Game {
                 renderables.push(Renderable { y: self.sparky.entity.y, kind: SpriteKind::Sparky });
             }
             if let Some(c) = self.companion.as_ref() {
-                // A rideable buddy (Chompy) sits on the player's tile as a
-                // mount — nudge its sort key just behind the player so the kid
-                // always draws on top, looking like they're riding it.
-                let y = if c.is_rideable() { self.player.y - 1.0 } else { c.entity.y };
-                renderables.push(Renderable { y, kind: SpriteKind::Npc(c) });
+                if c.is_rideable() {
+                    // A rideable buddy (Chompy) sits on the player's tile as a
+                    // mount — nudge its sort key just behind the player so the kid
+                    // always draws on top, looking like they're riding it.
+                    renderables.push(Renderable { y: self.player.y - 1.0, kind: SpriteKind::Mount(c) });
+                } else {
+                    renderables.push(Renderable { y: c.entity.y, kind: SpriteKind::Npc(c) });
+                }
             }
-            // Cull roster NPCs outside the viewport. The map only draws the
-            // tiles under the camera (everything else is the void-blue clear
-            // color), so an unculled wanderer off to the side would float in
-            // that void instead of staying hidden until the camera reaches it.
-            let cam = (self.camera.x, self.camera.y);
+            // Skip roster NPCs outside the visible rect — pure draw-call
+            // thrift; anywhere visible has tiles under it now.
             for n in &self.npcs {
-                if npc_in_camera(cam, n) {
+                if npc_in_camera(view, n) {
                     renderables.push(Renderable { y: n.entity.y, kind: SpriteKind::Npc(n) });
                 }
             }
@@ -3471,22 +3420,52 @@ impl Game {
                             // On the hub the kid pilots the rocket — that's the avatar.
                             sprites::player::draw_rocket(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time);
                         } else {
+                            // When riding a mount (Chompy, Echo), lift the kid onto
+                            // its back and ride its own swim-bob so the two move
+                            // as one body.
+                            let py = match self.companion.as_ref() {
+                                Some(c) if c.is_rideable() =>
+                                    self.player.y + c.rider_offset(self.game_time),
+                                _ => self.player.y,
+                            };
                             match self.player_gender {
-                                Gender::Boy => sprites::player::draw_player_boy(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
-                                Gender::Girl => sprites::player::draw_player_girl(self.player.x, self.player.y, self.player.dir, self.player.frame, self.game_time),
+                                Gender::Boy => sprites::player::draw_player_boy(self.player.x, py, self.player.dir, self.player.frame, self.game_time),
+                                Gender::Girl => sprites::player::draw_player_girl(self.player.x, py, self.player.dir, self.player.frame, self.game_time),
                             }
                             // Cosmetics bought from Bolt's shop ride on the kid.
-                            sprites::player::draw_player_cosmetics(self.player.x, self.player.y, self.player.dir, self.player.frame, &self.shop_owned, &self.color_choice);
+                            sprites::player::draw_player_cosmetics(self.player.x, py, self.player.dir, self.player.frame, self.player_swag(), self.outfit_color(wardrobe::PLAYER));
+                            // Perks from Hermie's stall ride along too — they're
+                            // not wearable swag, but the kid should be able to
+                            // SEE what twenty pearls bought them.
+                            let bob = if self.player.frame % 2 == 1 { -2.0 } else { 0.0 };
+                            sprites::swag::draw_gear(self.player.x, py, self.player.dir, bob,
+                                &self.upgrades, sprites::swag::SwagFit::KID);
                             // On planet surfaces the kid wears a space helmet.
                             if self.map.render_mode == tilemap::RenderMode::Cosmic {
-                                sprites::player::draw_spacesuit_overlay(self.player.x, self.player.y, self.player.frame);
+                                sprites::player::draw_spacesuit_overlay(self.player.x, py, self.player.frame);
                             }
                         }
                     }
                     SpriteKind::Sparky => {
-                        sprites::robot::draw_robot(self.sparky.entity.x, self.sparky.entity.y, self.sparky.entity.dir, self.sparky.entity.frame, self.game_time);
+                        let e = &self.sparky.entity;
+                        sprites::robot::draw_robot(e.x, e.y, e.dir, e.frame, self.game_time);
+                        self.draw_swag_on("sparky", e.x, e.y, e.dir,
+                            sprites::swag::SwagFit::ROBOT);
                     }
-                    SpriteKind::Npc(n) => n.draw(self.game_time),
+                    SpriteKind::Npc(n) => {
+                        n.draw(self.game_time);
+                        self.draw_swag_on(n.id_str(), n.entity.x, n.entity.y, n.entity.dir,
+                            n.sprite.swag_fit());
+                    }
+                    SpriteKind::Mount(n) => {
+                        // The mount is pinned under its rider: draw its own
+                        // sprite at the player's tile, facing the player's way,
+                        // so the kid sits astride its back rather than
+                        // alongside a blob.
+                        n.draw_at(self.player.x, self.player.y, self.player.dir, self.game_time);
+                        self.draw_swag_on(n.id_str(), self.player.x, self.player.y,
+                            self.player.dir, n.sprite.swag_fit());
+                    }
                 }
             }
 
@@ -3600,8 +3579,8 @@ impl Game {
     pub fn render(&mut self, screen: (f32, f32), input: &FrameInput) {
         match self.state {
             GameState::Title => {
-                let layout = ui::title_screen::layout_title(&self.save_slots, screen);
-                ui::title_screen::draw_title(&layout, &self.save_slots, self.game_time, input.mouse_pos);
+                let layout = ui::title_screen::layout_title(&self.save_slots, &self.resting_slots, screen);
+                ui::title_screen::draw_title(&layout, &self.save_slots, &self.resting_slots, self.game_time, input.mouse_pos);
                 return;
             }
             GameState::NewGame => {
@@ -3623,11 +3602,14 @@ impl Game {
             ui::interaction_menu::draw(&layout, input.mouse_pos);
         }
 
-        self.dialogue.draw();
+        self.dialogue.draw(screen);
 
         // Challenge overlay (separate from intake's in-render_world drawing).
         if let Some(ref ac) = self.active_challenge {
-            ui::challenge::draw_challenge(&ac.state, &ac.challenge, self.game_time);
+            {
+                        let layout = ui::challenge::layout(&ac.state, &ac.challenge, screen);
+                        ui::challenge::draw(&layout, &ac.state, &ac.challenge, self.game_time);
+                    }
         }
 
         // KenKen overlay
@@ -3654,40 +3636,52 @@ impl Game {
             ui::sudoku::draw_sudoku(&asd.session, &layout, asd.selected);
         }
 
-        // Shop overlay
-        if let Some(ref ash) = self.active_shop {
-            let view = shop_view(ash, &self.color_choice);
-            let layout = ui::shop::layout(&ash.catalog, &view, screen);
-            ui::shop::draw_shop(&ash.catalog, &ash.owned, self.dum_dums, &view, &layout, ash.message.as_deref());
-
-            // While picking an outfit color, show a live preview of the kid in
-            // the panel's top-right so tapping swatches visibly recolors them.
-            if ash.picking_color {
-                let px = layout.panel.x + layout.panel.w - 64.0;
-                let py = layout.panel.y + 14.0;
-                match self.player_gender {
-                    Gender::Boy => sprites::player::draw_player_boy(px, py, Dir::Down, 0, self.game_time),
-                    Gender::Girl => sprites::player::draw_player_girl(px, py, Dir::Down, 0, self.game_time),
-                }
-                sprites::player::draw_player_cosmetics(px, py, Dir::Down, 0, &ash.owned, &self.color_choice);
-            }
+        // Goyish Map shooter — a full-screen minigame.
+        if let Some(ref a) = self.active_shooter {
+            ui::shooter::draw(&a.session, a.ship_draw_x, self.track_toast_text(), screen, self.game_time);
         }
+
+        self.render_shop_overlay(screen);
+
+        // Shelly's leap panel — up whenever a pearl trip is going, so the call
+        // and the sizes on offer are always on screen rather than in a toast.
+        if let Some(ref s) = self.leap_session {
+            let layout = ui::leap::layout(s, screen);
+            ui::leap::draw(s, &layout, &leap_call(&s.puzzle), input.mouse_pos);
+        }
+
+        // Descent overlay
+        if let Some(ref ad) = self.active_descent {
+            let layout = ui::descent::layout(&ad.session, screen);
+            ui::descent::draw(&ad.session, &layout, ad.message.as_deref(), self.game_time);
+        }
+
+        self.render_swag_overlay(screen);
 
         // Quest overlay
         if let Some(ref aq) = self.active_quest {
             if let Some(view) = quest_view(aq) {
-                let layout = ui::quest::layout(&view, screen);
-                let title = aq.session.quest.title.clone();
-                ui::quest::draw(&view, &title, aq.message.as_deref(), &layout);
+                let layout = ui::quest::layout(&view, &aq.session.quest.title, aq.message.as_deref(), screen);
+                ui::quest::draw(&layout);
             }
         }
 
         if self.settings_open {
-            ui::settings_overlay::draw(screen, self.features, self.parent_panel_open);
+            ui::settings_overlay::draw(screen, self.settings_model());
         }
     }
 
     // ─── Save helpers ──────────────────────────────────
+
+    /// Write the current game to the active slot and restart the auto-save
+    /// clock. The dev zone never saves.
+    fn persist(&mut self) {
+        if self.map.id != "dev" {
+            let save_data = self.gather_save_data();
+            self.save_backend.save_to(self.active_slot, &save_data);
+            self.auto_save_timer = 0.0;
+        }
+    }
 
     fn gather_save_data(&self) -> SaveData {
         SaveData {
@@ -3714,11 +3708,17 @@ impl Game {
                 tile_x: c.entity.tile_x,
                 tile_y: c.entity.tile_y,
             }),
-            shop_owned: self.shop_owned.iter().cloned().collect(),
-            color_choice: self.color_choice.clone(),
+            shop_owned: Vec::new(), // legacy mirror; the wardrobe is the truth now
+            wardrobe: self.wardrobe.clone(),
+            // Rollback mirror: a build without per-wearer colours reads this.
+            color_choice: self.outfit_color(wardrobe::PLAYER).to_string(),
             satisfied_gates: self.satisfied_gates.iter().cloned().collect(),
             paid_tolls: self.paid_tolls.iter().cloned().collect(),
+            seen_intros: self.seen_intros.iter().cloned().collect(),
+            dive_return: self.dive_return.clone(),
             fuel: self.fuel,
+            upgrades: self.upgrades.iter().cloned().collect(),
+            game_pace: self.game_pace,
         }
     }
 
@@ -3730,11 +3730,14 @@ impl Game {
         self.pearls = save_data.pearls;
         self.play_time = save_data.play_time;
         self.gifts_given = save_data.gifts_given.clone();
-        self.shop_owned = save_data.shop_owned.iter().cloned().collect();
-        self.color_choice = save_data.color_choice.clone();
+        self.wardrobe = save_data.wardrobe.clone();
         self.satisfied_gates = save_data.satisfied_gates.iter().cloned().collect();
         self.paid_tolls = save_data.paid_tolls.iter().cloned().collect();
+        self.seen_intros = save_data.seen_intros.iter().cloned().collect();
+        self.dive_return = save_data.dive_return.clone();
         self.fuel = save_data.fuel;
+        self.upgrades = save_data.upgrades.iter().cloned().collect();
+        self.game_pace = save_data.game_pace;
 
         self.map = Map::by_id(&save_data.map_id);
         self.npcs_offstage.clear();
@@ -3745,7 +3748,7 @@ impl Game {
         // silently drop the companion rather than panic on load.
         self.companion = save_data.companion.as_ref().and_then(|cs| {
             let home_map = Map::by_id(&cs.home_map);
-            let mut template = npc::npcs_for_map(home_map.id)
+            let mut template = self.fresh_roster(home_map.id)
                 .into_iter()
                 .find(|n| n.id_str() == cs.kind)?;
             template.entity.tile_x = cs.tile_x;
@@ -3853,47 +3856,6 @@ fn quest_answer_choices(answer: i32, rng: &mut SmallRng) -> Vec<i32> {
     out
 }
 
-/// Build the shop's current view (browsing, solving a purchase subtraction,
-/// or picking an outfit color) from the active session. Borrows the session
-/// so the layout/draw can read it.
-fn shop_view<'a>(ash: &'a ActiveShop, color_choice: &str) -> ui::shop::ShopView<'a> {
-    if ash.picking_color {
-        let current = sprites::player::OUTFIT_COLORS
-            .iter()
-            .position(|(id, _)| *id == color_choice)
-            .unwrap_or(0);
-        return ui::shop::ShopView::PickingColor { colors: sprites::player::OUTFIT_COLORS, current };
-    }
-    match ash.selected {
-        Some(i) => ui::shop::ShopView::Buying {
-            item: &ash.catalog[i],
-            balance: ash.balance_before,
-            cost: ash.cost,
-            choices: &ash.choices,
-        },
-        None => ui::shop::ShopView::Browsing,
-    }
-}
-
-/// Answer tiles for "balance − cost = ?": the correct remainder plus plausible
-/// near-miss distractors (forgot to subtract, off-by-one), shuffled, all > 0
-/// where possible. Always includes the right answer.
-fn subtraction_choices(balance: u32, cost: u32, rng: &mut SmallRng) -> Vec<u32> {
-    let answer = balance.saturating_sub(cost);
-    let mut out = vec![answer];
-    // Common slip-ups make the best distractors.
-    for cand in [balance, answer + 1, answer.saturating_sub(1), answer + 2] {
-        if out.len() >= 3 {
-            break;
-        }
-        if !out.contains(&cand) {
-            out.push(cand);
-        }
-    }
-    out.shuffle(rng);
-    out
-}
-
 /// Screen-space rect of the on-screen settings gear (bottom-right, clear of the
 /// top HUD/area-name), so parents can open settings — and the feature flags
 /// inside — without a keyboard.
@@ -3951,121 +3913,11 @@ fn start_challenge(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32)
     ActiveChallenge {
         state: cs,
         challenge,
-        choice_bounds: vec![],
-        scaffold: ScaffoldBounds { show_me: None, tell_me: None },
         complete_timer: 0.0,
         start_time: game_time,
     }
 }
 
-fn start_kenken(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, source: String) -> ActiveKenKen {
-    let grid_size = profile.kenken_level.clamp(2, 4);
-    let ops = cage_ops_for_band(profile.math_band);
-    let puzzle = generate_kenken(grid_size, &ops, rng);
-    let session = KenKenSession::new(puzzle);
-    let intro_step = if profile.kenken_intro_seen { None } else { Some(0) };
-    ActiveKenKen {
-        session,
-        selected: None,
-        complete_timer: 0.0,
-        start_time: game_time,
-        source_npc: source,
-        intro_step,
-    }
-}
-
-fn start_pattern(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, source: String) -> ActivePattern {
-    let level = profile.pattern_level.max(1);
-    let puzzle = generate_for_level(level, rng);
-    ActivePattern {
-        session: PatternSession::new(puzzle),
-        complete_timer: 0.0,
-        start_time: game_time,
-        source_npc: source,
-    }
-}
-
-fn start_balance(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, source: String) -> ActiveBalance {
-    // Balance difficulty rides the arithmetic band — it's the same math in a
-    // different visual, so no separate level dial is needed.
-    let puzzle = generate_balance_for_band(profile.math_band, rng);
-    ActiveBalance {
-        session: BalanceSession::new(puzzle),
-        complete_timer: 0.0,
-        start_time: game_time,
-        source_npc: source,
-    }
-}
-
-fn start_sudoku(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32, source: String) -> ActiveSudoku {
-    // Sudoku is pure logic; reuse the kenken level dial as a "logic grid" size
-    // signal: a kid comfortable with bigger kenken grids gets the 6x6 board.
-    let level = if profile.kenken_level >= 4 { 3 } else { 1 };
-    let puzzle = generate_sudoku_for_level(level, rng);
-    ActiveSudoku {
-        session: SudokuSession::new(puzzle),
-        selected: None,
-        complete_timer: 0.0,
-        start_time: game_time,
-        source_npc: source,
-    }
-}
-
-fn apply_sudoku_intent(asd: &mut ActiveSudoku, intent: ui::sudoku::SudokuInput) {
-    use robot_buddy_domain::logic::sudoku::SudokuAction;
-    match intent {
-        ui::sudoku::SudokuInput::Action(action) => {
-            asd.session = sudoku::sudoku_reducer(asd.session.clone(), action);
-            // Drop selection after a clean placement; keep it on a conflict so
-            // the kid can retry the same cell and the violation stays anchored.
-            if let SudokuAction::CellPlaced { .. } = action {
-                if asd.session.last_violation.is_none() {
-                    asd.selected = None;
-                }
-            }
-        }
-        ui::sudoku::SudokuInput::SelectCell(r, c) => {
-            asd.selected = Some((r, c));
-            asd.session.last_violation = None;
-        }
-        ui::sudoku::SudokuInput::Deselect => {
-            asd.selected = None;
-            asd.session.last_violation = None;
-        }
-    }
-}
-
-
-fn apply_kenken_intent(ak: &mut ActiveKenKen, intent: ui::kenken::KenKenInput) {
-    match intent {
-        ui::kenken::KenKenInput::Action(action) => {
-            ak.session = kenken::kenken_reducer(ak.session.clone(), action.clone());
-            // After a valid placement, drop selection so the next picker click
-            // doesn't accidentally overwrite the cell. After a rejected
-            // placement (row/col conflict — see reducer), keep selection so
-            // the kid can immediately try a different number on the same cell
-            // and the violation highlight stays anchored.
-            if let KenKenAction::CellPlaced { .. } = action {
-                if ak.session.last_violation.is_none() {
-                    ak.selected = None;
-                }
-            }
-        }
-        ui::kenken::KenKenInput::SelectCell(r, c) => {
-            ak.selected = Some((r, c));
-            // Clear stale violation feedback when changing selection — the
-            // last_violation hint encodes a coord relative to the previously
-            // selected cell, and would mis-render against a new selection.
-            // Inline because last_violation doubles as a UI hint and selection
-            // state lives outside the reducer.
-            ak.session.last_violation = None;
-        }
-        ui::kenken::KenKenInput::Deselect => {
-            ak.selected = None;
-            ak.session.last_violation = None;
-        }
-    }
-}
 
 fn start_intake_challenge(challenge: Challenge, _band: u8, game_time: f32) -> ActiveChallenge {
     let cs = ChallengeState {
@@ -4094,8 +3946,6 @@ fn start_intake_challenge(challenge: Challenge, _band: u8, game_time: f32) -> Ac
     ActiveChallenge {
         state: cs,
         challenge,
-        choice_bounds: vec![],
-        scaffold: ScaffoldBounds { show_me: None, tell_me: None },
         complete_timer: 0.0,
         start_time: game_time,
     }
@@ -4168,138 +4018,29 @@ fn read_player_intent(input: &FrameInput, player: &mut Entity) -> MoveIntent {
     }
 }
 
-fn npc_dialogue_lines(npc: &npc::Npc, rng: &mut SmallRng) -> Vec<DialogueLine> {
-    use npc::NpcKind::*;
-    let lines: &[&str] = match npc.kind {
-        Mommy => &[
-            "Hi sweetie! I'm so proud of you for exploring!",
-            "You and Sparky make the best team!",
-            "I love you! Keep being amazing!",
-        ],
-        Sage | SageLab => &[
-            "Ahhhh, young adventurer! The stars told me you'd come!",
-            "Welcome! I am Professor Gizmo, master of numbers!",
-            "The ancient scrolls speak of a hero... and I think it's YOU!",
-        ],
-        Kid1 => &[
-            "Wanna see me do a cartwheel? Watch! ...okay I can't actually do one yet.",
-            "Sparky is SO COOL! I wish I had a robot friend!",
-            "Did you know frogs can jump SUPER far? Like, really far!",
-        ],
-        Kid2 => &[
-            "Hi... um... do you like bugs? I found a really cool one.",
-            "Sparky beeped at me and I think that means he likes me!",
-            "Do you think clouds are soft? I think they're soft.",
-        ],
-        Shopkeeper => &[
-            "Welcome to my shop! Everything costs Dum Dums!",
-            "I've got the finest wares in all of Robot Village!",
-        ],
-        DreamSage => &[
-            "You are dreaming... or are you? The numbers whisper here...",
-            "In dreams, 2 + 2 can be anything... but it's still 4.",
-        ],
-        GlitchDog => &[
-            "BORK BORK! sys.treat.exe... GOOD BOY overflow!",
-            "Woof! *static* I am... a good boy? BORK.dll loaded!",
-            "fetch(ball) returned: UNDEFINED... but I still love you!",
-        ],
-        GroveSpirit => &[
-            "How... did you find this place? The trees have hidden it for ages...",
-            "It's dangerous to go alone... take this!",
-            "The leaves whisper your name... they say you are very clever.",
-        ],
-        Pip => &[
-            "Squeak! You found my little clearing!",
-            "I like to wander in circles. It's very fun!",
-            "Got any snacks? I'm always a bit hungry, hehe!",
-        ],
-        Signpost => &[
-            "Howdy! I've pointed the way for YEARS. Bit lonely, though.",
-            "Psst... give a fella a Dum Dum and I'll come adventuring with you!",
-            "I know ALL the directions. Left, right, up... and the other one!",
-        ],
-        // ReefShark normally reaches the player through the gate-challenge path,
-        // not here — but if you chat after he's stepped aside, he's a sweetie.
-        ReefShark => &[
-            "Thanks for the puzzle, pal! Naps are better after a good brain stretch.",
-            "Toothy grin, gentle heart. That's me!",
-            "Swim on through, the cove's all yours!",
-        ],
-        SeaTurtle => &[
-            "Greetings, little diver. I've ridden these currents a hundred years.",
-            "Slow and steady finds the most pearls, you know.",
-            "The coral grows a tiny bit every day. Just like you!",
-        ],
-        Dolphin => &[
-            "Eee-eee! Wanna race? I'll give you a head start! ...okay maybe two!",
-            "Did you see my flip? I've been practicing!",
-            "Bubbles are the BEST. Watch — bloop bloop bloop!",
-        ],
-        Crab => &[
-            "Snip snap! Mind the claws, I'm just saying hi!",
-            "Sideways is the only way to walk, obviously.",
-            "I keep the sand tidy around here. Very important job.",
-        ],
-        Jelly => &[
-            "...blub... (the jellyfish wobbles a friendly hello)",
-            "Drifting is a perfectly good plan, thank you very much.",
-            "Don't worry, I'm the no-sting kind!",
-        ],
-        Octopus => &[
-            "Want to see the trench? Hop DOWN my depth-stones — all the way to the deepest, glowing one!",
-            "Count the depths as you go down: 0, 1, 2... the bottom stone is the trench door!",
-            "Eight arms, and I STILL can't count past the deep stone. You try it!",
-        ],
-        MoonAlien => &[
-            "Zorp! You bounced all the way to the Moon! Boing boing!",
-            "Low gravity is the BEST. Watch me jump super high! Wheee!",
-            "I collect moon rocks. Wanna see? I have... a LOT.",
-        ],
-        // FuelBot reaches the player through the refuel-challenge path, not here.
-        FuelBot => &[
-            "BEEP. Tank online. Solve my puzzle and I'll top off your rocket!",
-            "Fuel is friendship. ...no wait, that's not right. BEEP.",
-        ],
-        // MarsGuardian normally reaches the player via the gate path; this is
-        // for after he's waved them through.
-        MarsGuardian => &[
-            "Course plotted! Safe travels, little astronaut. Rok approves.",
-            "The cove's all yours now. Mind the red dust!",
-            "Numbers are the best maps. You read them like a pro!",
-        ],
-        StarKeeper => &[
-            "Welcome to the star chart, navigator! Spot the pattern in the stars?",
-            "Every constellation hides a sequence. Can you finish it?",
-            "Cassi has mapped a thousand skies. Today we map one together!",
-        ],
-        StationAlien => &[
-            "Bleep bloop! A visitor! It's been AGES since anyone docked here!",
-            "I keep the station tidy. Floating crumbs are a real problem.",
-            "Did you know space has no up or down? My feet sure don't.",
-        ],
-        // Dev-control NPCs go through apply_dev_control, never this path.
-        CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
-        | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance
-        | CtrlTriggerSudoku | CtrlTriggerChallenge
-        | CtrlToggleEncounters | CtrlTriggerEncounter
-        | CtrlToggleQuest | CtrlStartQuest => &["Hello there!"],
-    };
-    let idx = rng.gen_range(0..lines.len());
-    vec![DialogueLine { speaker: npc.name().into(), text: lines[idx].into() }]
+/// The world-space rect the camera actually shows. `render_world`'s Camera2D
+/// maps one world pixel to one screen pixel, centered on the logical
+/// GAME_W×GAME_H frame — so a window larger than 960×720 sees MORE world than
+/// the frame. Every "is it on screen" decision (tile drawing, atmosphere
+/// overlays, sprite culling, leaver eviction) must go through this one rect;
+/// anything measured against GAME_W×GAME_H instead ends up drawn over — or
+/// hidden inside — the undrawn void at the window's fringe.
+pub fn visible_world_rect(cam: (f32, f32), screen: (f32, f32)) -> Rect {
+    let (sw, sh) = screen;
+    Rect::new(
+        cam.0 + (GAME_W - sw) / 2.0,
+        cam.1 + (GAME_H - sh) / 2.0,
+        sw,
+        sh,
+    )
 }
 
-/// True iff any pixel of the NPC's tile rect overlaps the camera viewport.
+/// True iff any pixel of the NPC's tile rect overlaps the visible world rect.
 /// Used to gate wander cooldown ticks — off-screen wanderers freeze in place
 /// so unseen rooms don't burn RNG and don't have characters drifting around
 /// out of sight.
-fn npc_in_camera(cam: (f32, f32), n: &npc::Npc) -> bool {
-    let x = n.entity.x;
-    let y = n.entity.y;
-    x + TILE_SIZE > cam.0
-        && x < cam.0 + GAME_W
-        && y + TILE_SIZE > cam.1
-        && y < cam.1 + GAME_H
+fn npc_in_camera(view: Rect, n: &npc::Npc) -> bool {
+    view.overlaps(&Rect::new(n.entity.x, n.entity.y, TILE_SIZE, TILE_SIZE))
 }
 
 fn find_sparky_spot(player_x: usize, player_y: usize, map: &Map, npcs: &[npc::Npc]) -> (usize, usize) {
@@ -4428,99 +4169,24 @@ fn secret_entry_dialogue(map_id: &str, speaker: &str) -> Vec<DialogueLine> {
         "reef" => vec![
             line("BLUB BLUB! We're UNDERWATER, boss! And I didn't even rust! Best upgrade EVER!"),
             line("Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!"),
-            line("Ooh, glowy stepping-stones with numbers! Hop along them to the shiny PEARL!"),
+            line("See Shelly the clam by the number-stones? Her bubble says which stone hides her PEARL!"),
+            line("And little houses to the east! An underwater VILLAGE! Can we knock? Please please please?"),
         ],
         "trench" => vec![
-            line("WHOA, the deep trench! It's darker down here, boss... and SO many pearls!"),
-            line("More glowy number-stones! Hop to the pearl — and step on the bubbly tile to surface again."),
+            line("WHOA, the deep trench! It's darker down here, boss... and look at all the glowing vents!"),
+            line("There's another Shelly with number-stones — find her pearl! The bright bubble column takes us back up."),
+        ],
+        tilemap::DOGFISH_HOUSE => vec![
+            // Only Inkwell offers a dive, so she's the one saying this — keep
+            // it voice-neutral all the same (no robot parts, no "boss").
+            line("Blub blub... wait. Is this a DOGHOUSE? Underwater? And it's all glitchy and flickery!"),
+            line("It's the Dogfish House! Hee hee! The bubble column takes us back up, right where we jumped in."),
         ],
         "space_hub" => vec![
             line("3... 2... 1... BLAST OFF! WHEEEE! Boss, we're in SPACE! Actual outer SPACE!"),
             line("Fly the rocket to a glowing pad to visit a planet! Tank the fuel droid is over there if we run low."),
         ],
         _ => vec![],
-    }
-}
-
-/// Draw the ambient number-line stepping-stones in world space (under the
-/// sprites). Stones up to the kid's current stone are lit; the `goal` stone
-/// carries a shimmering pearl and bursts when stood on. `here` is the kid's
-/// mark, if on the path.
-fn draw_number_track(
-    track: &number_track::NumberTrack,
-    here: Option<usize>,
-    goal: usize,
-    time: f32,
-) {
-    let outline = Color::from_rgba(94, 122, 60, 200);
-    for (i, &(col, row)) in track.tiles.iter().enumerate() {
-        let cx = (col as f32 + 0.5) * TILE_SIZE;
-        let cy = (row as f32 + 0.5) * TILE_SIZE;
-        let lit = here.map_or(false, |h| i <= h);
-        let base = if lit {
-            Color::from_rgba(255, 236, 179, 235)
-        } else {
-            Color::from_rgba(176, 190, 197, 170)
-        };
-        draw_circle(cx, cy, TILE_SIZE * 0.34, base);
-        draw_circle_lines(cx, cy, TILE_SIZE * 0.34, 2.0, outline);
-
-        let label = format!("{i}");
-        let tw = measure_text(&label, None, 22, 1.0).width;
-        let tc = if lit {
-            Color::from_rgba(60, 50, 30, 255)
-        } else {
-            Color::from_rgba(55, 71, 79, 230)
-        };
-        draw_text(&label, cx - tw / 2.0, cy + 7.0, 22.0, tc);
-
-        // The pearl sits above the goal stone, bobbing.
-        if i == goal {
-            let bob = (time * 2.5).sin() * 3.0;
-            let py = cy - TILE_SIZE * 0.32 + bob;
-            let pulse = (time * 4.0).sin() * 0.5 + 0.5;
-            draw_circle_lines(cx, py, 11.0 + pulse * 3.0, 2.0,
-                Color::new(0.70, 0.92, 0.96, 0.5 + 0.4 * pulse));
-            draw_circle(cx, py, 8.0, Color::from_rgba(225, 245, 254, 255));
-            draw_circle(cx - 2.5, py - 2.5, 2.5, Color::from_rgba(255, 255, 255, 235));
-            if here == Some(goal) {
-                draw_circle_lines(cx, cy, TILE_SIZE * 0.52, 2.0,
-                    Color::new(1.0, 0.84, 0.30, 0.9));
-            }
-        }
-    }
-}
-
-/// Draw the vertical dive gauge: numbered depth-stones; the deepest (`target`)
-/// glows as the trench door. `here` is the kid's depth, if on the shaft.
-fn draw_dive_shaft(dive: &number_track::DiveTrack, here: Option<usize>, time: f32) {
-    let outline = Color::from_rgba(60, 90, 110, 220);
-    for (i, &(col, row)) in dive.tiles.iter().enumerate() {
-        let cx = (col as f32 + 0.5) * TILE_SIZE;
-        let cy = (row as f32 + 0.5) * TILE_SIZE;
-        let reached = here.map_or(false, |h| i <= h);
-        // Deeper stones read darker, like sinking into the trench.
-        let shade = 200 - (i as u8).saturating_mul(18);
-        let base = if reached {
-            Color::from_rgba(120, 200, 220, 230)
-        } else {
-            Color::from_rgba(shade.max(70), shade.max(90), shade.max(120), 200)
-        };
-        draw_circle(cx, cy, TILE_SIZE * 0.34, base);
-        draw_circle_lines(cx, cy, TILE_SIZE * 0.34, 2.0, outline);
-
-        let label = format!("{i}");
-        let tw = measure_text(&label, None, 22, 1.0).width;
-        draw_text(&label, cx - tw / 2.0, cy + 7.0, 22.0, Color::from_rgba(230, 245, 250, 235));
-
-        // The trench door: the deepest stone, glowing with a downward chevron.
-        if i == dive.target {
-            let pulse = (time * 3.0).sin() * 0.5 + 0.5;
-            let teal = Color::new(0.30, 0.85, 0.90, 0.55 + 0.4 * pulse);
-            draw_circle_lines(cx, cy, TILE_SIZE * 0.42 + pulse * 3.0, 3.0, teal);
-            draw_line(cx - 7.0, cy - 11.0, cx, cy - 4.0, 3.0, teal);
-            draw_line(cx + 7.0, cy - 11.0, cx, cy - 4.0, 3.0, teal);
-        }
     }
 }
 
@@ -4550,6 +4216,47 @@ mod tests {
         assert!(g.player_path.is_empty(), "walk path must not survive into another state");
         assert_eq!(g.pending_interact, None, "pending auto-interact must be cancelled");
         assert_eq!(g.click_target, None, "walk marker must be cleared");
+    }
+
+    // ── Recruiting a same-kind NPC must not erase its twin on another map ──
+    #[test]
+    fn recruiting_the_reef_shelly_keeps_the_trench_shelly() {
+        let mut g = game();
+        let reef_shelly = npc::npcs_for_map("reef").into_iter()
+            .find(|n| n.kind == NpcKind::Clam)
+            .expect("reef roster has a Clam");
+        assert_eq!(reef_shelly.home_map, "reef");
+        g.companion = Some(reef_shelly);
+
+        // The trench's own Shelly (a different Clam, home_map "trench") stays.
+        let trench = g.load_map_roster("trench");
+        assert!(
+            trench.iter().any(|n| n.kind == NpcKind::Clam && n.home_map == "trench"),
+            "the trench's Shelly must survive recruiting the reef's Shelly",
+        );
+
+        // But the companion's own home roster (reef) still drops the duplicate.
+        let reef = g.load_map_roster("reef");
+        assert!(
+            !reef.iter().any(|n| n.kind == NpcKind::Clam),
+            "the reef's Shelly is the companion, so she isn't also in the reef roster",
+        );
+    }
+
+    // ── The visible-rect seam: what the camera shows is what gets drawn ──
+    #[test]
+    fn visible_world_rect_matches_the_window_not_the_logical_frame() {
+        // At the logical size the rect IS the camera frame.
+        let r = visible_world_rect((96.0, 48.0), (GAME_W, GAME_H));
+        assert_eq!((r.x, r.y, r.w, r.h), (96.0, 48.0, GAME_W, GAME_H));
+
+        // A larger window sees MORE world, centered on the same frame — the
+        // extra margin splits evenly on both sides. draw_map and the sprite
+        // culling both consume this rect, so nothing can be visible over
+        // undrawn tiles at the window fringe.
+        let r = visible_world_rect((96.0, 48.0), (GAME_W + 200.0, GAME_H + 100.0));
+        assert_eq!((r.x, r.y), (96.0 - 100.0, 48.0 - 50.0));
+        assert_eq!((r.w, r.h), (GAME_W + 200.0, GAME_H + 100.0));
     }
 
     // ── Fix #2: tap→tile mapping holds when the window isn't 960×720 ──
@@ -4641,137 +4348,125 @@ mod tests {
     #[test]
     fn shop_cosmetics_persist_through_save_load() {
         let mut g = game();
-        g.shop_owned.insert("hat".to_string());
-        g.shop_owned.insert("bow_tie".to_string());
+        g.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "hat"));
+        g.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "bow_tie"));
         let data = g.gather_save_data();
 
         let mut g2 = game();
-        assert!(g2.shop_owned.is_empty());
+        assert!(g2.player_swag().is_empty());
         g2.load_from_save(&data);
-        assert!(g2.shop_owned.contains("hat"), "hat should persist");
-        assert!(g2.shop_owned.contains("bow_tie"), "bow tie should persist");
+        assert!(g2.player_swag().contains("hat"), "hat should persist");
+        assert!(g2.player_swag().contains("bow_tie"), "bow tie should persist");
     }
 
-    // ── Color Change comes with a color picker ──
+    // ── Every pearl find is counted and worded the same way ──
+    #[test]
+    fn pearl_payouts_agree_with_their_number() {
+        let mut g = game();
+        let none = std::collections::BTreeSet::new();
+        // A trench find that wasn't clean: base 2, no bonus. Used to read "+2 pearl".
+        assert_eq!(g.award_pearls(domain_shop::pearl_payout(2, 1, false, &none)), "+2 pearls");
+        assert_eq!(g.award_pearls(domain_shop::pearl_payout(1, 1, false, &none)), "+1 pearl");
+        g.upgrades.insert(domain_shop::DIVING_NET.into());
+        let net = g.upgrades.clone();
+        assert_eq!(g.award_pearls(domain_shop::pearl_payout(0, 1, true, &net)),
+            "+2 pearls  (your net caught one!)");
+        assert_eq!(g.pearls, 5);
+        let awarded: Vec<u32> = g.events.iter().filter_map(|e| match e {
+            GameEvent::PearlsAwarded { amount } => Some(*amount),
+            _ => None,
+        }).collect();
+        assert_eq!(awarded, vec![2, 1, 2], "every credit is logged");
+    }
 
-    const SCREEN: (f32, f32) = (960.0, 720.0);
-
-    /// Open Bolt's shop directly (skipping the walk-and-talk).
-    fn open_shop(g: &mut Game) {
-        g.active_shop = Some(ActiveShop {
-            catalog: shop::shop_catalog(),
-            owned: g.shop_owned.clone(),
-            selected: None,
-            choices: Vec::new(),
-            answer: 0,
-            cost: 0,
-            balance_before: 0,
-            message: None,
-            source_npc: "shopkeeper".into(),
-            picking_color: false,
+    // ── A gate guardian you've tamed and recruited stays awake on resume ──
+    #[test]
+    fn a_recruited_gate_shark_wakes_up_awake_after_load() {
+        let mut g = game();
+        g.satisfied_gates.insert("reef_gate_1".into());
+        let mut data = g.gather_save_data();
+        data.companion = Some(CompanionSave {
+            kind: npc::NpcKind::ReefShark.as_str().into(),
+            home_map: "reef".into(),
+            tile_x: 3,
+            tile_y: 3,
         });
-        g.set_state(GameState::Shop);
+
+        let mut g2 = game();
+        g2.load_from_save(&data);
+        let chompy = g2.companion.as_ref().expect("Chompy should still be the buddy");
+        assert!(!chompy.gate, "a solved gate shark must not come back asleep");
     }
 
-    /// Click whatever shop element sits at the center of `rect`.
-    fn click_shop(g: &mut Game, rect: ui::shop::UiRect) {
-        let click = crate::input::FrameInput::empty()
-            .with_mouse_click(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
-        g.step(&click, 1.0 / 60.0, SCREEN);
-    }
-
-    fn shop_layout(g: &Game) -> ui::shop::ShopLayout {
-        let ash = g.active_shop.as_ref().expect("shop should be open");
-        ui::shop::layout(&ash.catalog, &shop_view(ash, &g.color_choice), SCREEN)
-    }
-
+    // ── Swag given to a buddy stays theirs across a save → load ──
     #[test]
-    fn buying_color_change_opens_the_picker_and_picking_sticks() {
+    fn swag_given_to_a_buddy_persists_through_save_load() {
         let mut g = game();
-        g.dum_dums = 20;
-        open_shop(&mut g);
-
-        // Tap the Color Change row, then answer the purchase subtraction.
-        let row = shop_layout(&g).items.iter()
-            .find(|r| g.active_shop.as_ref().unwrap().catalog[r.index].id == "color_change")
-            .expect("color_change in catalog").rect;
-        click_shop(&mut g, row);
-        let answer = g.active_shop.as_ref().unwrap().answer;
-        let tile = shop_layout(&g).answers.iter()
-            .find(|t| t.value == answer).expect("correct answer tile").rect;
-        click_shop(&mut g, tile);
-
-        let ash = g.active_shop.as_ref().unwrap();
-        assert!(ash.owned.contains("color_change"));
-        assert!(ash.picking_color, "buying Color Change should open the picker");
-
-        // Pick the second swatch; the kid's outfit color should change.
-        let swatch = shop_layout(&g).swatches[1].rect;
-        click_shop(&mut g, swatch);
-        assert_eq!(g.color_choice, sprites::player::OUTFIT_COLORS[1].0);
-
-        // Done dismisses the picker but keeps the shop open.
-        let close = shop_layout(&g).close_btn;
-        click_shop(&mut g, close);
-        let ash = g.active_shop.as_ref().unwrap();
-        assert!(!ash.picking_color, "Done should close the picker first");
-        assert!(g.active_shop.is_some(), "the shop itself should stay open");
-    }
-
-    #[test]
-    fn changing_color_back_and_forth_sticks_each_time() {
-        let mut g = game();
-        g.shop_owned.insert("color_change".to_string());
-        open_shop(&mut g);
-
-        // Reopen the picker from the owned Color Change row.
-        let row = shop_layout(&g).items.iter()
-            .find(|r| g.active_shop.as_ref().unwrap().catalog[r.index].id == "color_change")
-            .unwrap().rect;
-        click_shop(&mut g, row);
-        assert!(g.active_shop.as_ref().unwrap().picking_color);
-
-        // Pick a sequence with repeats and back-tracking. Each pick must stick,
-        // the picker must stay open, and the highlighted swatch must follow.
-        for &i in &[1usize, 3, 6, 3, 1, 0, 6, 0] {
-            let swatch = shop_layout(&g).swatches[i].rect;
-            click_shop(&mut g, swatch);
-            assert_eq!(g.color_choice, sprites::player::OUTFIT_COLORS[i].0,
-                "picking swatch {i} should set color_choice to {}", sprites::player::OUTFIT_COLORS[i].0);
-            assert!(g.active_shop.as_ref().unwrap().picking_color,
-                "picker should stay open so the kid can keep changing colors");
-            match shop_view(g.active_shop.as_ref().unwrap(), &g.color_choice) {
-                ui::shop::ShopView::PickingColor { current, .. } =>
-                    assert_eq!(current, i, "the highlighted swatch should track the latest pick"),
-                _ => panic!("expected the PickingColor view while picking"),
-            }
-        }
-    }
-
-    #[test]
-    fn owned_color_change_row_reopens_the_picker() {
-        let mut g = game();
-        g.shop_owned.insert("color_change".to_string());
-        open_shop(&mut g);
-        let row = shop_layout(&g).items.iter()
-            .find(|r| g.active_shop.as_ref().unwrap().catalog[r.index].id == "color_change")
-            .unwrap().rect;
-        click_shop(&mut g, row);
-        assert!(
-            g.active_shop.as_ref().unwrap().picking_color,
-            "tapping an owned Color Change should reopen the picker, not refuse the sale"
-        );
-    }
-
-    #[test]
-    fn color_choice_persists_through_save_load() {
-        let mut g = game();
-        g.color_choice = "teal".to_string();
+        g.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "hat"));
+        assert_eq!(g.dress(wardrobe::WardrobeAction::hand_over(wardrobe::PLAYER, "dolphin", "hat")), HandOver::Given);
         let data = g.gather_save_data();
 
         let mut g2 = game();
         g2.load_from_save(&data);
-        assert_eq!(g2.color_choice, "teal");
+        assert!(g2.swag_worn_by("dolphin").contains("hat"),
+            "Echo should still be wearing the hat next session");
+        assert!(g2.player_swag().is_empty(),
+            "the kid gave it away, so Bolt can sell them another one");
+    }
+
+    // ── A legacy save's cosmetics land on the kid ──
+    #[test]
+    fn legacy_shop_owned_migrates_onto_the_kid() {
+        let mut data = game().gather_save_data();
+        data.shop_owned = vec!["hat".into(), "jet_boots".into()];
+        data.wardrobe = Wardrobe::new();
+        data.migrate_legacy();
+
+        let mut g = game();
+        g.load_from_save(&data);
+        assert!(g.player_swag().contains("hat"));
+        assert!(g.player_swag().contains("jet_boots"));
+    }
+
+    // ── The arcade pace dial survives a save → load ──
+    #[test]
+    fn arcade_pace_persists_through_save_load() {
+        let mut g = game();
+        assert_eq!(g.game_pace, GamePace::Steady, "new games start at the shipped pace");
+        g.game_pace = GamePace::Relaxed;
+        let data = g.gather_save_data();
+
+        let mut g2 = game();
+        g2.load_from_save(&data);
+        assert_eq!(g2.game_pace, GamePace::Relaxed,
+            "a parent sets the pace once, not every session");
+    }
+
+    /// A save written before the dial existed opens at the pace the cabinet
+    /// shipped with, so nobody's game changes under them.
+    #[test]
+    fn a_legacy_save_opens_at_the_shipped_pace() {
+        let json = r#"{
+            "version": 1, "name": "Ari", "gender": "Boy",
+            "map_id": "overworld", "player_x": 3, "player_y": 4, "player_dir": "Down",
+            "sparky_x": 3, "sparky_y": 5,
+            "dum_dums": 7, "play_time": 120.0, "timestamp": 0
+        }"#;
+        let save: crate::save::SaveData =
+            serde_json::from_str(json).expect("legacy save should load");
+        assert_eq!(save.game_pace, GamePace::Steady);
+    }
+
+    #[test]
+    fn the_kids_colour_persists_through_save_load() {
+        let mut g = game();
+        g.dress(wardrobe::WardrobeAction::set_color(wardrobe::PLAYER, "teal"));
+        let data = g.gather_save_data();
+        assert_eq!(data.color_choice, "teal", "the rollback mirror follows the kid's colour");
+
+        let mut g2 = game();
+        g2.load_from_save(&data);
+        assert_eq!(g2.outfit_color(wardrobe::PLAYER), "teal");
     }
 
     #[test]

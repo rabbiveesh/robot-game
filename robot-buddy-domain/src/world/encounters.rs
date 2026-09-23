@@ -34,8 +34,10 @@ pub struct EncounterConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum EncounterKind {
-    /// Pure ambiance — a line from Sparky, no math, walk away anytime.
-    FlavorDialogue { speaker: String, text: String },
+    /// Pure ambiance — one line of chatter, no math, walk away anytime. The
+    /// domain doesn't know who's tagging along; the game attributes the line
+    /// to the current buddy (Sparky or whichever friend is following).
+    FlavorDialogue { text: String },
     /// A free Dum Dum sitting on the ground — reward for exploring.
     FoundDumDum,
     /// Run the normal challenge lifecycle (CRA, show-me/tell-me). The game
@@ -63,52 +65,61 @@ pub fn pick_encounter(config: &EncounterConfig, rng: &mut impl Rng) -> Encounter
 }
 
 /// Per-area flavor pool: pure ambiance, no math. Each entry is (kind-tag,
-/// speaker, text); "dum_dum" yields a free Dum Dum, else plain flavor. The
-/// math moments are no longer in here — they fire as real, scene-framed
+/// text); "dum_dum" yields a free Dum Dum, else plain flavor. Lines are
+/// written voice-neutral (no robot anatomy, no "boss") because ANY buddy —
+/// Sparky, a shark, a signpost — may be the one speaking them. The math
+/// moments are no longer in here — they fire as real, scene-framed
 /// challenges (see [`pick_encounter`] + [`frame_sighting`]).
-fn flavor_pool(area: &str) -> &'static [(&'static str, &'static str, &'static str)] {
+fn flavor_pool(area: &str) -> &'static [(&'static str, &'static str)] {
     match area {
         "home" => &[
-            ("flavor", "Sparky", "I found a dust bunny under the rug! It's so fluffy!"),
-            ("flavor", "Sparky", "Mommy's cookies smell SO GOOD! Can robots eat cookies?"),
-            ("dum_dum", "Sparky", "Hey boss, a shiny Dum Dum was hiding by the couch!"),
+            ("flavor", "I found a dust bunny under the rug! It's so fluffy!"),
+            ("flavor", "Mommy's cookies smell SO GOOD! Can we have one? Or five?"),
+            ("dum_dum", "Hey, a shiny Dum Dum was hiding by the couch!"),
         ],
         "pond" | "dream" => &[
-            ("flavor", "Sparky", "The fish are swimming in circles. I'm getting dizzy!"),
-            ("flavor", "Sparky", "A dragonfly buzzed my antenna! Rude. ...Cool, but rude."),
-            ("dum_dum", "Sparky", "A Dum Dum bobbing in the reeds! Don't worry, I got it!"),
+            ("flavor", "The fish are swimming in circles. I'm getting dizzy!"),
+            ("flavor", "A dragonfly buzzed right past my head! Rude. ...Cool, but rude."),
+            ("dum_dum", "A Dum Dum bobbing in the reeds! Don't worry, I got it!"),
         ],
         "reef" => &[
-            ("flavor", "Sparky", "BLUB BLUB! Boss, I'm WATERPROOF! Best day EVER!"),
-            ("flavor", "Sparky", "That shark just SMILED at me! I think we're friends now!"),
-            ("dum_dum", "Sparky", "Ooh! A Dum Dum, sealed in a shiny bubble! Pop pop pop!"),
-            ("flavor", "Sparky", "A jellyfish drifted by. It wiggled hello! ...I think."),
+            ("flavor", "BLUB BLUB! We're really truly UNDERWATER! Best day EVER!"),
+            ("flavor", "That shark just SMILED at me! I think we're friends now!"),
+            ("dum_dum", "Ooh! A Dum Dum, sealed in a shiny bubble! Pop pop pop!"),
+            ("flavor", "A jellyfish drifted by. It wiggled hello! ...I think."),
+            ("flavor", "Little houses under the sea! Do fish knock on doors? BLUB?"),
+        ],
+        "trench" => &[
+            ("flavor", "It's SO deep down here. Spooky... but the FUN kind of spooky!"),
+            ("flavor", "A glowing light just winked at me! The dark has FRIENDS!"),
+            ("dum_dum", "A Dum Dum riding a vent bubble! It went BLOOP right to me!"),
+            ("flavor", "The vents keep burping bubbles. Excuse you, trench!"),
         ],
         "space_hub" | "moon" | "mars" | "asteroid_base" => &[
-            ("flavor", "Sparky", "WHEEEE! Zero gravity! My bolts are FLOATING! BEEP BOOP!"),
-            ("flavor", "Sparky", "A little green alien just waved at us! Hi, friend! *waves back with all arms*"),
-            ("dum_dum", "Sparky", "A Dum Dum, floating in zero-g! I grabbed it before it drifted off!"),
-            ("flavor", "Sparky", "Space is SO quiet out here. ...except for me. BLEEP BLOOP!"),
+            ("flavor", "WHEEEE! Zero gravity! Everything's FLOATING!"),
+            ("flavor", "A little green alien just waved at us! Hi, friend!"),
+            ("dum_dum", "A Dum Dum, floating in zero-g! I grabbed it before it drifted off!"),
+            ("flavor", "Space is SO quiet out here. ...except for us!"),
         ],
         "lab" => &[
-            ("flavor", "Sparky", "BZZT! A blinky light! I love blinky lights!"),
-            ("dum_dum", "Sparky", "A Dum Dum rolled under the workbench. Score!"),
+            ("flavor", "Ooh, a blinky light! I love blinky lights!"),
+            ("dum_dum", "A Dum Dum rolled under the workbench. Score!"),
         ],
         // overworld / unknown areas
         _ => &[
-            ("flavor", "Sparky", "BZZZT! A ladybug landed on my antenna!"),
-            ("dum_dum", "Sparky", "I found a shiny Dum Dum on the ground!"),
-            ("flavor", "Sparky", "A breeze! My sensors say it smells like... adventure!"),
+            ("flavor", "A ladybug landed right on my nose!"),
+            ("dum_dum", "I found a shiny Dum Dum on the ground!"),
+            ("flavor", "A breeze! It smells like... adventure!"),
         ],
     }
 }
 
 fn pick_flavor(area: &str, rng: &mut impl Rng) -> EncounterKind {
     let pool = flavor_pool(area);
-    let (tag, speaker, text) = pool[rng.gen_range(0..pool.len())];
+    let (tag, text) = pool[rng.gen_range(0..pool.len())];
     match tag {
         "dum_dum" => EncounterKind::FoundDumDum,
-        _ => EncounterKind::FlavorDialogue { speaker: speaker.into(), text: text.into() },
+        _ => EncounterKind::FlavorDialogue { text: text.into() },
     }
 }
 
@@ -119,10 +130,10 @@ fn pick_flavor(area: &str, rng: &mut impl Rng) -> EncounterKind {
 // only — the choices and correct answer come from the real challenge.
 
 /// A scene-framed prompt for a challenge encounter, ready to drop onto the
-/// challenge's display/speech text.
+/// challenge's display/speech text. Who reads it aloud is the game's call
+/// (the current buddy), not the domain's.
 #[derive(Debug, Clone)]
 pub struct SightingFrame {
-    pub speaker: String,
     pub display_text: String,
     pub speech_text: String,
 }
@@ -137,7 +148,7 @@ struct Scene {
 /// Scenes that work anywhere — the guaranteed fallback so every operation can
 /// always be framed (NumberBond is the deliberate exception; see `frame_sighting`).
 const GENERIC_SCENES: &[Scene] = &[
-    Scene { op: Operation::Add,      prompt: "Sparky finds {a} gems, then {b} more! How many gems?" },
+    Scene { op: Operation::Add,      prompt: "You find {a} gems, then {b} more! How many gems?" },
     Scene { op: Operation::Sub,      prompt: "{a} stars are out, {b} fade away. How many stars left?" },
     Scene { op: Operation::Multiply, prompt: "{a} boxes, {b} gems in each. How many gems?" },
     Scene { op: Operation::Divide,   prompt: "{a} gems, {b} friends, shared fair. How many each?" },
@@ -200,7 +211,6 @@ pub fn frame_sighting(area: &str, op: Operation, a: i32, b: i32, rng: &mut impl 
         .replace("{a}", &a.to_string())
         .replace("{b}", &b.to_string());
     Some(SightingFrame {
-        speaker: "Sparky".into(),
         display_text: text.clone(),
         speech_text: text,
     })
@@ -256,7 +266,7 @@ mod tests {
     #[test]
     fn flavor_pools_cover_known_and_unknown_areas() {
         let mut r = SmallRng::seed_from_u64(9);
-        for area in ["home", "pond", "reef", "moon", "space_hub", "lab", "overworld", "some_new_map"] {
+        for area in ["home", "pond", "reef", "trench", "moon", "space_hub", "lab", "overworld", "some_new_map"] {
             // Pull several to make sure every entry is constructible and non-empty.
             for _ in 0..50 {
                 match pick_flavor(area, &mut r) {
@@ -279,7 +289,6 @@ mod tests {
                 // The actual operands appear; the answer never does (no give-away).
                 assert!(frame.display_text.contains('6') && frame.display_text.contains('2'));
                 assert_eq!(frame.display_text, frame.speech_text);
-                assert_eq!(frame.speaker, "Sparky");
             }
         }
     }
