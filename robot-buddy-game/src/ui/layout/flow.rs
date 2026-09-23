@@ -18,9 +18,9 @@
 //! reports `None`). Overlap is impossible by construction; what didn't fit is
 //! visible in `Frame::clipped` for the caller's paging policy and the sweep.
 
-use super::engine::{LayoutEngine, Rects};
+use super::engine::{LayoutEngine, LayoutTree, LeafKind, Rects};
 use super::metrics::TextMetrics;
-use super::node::{Align, Content, Dim, Direction, Justify, Node, Style};
+use super::node::{Align, Dim, Direction, Justify, Style};
 use super::rect::{UiRect, EPS};
 use super::text;
 
@@ -28,17 +28,18 @@ use super::text;
 pub struct FlowEngine;
 
 impl LayoutEngine for FlowEngine {
-    fn compute<Id>(&self, root: &Node<Id>, bounds: UiRect, metrics: &dyn TextMetrics) -> Rects {
-        let mut out = vec![None; root.subtree_len()];
-        let cx = Cx { m: metrics };
-        let mut idx = 0;
-        cx.place(root, bounds, &mut idx, &mut out);
+    fn compute(&self, tree: &LayoutTree, bounds: UiRect, metrics: &dyn TextMetrics) -> Rects {
+        let mut out = vec![None; tree.nodes.len()];
+        if !tree.nodes.is_empty() {
+            Cx { m: metrics, t: tree }.place(0, bounds, &mut out);
+        }
         out
     }
 }
 
 struct Cx<'a> {
     m: &'a dyn TextMetrics,
+    t: &'a LayoutTree<'a>,
 }
 
 fn clamp(v: f32, min: Option<f32>, max: Option<f32>) -> f32 {
@@ -49,13 +50,6 @@ fn clamp(v: f32, min: Option<f32>, max: Option<f32>) -> f32 {
     match min {
         Some(mn) => v.max(mn),
         None => v,
-    }
-}
-
-fn kids<Id>(n: &Node<Id>) -> &[Node<Id>] {
-    match &n.content {
-        Content::Container(k) => k,
-        _ => &[],
     }
 }
 
@@ -140,37 +134,39 @@ impl Cx<'_> {
     // ─── Intrinsic sizes ────────────────────────────────
 
     /// Max-content width.
-    fn max_w<Id>(&self, n: &Node<Id>) -> f32 {
-        let s = &n.style;
+    fn max_w(&self, n: usize) -> f32 {
+        let s = self.t.nodes[n].style;
         if let Dim::Px(w) = s.width {
             return clamp(w, s.min_width, s.max_width);
         }
-        let inner = match &n.content {
-            Content::Text(t) => text::natural_width(t, self.m),
-            Content::Region => 0.0,
-            Content::Container(k) => match s.direction {
-                Direction::Row => k.iter().map(|c| self.max_w(c)).sum::<f32>() + gaps(s, k.len()),
-                Direction::Column => k.iter().map(|c| self.max_w(c)).fold(0.0, f32::max),
+        let k = &self.t.nodes[n].children;
+        let inner = match self.t.nodes[n].kind {
+            LeafKind::Text(t) => text::natural_width(t, self.m),
+            LeafKind::Region => 0.0,
+            LeafKind::Container => match s.direction {
+                Direction::Row => k.iter().map(|&c| self.max_w(c)).sum::<f32>() + gaps(s, k.len()),
+                Direction::Column => k.iter().map(|&c| self.max_w(c)).fold(0.0, f32::max),
             },
         };
         clamp(inner + s.padding.horizontal(), s.min_width, s.max_width)
     }
 
     /// Min-content width.
-    fn min_w<Id>(&self, n: &Node<Id>) -> f32 {
-        let s = &n.style;
+    fn min_w(&self, n: usize) -> f32 {
+        let s = self.t.nodes[n].style;
         if let Some(mn) = s.min_width {
             return mn;
         }
         if let (Dim::Px(w), true) = (s.width, s.flex_shrink == 0.0) {
             return clamp(w, None, s.max_width);
         }
-        let inner = match &n.content {
-            Content::Text(t) => text::min_width(t, self.m),
-            Content::Region => 0.0,
-            Content::Container(k) => match s.direction {
-                Direction::Row => k.iter().map(|c| self.min_w(c)).sum::<f32>() + gaps(s, k.len()),
-                Direction::Column => k.iter().map(|c| self.min_w(c)).fold(0.0, f32::max),
+        let k = &self.t.nodes[n].children;
+        let inner = match self.t.nodes[n].kind {
+            LeafKind::Text(t) => text::min_width(t, self.m),
+            LeafKind::Region => 0.0,
+            LeafKind::Container => match s.direction {
+                Direction::Row => k.iter().map(|&c| self.min_w(c)).sum::<f32>() + gaps(s, k.len()),
+                Direction::Column => k.iter().map(|&c| self.min_w(c)).fold(0.0, f32::max),
             },
         };
         let content = inner + s.padding.horizontal();
@@ -182,8 +178,8 @@ impl Cx<'_> {
     }
 
     /// Width a column child gets (cross axis) inside `inner_w`.
-    fn cross_w<Id>(&self, parent: &Style, c: &Node<Id>, inner_w: f32) -> f32 {
-        let s = &c.style;
+    fn cross_w(&self, parent: &Style, c: usize, inner_w: f32) -> f32 {
+        let s = self.t.nodes[c].style;
         let w = match (s.width, s.align_self.unwrap_or(parent.align_items)) {
             (Dim::Px(w), _) => clamp(w, s.min_width, s.max_width),
             (Dim::Auto, Align::Stretch) => clamp(inner_w, s.min_width, s.max_width),
@@ -193,12 +189,12 @@ impl Cx<'_> {
     }
 
     /// Widths of a row's children inside `inner_w`.
-    fn row_widths<Id>(&self, n: &Node<Id>, inner_w: f32) -> Vec<f32> {
-        let k = kids(n);
+    fn row_widths(&self, n: usize, inner_w: f32) -> Vec<f32> {
+        let k = &self.t.nodes[n].children;
         let items: Vec<Item> = k
             .iter()
-            .map(|c| {
-                let s = &c.style;
+            .map(|&c| {
+                let s = self.t.nodes[c].style;
                 Item {
                     basis: self.max_w(c),
                     min: self.min_w(c),
@@ -208,27 +204,28 @@ impl Cx<'_> {
                 }
             })
             .collect();
-        distribute(&items, inner_w, gaps(&n.style, k.len()))
+        distribute(&items, inner_w, gaps(self.t.nodes[n].style, k.len()))
     }
 
     /// Height at a given width (max-content height).
-    fn height_for<Id>(&self, n: &Node<Id>, w: f32) -> f32 {
-        let s = &n.style;
+    fn height_for(&self, n: usize, w: f32) -> f32 {
+        let s = self.t.nodes[n].style;
         if let Dim::Px(h) = s.height {
             return clamp(h, s.min_height, s.max_height);
         }
         let inner_w = (w - s.padding.horizontal()).max(0.0);
-        let inner = match &n.content {
-            Content::Text(t) => text::natural_height(t, inner_w, self.m),
-            Content::Region => 0.0,
-            Content::Container(k) => match s.direction {
+        let k = &self.t.nodes[n].children;
+        let inner = match self.t.nodes[n].kind {
+            LeafKind::Text(t) => text::natural_height(t, inner_w, self.m),
+            LeafKind::Region => 0.0,
+            LeafKind::Container => match s.direction {
                 Direction::Column => {
-                    k.iter().map(|c| self.height_for(c, self.cross_w(s, c, inner_w))).sum::<f32>()
+                    k.iter().map(|&c| self.height_for(c, self.cross_w(s, c, inner_w))).sum::<f32>()
                         + gaps(s, k.len())
                 }
                 Direction::Row => {
                     let ws = self.row_widths(n, inner_w);
-                    k.iter().zip(ws).map(|(c, cw)| self.height_for(c, cw)).fold(0.0, f32::max)
+                    k.iter().zip(ws).map(|(&c, cw)| self.height_for(c, cw)).fold(0.0, f32::max)
                 }
             },
         };
@@ -236,8 +233,8 @@ impl Cx<'_> {
     }
 
     /// Least height at a given width.
-    fn min_h<Id>(&self, n: &Node<Id>, w: f32) -> f32 {
-        let s = &n.style;
+    fn min_h(&self, n: usize, w: f32) -> f32 {
+        let s = self.t.nodes[n].style;
         if let Some(mn) = s.min_height {
             return mn;
         }
@@ -245,16 +242,17 @@ impl Cx<'_> {
             return clamp(h, None, s.max_height);
         }
         let inner_w = (w - s.padding.horizontal()).max(0.0);
-        let inner = match &n.content {
-            Content::Text(t) => text::min_height(t, inner_w, self.m),
-            Content::Region => 0.0,
-            Content::Container(k) => match s.direction {
+        let k = &self.t.nodes[n].children;
+        let inner = match self.t.nodes[n].kind {
+            LeafKind::Text(t) => text::min_height(t, inner_w, self.m),
+            LeafKind::Region => 0.0,
+            LeafKind::Container => match s.direction {
                 Direction::Column => {
-                    k.iter().map(|c| self.min_h(c, self.cross_w(s, c, inner_w))).sum::<f32>() + gaps(s, k.len())
+                    k.iter().map(|&c| self.min_h(c, self.cross_w(s, c, inner_w))).sum::<f32>() + gaps(s, k.len())
                 }
                 Direction::Row => {
                     let ws = self.row_widths(n, inner_w);
-                    k.iter().zip(ws).map(|(c, cw)| self.min_h(c, cw)).fold(0.0, f32::max)
+                    k.iter().zip(ws).map(|(&c, cw)| self.min_h(c, cw)).fold(0.0, f32::max)
                 }
             },
         };
@@ -268,29 +266,31 @@ impl Cx<'_> {
 
     // ─── Placement ──────────────────────────────────────
 
-    fn place<Id>(&self, n: &Node<Id>, rect: UiRect, idx: &mut usize, out: &mut Rects) {
-        out[*idx] = Some(rect);
-        *idx += 1;
-        let k = kids(n);
+    fn place(&self, n: usize, rect: UiRect, out: &mut Rects) {
+        out[n] = Some(rect);
+        let k = &self.t.nodes[n].children;
         if k.is_empty() {
             return;
         }
-        let s = &n.style;
+        let s = self.t.nodes[n].style;
         let inner = rect.inset(s.padding.left, s.padding.top, s.padding.right, s.padding.bottom);
         let column = s.direction == Direction::Column;
 
         // Main-axis sizes, and each child's cross size.
         let (mains, crosses): (Vec<f32>, Vec<f32>) = if column {
-            let cws: Vec<f32> = k.iter().map(|c| self.cross_w(s, c, inner.w)).collect();
+            let cws: Vec<f32> = k.iter().map(|&c| self.cross_w(s, c, inner.w)).collect();
             let items: Vec<Item> = k
                 .iter()
                 .zip(&cws)
-                .map(|(c, &cw)| Item {
-                    basis: self.height_for(c, cw),
-                    min: self.min_h(c, cw),
-                    max: c.style.max_height.unwrap_or(f32::INFINITY),
-                    grow: c.style.flex_grow,
-                    shrink: c.style.flex_shrink,
+                .map(|(&c, &cw)| {
+                    let cs = self.t.nodes[c].style;
+                    Item {
+                        basis: self.height_for(c, cw),
+                        min: self.min_h(c, cw),
+                        max: cs.max_height.unwrap_or(f32::INFINITY),
+                        grow: cs.flex_grow,
+                        shrink: cs.flex_shrink,
+                    }
                 })
                 .collect();
             (distribute(&items, inner.h, gaps(s, k.len())), cws)
@@ -299,8 +299,8 @@ impl Cx<'_> {
             let hs = k
                 .iter()
                 .zip(&ws)
-                .map(|(c, &cw)| {
-                    let cs = &c.style;
+                .map(|(&c, &cw)| {
+                    let cs = self.t.nodes[c].style;
                     let h = match (cs.height, cs.align_self.unwrap_or(s.align_items)) {
                         (Dim::Px(h), _) => clamp(h, cs.min_height, cs.max_height),
                         (Dim::Auto, Align::Stretch) => clamp(inner.h, cs.min_height, cs.max_height),
@@ -323,11 +323,11 @@ impl Cx<'_> {
             Justify::SpaceBetween => (0.0, 0.0),
         };
 
-        for (i, c) in k.iter().enumerate() {
+        for (i, &c) in k.iter().enumerate() {
             let main = mains[i];
             let cross = crosses[i];
             let cross_avail = if column { inner.w } else { inner.h };
-            let cross_off = match c.style.align_self.unwrap_or(s.align_items) {
+            let cross_off = match self.t.nodes[c].style.align_self.unwrap_or(s.align_items) {
                 Align::Start | Align::Stretch => 0.0,
                 Align::Center => (cross_avail - cross) / 2.0,
                 Align::End => cross_avail - cross,
@@ -343,10 +343,9 @@ impl Cx<'_> {
             let limit = if column { inner.bottom() } else { inner.right() };
             if end > limit + EPS {
                 // Doesn't fit: clip the whole subtree (already `None`).
-                *idx += c.subtree_len();
                 continue;
             }
-            self.place(c, child, idx, out);
+            self.place(c, child, out);
         }
     }
 }
@@ -355,10 +354,10 @@ impl Cx<'_> {
 mod tests {
     use super::*;
     use crate::ui::layout::metrics::FontMetrics;
-    use crate::ui::layout::node::{col, region, row, spacer, text, Fit};
+    use crate::ui::layout::node::{col, region, row, spacer, text, Fit, Node};
 
     fn run(root: &Node<()>, w: f32, h: f32) -> Rects {
-        FlowEngine.compute(root, UiRect::new(0.0, 0.0, w, h), FontMetrics::bundled())
+        FlowEngine.compute(&LayoutTree::new(root), UiRect::new(0.0, 0.0, w, h), FontMetrics::bundled())
     }
 
     #[test]

@@ -50,7 +50,7 @@ pub mod text;
 
 use std::fmt::Debug;
 
-pub use engine::LayoutEngine;
+pub use engine::{LayoutEngine, LayoutTree};
 pub use frame::{Element, Frame, Kind, PlacedLine, PlacedText};
 pub use metrics::{FontMetrics, TextMetrics};
 pub use node::{
@@ -77,7 +77,7 @@ pub fn layout_with<Id: Copy + PartialEq + Debug, E: LayoutEngine>(
     root: &Node<Id>,
     bounds: UiRect,
 ) -> Frame<Id> {
-    let rects = engine.compute(root, bounds, metrics);
+    let rects = engine.compute(&LayoutTree::new(root), bounds, metrics);
     Frame::resolve(root, &rects, bounds, metrics)
 }
 
