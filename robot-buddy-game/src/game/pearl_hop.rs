@@ -218,6 +218,7 @@ impl Game {
         a.session = hop_reducer(a.session.clone(), HopAction::Toss);
         a.counted = 0;
         a.toss_ms = ((now - a.aim_started).max(0.0) * 1000.0) as f64;
+        a.caption = "Wheee!".to_string();
         audio::tts::speak("Shelly", "Wheee!");
     }
 
