@@ -79,6 +79,7 @@ robot-buddy-game/                # Macroquad game (depends on domain)
     main.rs                      # thin macroquad shim: capture FrameInput → step → render
     game.rs                      # Game struct + step (pure logic) + render (macroquad-only) + GameEvent
     input.rs                     # FrameInput — single input boundary
+    trace.rs                     # opt-in input trace (ROBOT_TRACE=1): raw events, per-frame input, drag decisions
     save.rs                      # SaveBackend trait + LocalStorageBackend (prod) + InMemoryBackend (tests)
     tilemap.rs, npc.rs, session.rs, settings.rs
     sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit)
@@ -131,6 +132,14 @@ cd robot-buddy-game/www && npx serve .
 
 # Screenshot every migrated UI panel natively (real draw code, real game state)
 SHOT_W=960 SHOT_H=720 SHOT_DIR=/tmp/shots cargo run -p robot-buddy-game --example screenshots
+
+# Debug how input feels on a real device (off by default; zero cost when off).
+# Native: raw miniquad events, per-frame FrameInput and each drag decision → stderr.
+# (Found with it: miniquad's X11 backend gets no touch motion or release events —
+#  native touchscreens degrade to tap-to-pick-up, tap-to-place; the browser is fine.)
+ROBOT_TRACE=1 ./target/release/robot-buddy-game 2> input.log
+# Web: baked in at build time, lines go to the browser console
+ROBOT_TRACE=1 ./build-wasm.sh
 
 # Simulate adaptive learning
 cargo run -p robot-buddy-domain --bin simulate -- --profile gifted
