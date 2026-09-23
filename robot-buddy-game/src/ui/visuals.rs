@@ -1,96 +1,203 @@
+//! The CRA teaching visuals (dots, number bonds, base-ten blocks, groups).
+//!
+//! Every visual is built as a display list by ONE function, [`plan`], in local
+//! coordinates. Its bounding box is the space it needs ([`extent`]), and
+//! [`draw`] paints exactly that list inside the layout region the challenge
+//! panel reserved. Measuring and drawing are the same computation, so the
+//! reserved space can't disagree with what's painted — and when the natural
+//! size is wider than the room, the whole visual is squeezed until it fits.
+//!
+//! Pure except [`draw`] (render-only, paints through `paint::Canvas`).
+
 use crate::prelude::*;
+use crate::ui::layout::{paint, FontMetrics, TextMetrics, UiRect};
 use robot_buddy_domain::learning::challenge_generator::Challenge;
 
-const BLUE_A: Color = Color::new(0.259, 0.647, 0.961, 1.0);       // #42A5F5
-const YELLOW_B: Color = Color::new(1.0, 0.835, 0.310, 1.0);       // #FFD54F
-const RED_TAKE: Color = Color::new(0.937, 0.263, 0.212, 1.0);     // #EF5350
+const BLUE_A: Color = Color::new(0.259, 0.647, 0.961, 1.0); // #42A5F5
+const YELLOW_B: Color = Color::new(1.0, 0.835, 0.310, 1.0); // #FFD54F
+const RED_TAKE: Color = Color::new(0.937, 0.263, 0.212, 1.0); // #EF5350
 const RED_FAINT: Color = Color::new(0.957, 0.263, 0.212, 0.4);
-const LABEL_GRAY: Color = Color::new(0.878, 0.878, 0.878, 1.0);   // #E0E0E0
-const HINT_GRAY: Color = Color::new(0.667, 0.667, 0.667, 1.0);    // #AAA
+const LABEL_GRAY: Color = Color::new(0.878, 0.878, 0.878, 1.0); // #E0E0E0
+const HINT_GRAY: Color = Color::new(0.667, 0.667, 0.667, 1.0); // #AAA
+const GROUP_LINE: Color = Color::new(0.329, 0.431, 0.478, 1.0); // #546E7A
 
-/// Space the visual needs, so a panel can reserve it (see [`extent`]).
+/// Grouped visuals (× and ÷ as groups of dots) never grow past this, even on
+/// a wide screen.
+const GROUPS_MAX_W: f32 = 500.0;
+/// Squeezed labels never go below this size.
+const MIN_LABEL: u16 = 9;
+
+/// One thing the visual paints, in local coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Prim {
+    Circle { x: f32, y: f32, r: f32, color: Color },
+    Ring { x: f32, y: f32, r: f32, thickness: f32, color: Color },
+    Rect { r: UiRect, color: Color },
+    /// Outline drawn inside `r` (macroquad's `draw_rectangle_lines`).
+    RectLines { r: UiRect, thickness: f32, color: Color },
+    Line { x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, color: Color },
+    Text { text: String, x: f32, baseline: f32, size: u16, color: Color },
+}
+
+/// A visual's display list and the box it covers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Visual {
+    pub prims: Vec<Prim>,
+    /// Bounding box of every prim (local coordinates).
+    pub bbox: UiRect,
+}
+
+/// Space a visual needs, so a panel can reserve it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VisualExtent {
     pub w: f32,
-    /// How far labels reach above the anchor `cy` passed to [`draw_visual`].
-    pub above: f32,
-    /// How far the art reaches below `cy`.
-    pub below: f32,
+    pub h: f32,
 }
 
-impl VisualExtent {
-    pub fn h(&self) -> f32 {
-        self.above + self.below
+/// Collects prims and their bounding box. `s` scales every length and font.
+struct Plot {
+    prims: Vec<Prim>,
+    s: f32,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+}
+
+impl Plot {
+    fn new(s: f32) -> Self {
+        Plot { prims: Vec::new(), s, x0: f32::INFINITY, y0: f32::INFINITY, x1: f32::NEG_INFINITY, y1: f32::NEG_INFINITY }
+    }
+    fn cover(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        self.x0 = self.x0.min(x0);
+        self.y0 = self.y0.min(y0);
+        self.x1 = self.x1.max(x1);
+        self.y1 = self.y1.max(y1);
+    }
+    /// A length at this plot's scale.
+    fn l(&self, v: f32) -> f32 {
+        v * self.s
+    }
+    /// A font size at this plot's scale.
+    fn fs(&self, size: u16) -> u16 {
+        ((size as f32 * self.s).floor() as u16).clamp(MIN_LABEL.min(size), size)
+    }
+    fn circle(&mut self, x: f32, y: f32, r: f32, color: Color) {
+        self.cover(x - r, y - r, x + r, y + r);
+        self.prims.push(Prim::Circle { x, y, r, color });
+    }
+    fn ring(&mut self, x: f32, y: f32, r: f32, thickness: f32, color: Color) {
+        let o = r + thickness / 2.0;
+        self.cover(x - o, y - o, x + o, y + o);
+        self.prims.push(Prim::Ring { x, y, r, thickness, color });
+    }
+    fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: Color) {
+        self.cover(x, y, x + w, y + h);
+        self.prims.push(Prim::Rect { r: UiRect::new(x, y, w, h), color });
+    }
+    fn rect_lines(&mut self, x: f32, y: f32, w: f32, h: f32, thickness: f32, color: Color) {
+        self.cover(x, y, x + w, y + h);
+        self.prims.push(Prim::RectLines { r: UiRect::new(x, y, w, h), thickness, color });
+    }
+    fn line(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, color: Color) {
+        let t = thickness / 2.0;
+        self.cover(x1.min(x2) - t, y1.min(y2) - t, x1.max(x2) + t, y1.max(y2) + t);
+        self.prims.push(Prim::Line { x1, y1, x2, y2, thickness, color });
+    }
+    /// Text with its left edge at `x`. Returns its width.
+    fn text(&mut self, text: &str, x: f32, baseline: f32, size: u16, color: Color) -> f32 {
+        let m = FontMetrics::bundled();
+        let w = m.width(text, size);
+        self.cover(x, baseline - m.ascent(size), x + w, baseline + m.descent(size));
+        self.prims.push(Prim::Text { text: text.to_string(), x, baseline, size, color });
+        w
+    }
+    /// Text centered on `cx`.
+    fn text_c(&mut self, text: &str, cx: f32, baseline: f32, size: u16, color: Color) {
+        let w = FontMetrics::bundled().width(text, size);
+        self.text(text, cx - w / 2.0, baseline, size, color);
+    }
+    fn finish(self) -> Visual {
+        let bbox = if self.prims.is_empty() {
+            UiRect::default()
+        } else {
+            UiRect::new(self.x0, self.y0, self.x1 - self.x0, self.y1 - self.y0)
+        };
+        Visual { prims: self.prims, bbox }
     }
 }
 
-/// Labels sit on a baseline 6-8px above `cy` at 14-18px: 22px covers them.
-const LABEL_ABOVE: f32 = 22.0;
-
-/// Pure: the box [`draw_visual`] paints into for `challenge`, when the widest
-/// (grouped) visuals are squeezed into `max_w`. Mirrors the geometry below —
-/// change one, change the other.
-pub fn extent(challenge: &Challenge, max_w: f32) -> VisualExtent {
-    use crate::ui::layout::{FontMetrics, TextMetrics};
-    let m = FontMetrics::bundled();
-    let a = challenge.numbers.a;
-    let b = challenge.numbers.b;
+fn grouped(challenge: &Challenge) -> bool {
     let op = challenge.numbers.op.as_str();
-    let fit = max_w.min(500.0);
-    let (w, below) = if challenge.numbers.format == "bond" {
-        let total = challenge.numbers.bond_total.unwrap_or(a).min(20);
-        let parts = bond_box_width(b.min(20)) + 32.0 + bond_box_width(challenge.correct_answer.min(20));
-        (bond_box_width(total).max(parts), BOND_BOX_H * 2.0 + 44.0 + 20.0 + 4.0)
-    } else if challenge.sampled_band >= 5 {
-        match op {
-            "+" | "-" | "\u{2212}" => {
-                (measure_num(a) + 40.0 + measure_num(b), content_height(a).max(content_height(b)) + 4.0)
-            }
-            "\u{00d7}" | "*" => {
-                let rows = a.min(b).min(12);
-                let cols = a.max(b).min(12);
-                let label = m.width(&format!("{} rows of {}", rows, cols), 14);
-                ((cols as f32 * 14.0).max(label), 5.0 + rows as f32 * 14.0)
-            }
-            "\u{00f7}" | "/" => (fit, 36.0),
-            _ => (0.0, 0.0),
-        }
-    } else {
-        let dots_rows = |n: i32| ((n.max(1) - 1) / 10 + 1) as f32 * 18.0 + 12.0 + 4.0;
-        match op {
-            "+" => ((((a + b).min(10)) as f32 * 14.0).max(130.0), dots_rows(a + b)),
-            "-" | "\u{2212}" => {
-                let label = m.width(&format!("{} - {} = count the blue ones!", a, b), 16);
-                ((a.min(10) as f32 * 14.0).max(label), dots_rows(a))
-            }
-            "\u{00d7}" | "*" | "\u{00f7}" | "/" => (fit, 36.0),
-            _ => (0.0, 0.0),
-        }
-    };
-    VisualExtent { w: w.min(max_w), above: LABEL_ABOVE, below }
+    challenge.numbers.format != "bond"
+        && (matches!(op, "\u{00f7}" | "/") || (challenge.sampled_band < 5 && matches!(op, "\u{00d7}" | "*")))
 }
 
-/// Draw the appropriate CRA visual for a challenge, labels hanging above `cy`
-/// and art below it. Uses dots for bands 1-4, base-10 blocks for bands 5+.
-/// Grouped visuals squeeze into `max_w`.
-pub fn draw_visual(challenge: &Challenge, cx: f32, cy: f32, max_w: f32, _time: f32) {
+/// Build `challenge`'s visual at scale `s` (1 = natural size).
+fn build(challenge: &Challenge, s: f32) -> Visual {
+    let mut p = Plot::new(s);
     let a = challenge.numbers.a;
     let b = challenge.numbers.b;
     let op = challenge.numbers.op.as_str();
-    let answer = challenge.correct_answer;
-    let band = challenge.sampled_band;
-
-    // Number bond / missing addend: "What + b = total?"
     if challenge.numbers.format == "bond" {
+        // Number bond / missing addend: "What + b = total?"
         let total = challenge.numbers.bond_total.unwrap_or(a);
-        draw_bond(total, b, answer, cx, cy);
-        return;
-    }
-
-    if band >= 5 {
-        draw_base10_blocks(a, b, op, answer, cx, cy, max_w);
+        bond(&mut p, total, b, challenge.correct_answer);
+    } else if challenge.sampled_band >= 5 {
+        base10_blocks(&mut p, a, b, op, challenge.correct_answer);
     } else {
-        draw_dots(a, b, op, cx, cy, max_w);
+        dots(&mut p, a, b, op);
+    }
+    p.finish()
+}
+
+/// Pure: `challenge`'s visual, squeezed (lengths and label sizes together)
+/// until it is no wider than `max_w`. Whatever this returns is exactly what
+/// [`draw`] paints.
+pub fn plan(challenge: &Challenge, max_w: f32) -> Visual {
+    let room = if grouped(challenge) { max_w.min(GROUPS_MAX_W) } else { max_w };
+    let mut s = 1.0;
+    let mut v = build(challenge, s);
+    // Labels shrink in whole font sizes, so width isn't exactly linear in `s`:
+    // iterate. Converges in one or two steps in practice.
+    for _ in 0..8 {
+        if v.bbox.w <= room || v.bbox.w <= 0.0 {
+            break;
+        }
+        s *= (room / v.bbox.w) * 0.995;
+        v = build(challenge, s);
+    }
+    v
+}
+
+/// Pure: the space [`draw`] needs for `challenge` inside `max_w`. It is the
+/// true box of what gets painted — if even the squeezed visual can't fit,
+/// `w > max_w` and the layout sweep says so.
+pub fn extent(challenge: &Challenge, max_w: f32) -> VisualExtent {
+    let v = plan(challenge, max_w);
+    VisualExtent { w: v.bbox.w, h: v.bbox.h }
+}
+
+/// Paint `challenge`'s visual centered in `rect` (the region the layout
+/// reserved from [`extent`]). Render-only.
+pub fn draw(challenge: &Challenge, rect: UiRect) {
+    let v = plan(challenge, rect.w);
+    let dx = rect.x + (rect.w - v.bbox.w) / 2.0 - v.bbox.x;
+    let dy = rect.y + (rect.h - v.bbox.h) / 2.0 - v.bbox.y;
+    let c = paint::canvas(rect);
+    for prim in &v.prims {
+        match prim {
+            Prim::Circle { x, y, r, color } => c.circle(x + dx, y + dy, *r, *color),
+            Prim::Ring { x, y, r, thickness, color } => c.circle_lines(x + dx, y + dy, *r, *thickness, *color),
+            Prim::Rect { r, color } => c.rect(UiRect::new(r.x + dx, r.y + dy, r.w, r.h), *color),
+            Prim::RectLines { r, thickness, color } => {
+                c.rect_lines(UiRect::new(r.x + dx, r.y + dy, r.w, r.h), *thickness, *color)
+            }
+            Prim::Line { x1, y1, x2, y2, thickness, color } => {
+                c.line(x1 + dx, y1 + dy, x2 + dx, y2 + dy, *thickness, *color)
+            }
+            Prim::Text { text, x, baseline, size, color } => c.text(text, x + dx, baseline + dy, *size, *color),
+        }
     }
 }
 
@@ -108,244 +215,172 @@ const BOND_DOT_GAP: f32 = 5.0;
 const BOND_BOX_PAD: f32 = 8.0;
 const BOND_LABEL_SIZE: u16 = 18;
 
-fn bond_box_width(count: i32) -> f32 {
+fn bond_box_width(p: &Plot, count: i32) -> f32 {
     let n = count.max(1) as f32;
-    n * (BOND_DOT_R * 2.0 + BOND_DOT_GAP) - BOND_DOT_GAP + BOND_BOX_PAD * 2.0
+    p.l(n * (BOND_DOT_R * 2.0 + BOND_DOT_GAP) - BOND_DOT_GAP + BOND_BOX_PAD * 2.0)
 }
 
-const BOND_BOX_H: f32 = BOND_DOT_R * 2.0 + BOND_BOX_PAD * 2.0;
-
-fn draw_bond_box(x: f32, y: f32, w: f32, stroke: Color, fill: Color) {
-    // Soft rounded container
-    let r = 8.0;
-    let body = Color::new(fill.r, fill.g, fill.b, 0.18);
-    draw_rectangle(x + r, y, w - 2.0 * r, BOND_BOX_H, body);
-    draw_rectangle(x, y + r, w, BOND_BOX_H - 2.0 * r, body);
-    draw_circle(x + r, y + r, r, body);
-    draw_circle(x + w - r, y + r, r, body);
-    draw_circle(x + r, y + BOND_BOX_H - r, r, body);
-    draw_circle(x + w - r, y + BOND_BOX_H - r, r, body);
-    // Outline (approximate rounded rect with a plain rect — the filled circles hide corners)
-    draw_rectangle_lines(x, y, w, BOND_BOX_H, 2.0, stroke);
+fn bond_box_h(p: &Plot) -> f32 {
+    p.l(BOND_DOT_R * 2.0 + BOND_BOX_PAD * 2.0)
 }
 
-fn draw_bond_dots_in_box(x: f32, y: f32, count: i32, color: Color) {
-    for i in 0..count {
-        let dx = x + BOND_BOX_PAD + BOND_DOT_R + i as f32 * (BOND_DOT_R * 2.0 + BOND_DOT_GAP);
-        let dy = y + BOND_BOX_H / 2.0;
-        draw_circle(dx, dy, BOND_DOT_R, color);
+fn bond_box(p: &mut Plot, x: f32, y: f32, w: f32, color: Color) {
+    // Soft rounded container: center rects + corner circles, then an outline.
+    let h = bond_box_h(p);
+    let r = p.l(8.0).min(w / 2.0).min(h / 2.0);
+    let body = Color::new(color.r, color.g, color.b, 0.18);
+    p.rect(x + r, y, w - 2.0 * r, h, body);
+    p.rect(x, y + r, w, h - 2.0 * r, body);
+    for (ccx, ccy) in [(x + r, y + r), (x + w - r, y + r), (x + r, y + h - r), (x + w - r, y + h - r)] {
+        p.circle(ccx, ccy, r, body);
     }
+    p.rect_lines(x, y, w, h, 2.0, color);
 }
 
-fn draw_bond_unknown_in_box(x: f32, y: f32, count: i32, color: Color) {
-    // Draw hollow circles with a "?" inside to show missing quantity
-    for i in 0..count {
-        let dx = x + BOND_BOX_PAD + BOND_DOT_R + i as f32 * (BOND_DOT_R * 2.0 + BOND_DOT_GAP);
-        let dy = y + BOND_BOX_H / 2.0;
-        draw_circle_lines(dx, dy, BOND_DOT_R, 2.0, color);
-    }
-    // Center "?" label over the group
-    let label = "?";
-    let fs = 22;
-    let lw = measure_text(label, None, fs, 1.0).width;
-    let cx = x + bond_box_width(count) / 2.0;
-    draw_text(label, cx - lw / 2.0, y + BOND_BOX_H / 2.0 + 8.0, fs as f32, color);
+fn bond_dot_x(p: &Plot, x: f32, i: i32) -> f32 {
+    x + p.l(BOND_BOX_PAD + BOND_DOT_R + i as f32 * (BOND_DOT_R * 2.0 + BOND_DOT_GAP))
 }
 
-fn draw_bond(total: i32, known: i32, missing: i32, cx: f32, cy: f32) {
+fn bond(p: &mut Plot, total: i32, known: i32, missing: i32) {
     // Render count is bounded so things don't run off the panel.
     let t_count = total.min(20);
     let k_count = known.min(20);
     let m_count = missing.min(20);
-    let unknown_color = Color::new(0.878, 0.878, 0.878, 1.0);
-    let known_color = YELLOW_B;
-    let whole_color = BLUE_A;
+    let unknown_color = LABEL_GRAY;
+    let label = p.fs(BOND_LABEL_SIZE);
+    let h = bond_box_h(p);
+    let dot_r = p.l(BOND_DOT_R);
 
     // Row 1: the whole
-    let whole_w = bond_box_width(t_count);
-    let whole_x = cx - whole_w / 2.0;
-    let whole_y = cy;
+    let whole_w = bond_box_width(p, t_count);
+    let whole_x = -whole_w / 2.0;
+    let whole_y = 0.0;
 
     // Row 2: known + missing, side by side
-    let known_w = bond_box_width(k_count);
-    let miss_w = bond_box_width(m_count);
-    let gap = 32.0;
-    let parts_total = known_w + gap + miss_w;
-    let known_x = cx - parts_total / 2.0;
-    let miss_x = known_x + known_w + gap;
-    let parts_y = whole_y + BOND_BOX_H + 44.0;
+    let known_w = bond_box_width(p, k_count);
+    let miss_w = bond_box_width(p, m_count);
+    let parts_total = known_w + p.l(32.0) + miss_w;
+    let known_x = -parts_total / 2.0;
+    let miss_x = known_x + known_w + p.l(32.0);
+    let parts_y = whole_y + h + p.l(44.0);
 
     // Connector lines (whole → each part)
-    let top_cx = cx;
-    let top_cy = whole_y + BOND_BOX_H;
-    let left_tx = known_x + known_w / 2.0;
-    let right_tx = miss_x + miss_w / 2.0;
     let line_color = Color::new(0.690, 0.745, 0.773, 1.0);
-    draw_line(top_cx, top_cy, left_tx, parts_y, 2.0, line_color);
-    draw_line(top_cx, top_cy, right_tx, parts_y, 2.0, line_color);
+    p.line(0.0, whole_y + h, known_x + known_w / 2.0, parts_y, 2.0, line_color);
+    p.line(0.0, whole_y + h, miss_x + miss_w / 2.0, parts_y, 2.0, line_color);
 
     // Whole
-    draw_bond_box(whole_x, whole_y, whole_w, whole_color, whole_color);
-    draw_bond_dots_in_box(whole_x, whole_y, t_count, whole_color);
-    let total_label = format!("{}", total);
-    let tlw = measure_text(&total_label, None, BOND_LABEL_SIZE, 1.0).width;
-    draw_text(&total_label, cx - tlw / 2.0, whole_y - 6.0, BOND_LABEL_SIZE as f32, LABEL_GRAY);
+    bond_box(p, whole_x, whole_y, whole_w, BLUE_A);
+    for i in 0..t_count {
+        let x = bond_dot_x(p, whole_x, i);
+        p.circle(x, whole_y + h / 2.0, dot_r, BLUE_A);
+    }
+    p.text_c(&total.to_string(), 0.0, whole_y - 6.0, label, LABEL_GRAY);
 
     // Known part
-    draw_bond_box(known_x, parts_y, known_w, known_color, known_color);
-    draw_bond_dots_in_box(known_x, parts_y, k_count, known_color);
-    let k_label = format!("{}", known);
-    let klw = measure_text(&k_label, None, BOND_LABEL_SIZE, 1.0).width;
-    draw_text(&k_label, known_x + known_w / 2.0 - klw / 2.0,
-        parts_y + BOND_BOX_H + 20.0, BOND_LABEL_SIZE as f32, known_color);
+    bond_box(p, known_x, parts_y, known_w, YELLOW_B);
+    for i in 0..k_count {
+        let x = bond_dot_x(p, known_x, i);
+        p.circle(x, parts_y + h / 2.0, dot_r, YELLOW_B);
+    }
+    p.text_c(&known.to_string(), known_x + known_w / 2.0, parts_y + h + p.l(20.0), label, YELLOW_B);
 
-    // Missing part
-    draw_bond_box(miss_x, parts_y, miss_w, unknown_color, unknown_color);
-    draw_bond_unknown_in_box(miss_x, parts_y, m_count, unknown_color);
-    let q_label = "?";
-    let qlw = measure_text(q_label, None, BOND_LABEL_SIZE, 1.0).width;
-    draw_text(q_label, miss_x + miss_w / 2.0 - qlw / 2.0,
-        parts_y + BOND_BOX_H + 20.0, BOND_LABEL_SIZE as f32, unknown_color);
+    // Missing part: hollow circles with a "?" over the group.
+    bond_box(p, miss_x, parts_y, miss_w, unknown_color);
+    for i in 0..m_count {
+        let x = bond_dot_x(p, miss_x, i);
+        p.ring(x, parts_y + h / 2.0, dot_r, 2.0, unknown_color);
+    }
+    let q = p.fs(22);
+    p.text_c("?", miss_x + miss_w / 2.0, parts_y + h / 2.0 + p.l(8.0), q, unknown_color);
+    p.text_c("?", miss_x + miss_w / 2.0, parts_y + h + p.l(20.0), label, unknown_color);
 }
 
 // ─── DOT VISUAL (bands 1-4) ────────────────────────────
 
-fn draw_dots(a: i32, b: i32, op: &str, cx: f32, cy: f32, max_w: f32) {
-    let dot_r = 5.0;
-    let gap = 4.0;
+fn dots(p: &mut Plot, a: i32, b: i32, op: &str) {
+    let dot_r = p.l(5.0);
+    let gap = p.l(4.0);
     let step = dot_r * 2.0 + gap;
+    let label = p.fs(16);
 
     match op {
         "+" => {
             let total = a + b;
             let per_row = total.min(10);
-            let start_x = cx - (per_row as f32 * step) / 2.0;
-
-            let mut idx = 0;
-            // Group A (blue)
-            for _ in 0..a {
-                let row = idx / 10;
-                let col = idx % 10;
-                let dx = start_x + col as f32 * step + dot_r;
-                let dy = cy + row as f32 * (step + gap) + dot_r;
-                draw_circle(dx, dy, dot_r, BLUE_A);
-                idx += 1;
+            let start_x = -(per_row as f32 * step) / 2.0;
+            for idx in 0..total.max(0) {
+                let (row, col) = (idx / 10, idx % 10);
+                let color = if idx < a { BLUE_A } else { YELLOW_B };
+                p.circle(start_x + col as f32 * step + dot_r, row as f32 * (step + gap) + dot_r, dot_r, color);
             }
-            // Group B (yellow)
-            for _ in 0..b {
-                let row = idx / 10;
-                let col = idx % 10;
-                let dx = start_x + col as f32 * step + dot_r;
-                let dy = cy + row as f32 * (step + gap) + dot_r;
-                draw_circle(dx, dy, dot_r, YELLOW_B);
-                idx += 1;
-            }
-
-            // Labels
-            let label_y = cy + ((total - 1) / 10 + 1) as f32 * (step + gap) + 12.0;
-            let a_str = format!("{}", a);
-            let b_str = format!("{}", b);
-            let aw = measure_text(&a_str, None, 16, 1.0).width;
-            let bw = measure_text(&b_str, None, 16, 1.0).width;
-            let pw = measure_text("+", None, 16, 1.0).width;
-            draw_text(&a_str, cx - 40.0 - aw / 2.0, label_y, 16.0, BLUE_A);
-            draw_text("+", cx - pw / 2.0, label_y, 16.0, HINT_GRAY);
-            draw_text(&b_str, cx + 40.0 - bw / 2.0, label_y, 16.0, YELLOW_B);
+            let label_y = ((total - 1).max(0) / 10 + 1) as f32 * (step + gap) + p.l(12.0);
+            p.text_c(&a.to_string(), -p.l(40.0), label_y, label, BLUE_A);
+            p.text_c("+", 0.0, label_y, label, HINT_GRAY);
+            p.text_c(&b.to_string(), p.l(40.0), label_y, label, YELLOW_B);
         }
         "-" | "\u{2212}" => {
             let per_row = a.min(10);
-            let start_x = cx - (per_row as f32 * step) / 2.0;
-
-            for i in 0..a {
-                let row = i / 10;
-                let col = i % 10;
+            let start_x = -(per_row as f32 * step) / 2.0;
+            let x_arm = p.l(3.0);
+            for i in 0..a.max(0) {
+                let (row, col) = (i / 10, i % 10);
                 let dx = start_x + col as f32 * step + dot_r;
-                let dy = cy + row as f32 * (step + gap) + dot_r;
-
+                let dy = row as f32 * (step + gap) + dot_r;
                 if i >= a - b {
-                    // "Taken away" dots
-                    draw_circle(dx, dy, dot_r, RED_FAINT);
-                    // X mark
-                    draw_line(dx - 3.0, dy - 3.0, dx + 3.0, dy + 3.0, 2.0, RED_TAKE);
-                    draw_line(dx + 3.0, dy - 3.0, dx - 3.0, dy + 3.0, 2.0, RED_TAKE);
+                    // "Taken away" dots, crossed out.
+                    p.circle(dx, dy, dot_r, RED_FAINT);
+                    p.line(dx - x_arm, dy - x_arm, dx + x_arm, dy + x_arm, 2.0, RED_TAKE);
+                    p.line(dx + x_arm, dy - x_arm, dx - x_arm, dy + x_arm, 2.0, RED_TAKE);
                 } else {
-                    draw_circle(dx, dy, dot_r, BLUE_A);
+                    p.circle(dx, dy, dot_r, BLUE_A);
                 }
             }
-
-            let label_y = cy + ((a - 1) / 10 + 1) as f32 * (step + gap) + 12.0;
-            let label = format!("{} - {} = count the blue ones!", a, b);
-            let lw = measure_text(&label, None, 16, 1.0).width;
-            draw_text(&label, cx - lw / 2.0, label_y, 16.0, BLUE_A);
+            let label_y = ((a - 1).max(0) / 10 + 1) as f32 * (step + gap) + p.l(12.0);
+            p.text_c(&format!("{} - {} = count the blue ones!", a, b), 0.0, label_y, label, BLUE_A);
         }
         "\u{00d7}" | "*" => {
             // a groups of b dots
-            let max_w = max_w.min(500.0);
             let groups = a.min(8);
             let per_group = b.min(10);
-            let group_gap = 30.0;
-            let naive_w = groups as f32 * (per_group as f32 * step + group_gap) - group_gap;
-            let scale = if naive_w > max_w { max_w / naive_w } else { 1.0 };
-            let s_dot_r = dot_r * scale;
-            let s_step = step * scale;
-            let s_group_gap = group_gap * scale;
-            let s_group_w = per_group as f32 * s_step + s_group_gap;
-            let total_w = groups as f32 * s_group_w - s_group_gap;
-            let start_x = cx - total_w / 2.0;
-
-            let label = format!("{} groups of {}", a, b);
-            let lw = measure_text(&label, None, 14, 1.0).width;
-            draw_text(&label, cx - lw / 2.0, cy - 8.0, 14.0, HINT_GRAY);
-
+            let group_gap = p.l(30.0);
+            let group_w = per_group as f32 * step + group_gap;
+            let total_w = groups as f32 * group_w - group_gap;
+            let start_x = -total_w / 2.0;
+            p.text_c(&format!("{} groups of {}", a, b), 0.0, -p.l(8.0), p.fs(14), HINT_GRAY);
             for g in 0..groups {
-                let gx = start_x + g as f32 * s_group_w;
+                let gx = start_x + g as f32 * group_w;
                 let color = if g % 2 == 0 { BLUE_A } else { YELLOW_B };
                 for d in 0..per_group {
-                    let dx = gx + d as f32 * s_step + s_dot_r;
-                    let dy = cy + 10.0 + s_dot_r;
-                    draw_circle(dx, dy, s_dot_r, color);
+                    p.circle(gx + d as f32 * step + dot_r, p.l(10.0) + dot_r, dot_r, color);
                 }
             }
         }
-        "\u{00f7}" | "/" => {
-            // a split into b groups of answer
-            let max_w = max_w.min(500.0);
-            let groups = b.min(8);
-            let per_group = (a / b.max(1)).min(12);
-            // Scale down dot size if content would overflow
-            let naive_group_w = per_group as f32 * step + 10.0;
-            let naive_total = groups as f32 * naive_group_w;
-            let scale = if naive_total > max_w { max_w / naive_total } else { 1.0 };
-            let s_dot_r = dot_r * scale;
-            let s_step = step * scale;
-            let s_group_w = per_group as f32 * s_step + 10.0 * scale;
-            let total_w = groups as f32 * s_group_w;
-            let start_x = cx - total_w / 2.0;
-
-            let label = format!("{} split into {} groups", a, b);
-            let lw = measure_text(&label, None, 14, 1.0).width;
-            draw_text(&label, cx - lw / 2.0, cy - 8.0, 14.0, HINT_GRAY);
-
-            for g in 0..groups {
-                let gx = start_x + g as f32 * s_group_w;
-                // Group outline
-                draw_rectangle_lines(gx, cy + 2.0, s_group_w - 4.0 * scale, s_dot_r * 2.0 + 8.0 * scale, 1.0,
-                    Color::new(0.329, 0.431, 0.478, 1.0));
-                let color = if g % 2 == 0 { BLUE_A } else { YELLOW_B };
-                for d in 0..per_group {
-                    let dx = gx + 4.0 * scale + d as f32 * s_step + s_dot_r;
-                    let dy = cy + 4.0 * scale + s_dot_r + 2.0;
-                    draw_circle(dx, dy, s_dot_r, color);
-                }
-                // Group count label
-                let count_str = format!("{}", per_group);
-                let font_size = (11.0 * scale).max(9.0);
-                let cw = measure_text(&count_str, None, font_size as u16, 1.0).width;
-                draw_text(&count_str, gx + (s_group_w - 4.0 * scale) / 2.0 - cw / 2.0,
-                    cy + s_dot_r * 2.0 + 18.0 * scale + 4.0, font_size, HINT_GRAY);
-            }
-        }
+        "\u{00f7}" | "/" => split_groups(p, a, b, (a / b.max(1)).min(12), 4.0),
         _ => {}
+    }
+}
+
+/// "a split into b groups": boxed groups of `per_group` dots with a count
+/// under each. Shared by the dot and block visuals (they differ in dot gap).
+fn split_groups(p: &mut Plot, a: i32, b: i32, per_group: i32, dot_gap: f32) {
+    let groups = b.min(8);
+    let dot_r = p.l(5.0);
+    let step = dot_r * 2.0 + p.l(dot_gap);
+    let group_w = per_group as f32 * step + p.l(10.0);
+    let total_w = groups as f32 * group_w;
+    let start_x = -total_w / 2.0;
+    p.text_c(&format!("{} split into {} groups", a, b), 0.0, -p.l(8.0), p.fs(14), HINT_GRAY);
+    let count_size = p.fs(11).max(MIN_LABEL);
+    for g in 0..groups {
+        let gx = start_x + g as f32 * group_w;
+        let inner_w = group_w - p.l(4.0);
+        p.rect_lines(gx, p.l(2.0), inner_w, dot_r * 2.0 + p.l(8.0), 1.0, GROUP_LINE);
+        let color = if g % 2 == 0 { BLUE_A } else { YELLOW_B };
+        for d in 0..per_group {
+            p.circle(gx + p.l(4.0) + d as f32 * step + dot_r, p.l(6.0) + dot_r, dot_r, color);
+        }
+        p.text_c(&per_group.to_string(), gx + inner_w / 2.0, dot_r * 2.0 + p.l(22.0), count_size, HINT_GRAY);
     }
 }
 
@@ -356,6 +391,8 @@ const ROD_H: f32 = 44.0;
 const FIVE_H: f32 = 22.0;
 const CUBE: f32 = 10.0;
 const BLOCK_GAP: f32 = 3.0;
+/// Rods drawn per number (bigger tens still count in the label).
+const MAX_RODS: i32 = 15;
 
 struct BlockColors {
     rod: Color,
@@ -364,178 +401,168 @@ struct BlockColors {
 }
 
 const COLORS_A: BlockColors = BlockColors {
-    rod: Color::new(0.259, 0.647, 0.961, 1.0),   // #42A5F5
-    cube: Color::new(0.392, 0.710, 0.965, 1.0),   // #64B5F6
-    five: Color::new(0.400, 0.733, 0.416, 1.0),   // #66BB6A
+    rod: Color::new(0.259, 0.647, 0.961, 1.0),  // #42A5F5
+    cube: Color::new(0.392, 0.710, 0.965, 1.0), // #64B5F6
+    five: Color::new(0.400, 0.733, 0.416, 1.0), // #66BB6A
 };
 
 const COLORS_B: BlockColors = BlockColors {
-    rod: Color::new(1.0, 0.835, 0.310, 1.0),      // #FFD54F
-    cube: Color::new(1.0, 0.878, 0.510, 1.0),     // #FFE082
-    five: Color::new(0.506, 0.780, 0.518, 1.0),   // #81C784
+    rod: Color::new(1.0, 0.835, 0.310, 1.0),    // #FFD54F
+    cube: Color::new(1.0, 0.878, 0.510, 1.0),   // #FFE082
+    five: Color::new(0.506, 0.780, 0.518, 1.0), // #81C784
 };
 
 const COLORS_RED: BlockColors = BlockColors {
-    rod: Color::new(0.937, 0.263, 0.212, 1.0),    // #EF5350
-    cube: Color::new(0.937, 0.604, 0.604, 1.0),   // #EF9A9A
-    five: Color::new(0.898, 0.451, 0.451, 1.0),   // #E57373
+    rod: Color::new(0.937, 0.263, 0.212, 1.0),  // #EF5350
+    cube: Color::new(0.937, 0.604, 0.604, 1.0), // #EF9A9A
+    five: Color::new(0.898, 0.451, 0.451, 1.0), // #E57373
 };
 
-fn measure_num(num: i32) -> f32 {
-    let tens = num / 10;
+/// Width of one number's blocks.
+fn num_w(p: &Plot, num: i32) -> f32 {
+    let tens = (num / 10).min(MAX_RODS);
     let ones = num % 10;
-    let fives = ones / 5;
-    let remainder = ones % 5;
-    let rods_w = if tens > 0 { tens as f32 * (ROD_W + BLOCK_GAP) } else { 0.0 };
-    let ones_w = fives as f32 * (ROD_W + BLOCK_GAP) + remainder as f32 * (CUBE + BLOCK_GAP);
-    rods_w.max(ones_w).max(20.0)
+    let rods_w = tens as f32 * (ROD_W + BLOCK_GAP);
+    let ones_w = (ones / 5) as f32 * (ROD_W + BLOCK_GAP) + (ones % 5) as f32 * (CUBE + BLOCK_GAP);
+    p.l(rods_w.max(ones_w).max(20.0))
 }
 
-fn content_height(num: i32) -> f32 {
+fn num_h(p: &Plot, num: i32) -> f32 {
     let tens = num / 10;
     let ones = num % 10;
-    let fives = ones / 5;
-    let ones_h = if fives > 0 { FIVE_H } else if ones > 0 { CUBE } else { 0.0 };
-    if tens > 0 { ROD_H + 5.0 + ones_h } else { ones_h.max(CUBE) }
+    let ones_h = if ones >= 5 { FIVE_H } else if ones > 0 { CUBE } else { 0.0 };
+    p.l(if tens > 0 { ROD_H + 5.0 + ones_h } else { ones_h.max(CUBE) })
 }
 
-fn draw_num_blocks(x: f32, y: f32, num: i32, colors: &BlockColors) {
+fn num_blocks(p: &mut Plot, x: f32, num: i32, colors: &BlockColors) {
     let tens = num / 10;
     let ones = num % 10;
-    let fives = ones / 5;
-    let remainder = ones % 5;
-    let total_w = measure_num(num);
     let outline = Color::new(0.0, 0.0, 0.0, 0.3);
+    let (rod_w, rod_h, five_h, cube, gap) = (p.l(ROD_W), p.l(ROD_H), p.l(FIVE_H), p.l(CUBE), p.l(BLOCK_GAP));
 
-    // Label
-    let label = format!("{}", num);
-    let lw = measure_text(&label, None, 16, 1.0).width;
-    draw_text(&label, x + total_w / 2.0 - lw / 2.0, y - 6.0, 16.0, LABEL_GRAY);
+    let w = num_w(p, num);
+    let size = p.fs(16);
+    p.text_c(&num.to_string(), x + w / 2.0, -p.l(6.0), size, LABEL_GRAY);
 
     // Tens rods
-    for i in 0..tens.min(15) {
-        let rx = x + i as f32 * (ROD_W + BLOCK_GAP);
-        draw_rectangle(rx, y, ROD_W, ROD_H, colors.rod);
-        draw_rectangle_lines(rx, y, ROD_W, ROD_H, 1.0, outline);
+    for i in 0..tens.min(MAX_RODS) {
+        let rx = x + i as f32 * (rod_w + gap);
+        p.rect(rx, 0.0, rod_w, rod_h, colors.rod);
+        p.rect_lines(rx, 0.0, rod_w, rod_h, 1.0, outline);
     }
 
-    // Ones row
-    let ones_y = if tens > 0 { y + ROD_H + 5.0 } else { y };
-    let mut ones_x = x;
-
-    // 5-bars
-    for _ in 0..fives {
-        draw_rectangle(ones_x, ones_y, ROD_W, FIVE_H, colors.five);
-        draw_rectangle_lines(ones_x, ones_y, ROD_W, FIVE_H, 1.0, outline);
-        ones_x += ROD_W + BLOCK_GAP;
+    // Ones row: 5-bars, then remainder cubes.
+    let ones_y = if tens > 0 { rod_h + p.l(5.0) } else { 0.0 };
+    let mut ox = x;
+    for _ in 0..ones / 5 {
+        p.rect(ox, ones_y, rod_w, five_h, colors.five);
+        p.rect_lines(ox, ones_y, rod_w, five_h, 1.0, outline);
+        ox += rod_w + gap;
     }
-
-    // Remainder cubes
-    for _ in 0..remainder {
-        let cube_y = if fives > 0 { ones_y + (FIVE_H - CUBE) / 2.0 } else { ones_y };
-        draw_rectangle(ones_x, cube_y, CUBE, CUBE, colors.cube);
-        draw_rectangle_lines(ones_x, cube_y, CUBE, CUBE, 1.0, outline);
-        ones_x += CUBE + BLOCK_GAP;
+    let cube_y = if ones >= 5 { ones_y + (five_h - cube) / 2.0 } else { ones_y };
+    for _ in 0..ones % 5 {
+        p.rect(ox, cube_y, cube, cube, colors.cube);
+        p.rect_lines(ox, cube_y, cube, cube, 1.0, outline);
+        ox += cube + gap;
     }
 }
 
-fn draw_base10_blocks(a: i32, b: i32, op: &str, answer: i32, cx: f32, cy: f32, max_w: f32) {
+fn base10_blocks(p: &mut Plot, a: i32, b: i32, op: &str, answer: i32) {
     match op {
-        "+" => {
-            let wa = measure_num(a);
-            let wb = measure_num(b);
-            let op_gap = 40.0;
-            let total_w = wa + op_gap + wb;
-            let start_x = cx - total_w / 2.0;
-
-            draw_num_blocks(start_x, cy, a, &COLORS_A);
-            draw_op_symbol(start_x + wa + op_gap / 2.0, cy, "+", a, b);
-            draw_num_blocks(start_x + wa + op_gap, cy, b, &COLORS_B);
-        }
-        "-" | "\u{2212}" => {
-            let wa = measure_num(a);
-            let wb = measure_num(b);
-            let op_gap = 40.0;
-            let total_w = wa + op_gap + wb;
-            let start_x = cx - total_w / 2.0;
-
-            draw_num_blocks(start_x, cy, a, &COLORS_A);
-            draw_op_symbol(start_x + wa + op_gap / 2.0, cy, "\u{2212}", a, b);
-            draw_num_blocks(start_x + wa + op_gap, cy, b, &COLORS_RED);
+        "+" | "-" | "\u{2212}" => {
+            let (wa, wb) = (num_w(p, a), num_w(p, b));
+            let op_gap = p.l(40.0);
+            let start_x = -(wa + op_gap + wb) / 2.0;
+            num_blocks(p, start_x, a, &COLORS_A);
+            let sym_x = start_x + wa + op_gap / 2.0;
+            let sym_y = num_h(p, a).max(num_h(p, b)) / 2.0 + p.l(4.0);
+            if op == "+" {
+                let size = p.fs(28);
+                p.text_c("+", sym_x, sym_y, size, WHITE);
+                num_blocks(p, start_x + wa + op_gap, b, &COLORS_B);
+            } else {
+                // Minus as a line: crisper than the glyph at this size.
+                let half = p.l(8.0);
+                p.line(sym_x - half, sym_y - p.l(4.0), sym_x + half, sym_y - p.l(4.0), 3.0, WHITE);
+                num_blocks(p, start_x + wa + op_gap, b, &COLORS_RED);
+            }
         }
         "\u{00d7}" | "*" => {
             // Array: rows × cols dots
-            let rows = a.min(b).min(12) as i32;
-            let cols = a.max(b).min(12) as i32;
-            let dot_r = 5.0;
-            let dot_gap = 4.0;
-            let step = dot_r * 2.0 + dot_gap;
-            let grid_w = cols as f32 * step;
-            let start_x = cx - grid_w / 2.0;
-
-            let label = format!("{} rows of {}", rows, cols);
-            let lw = measure_text(&label, None, 14, 1.0).width;
-            draw_text(&label, cx - lw / 2.0, cy - 8.0, 14.0, HINT_GRAY);
-
+            let rows = a.min(b).min(12);
+            let cols = a.max(b).min(12);
+            let dot_r = p.l(5.0);
+            let step = dot_r * 2.0 + p.l(4.0);
+            let start_x = -(cols as f32 * step) / 2.0;
+            p.text_c(&format!("{} rows of {}", rows, cols), 0.0, -p.l(8.0), p.fs(14), HINT_GRAY);
             for r in 0..rows {
+                let color = if r % 2 == 0 { BLUE_A } else { YELLOW_B };
                 for c in 0..cols {
-                    let color = if r % 2 == 0 { BLUE_A } else { YELLOW_B };
-                    let dx = start_x + c as f32 * step + dot_r;
-                    let dy = cy + 5.0 + r as f32 * step + dot_r;
-                    draw_circle(dx, dy, dot_r, color);
+                    p.circle(start_x + c as f32 * step + dot_r, p.l(5.0) + r as f32 * step + dot_r, dot_r, color);
                 }
             }
         }
-        "\u{00f7}" | "/" => {
-            let max_w = max_w.min(500.0);
-            let groups = b.min(8);
-            let per_group = answer.min(12);
-            let dot_r = 5.0;
-            let dot_gap = 3.0;
-            let step = dot_r * 2.0 + dot_gap;
-            let naive_group_w = per_group as f32 * step + 10.0;
-            let naive_total = groups as f32 * naive_group_w;
-            let scale = if naive_total > max_w { max_w / naive_total } else { 1.0 };
-            let s_dot_r = dot_r * scale;
-            let s_step = step * scale;
-            let s_group_w = per_group as f32 * s_step + 10.0 * scale;
-            let total_w = groups as f32 * s_group_w;
-            let start_x = cx - total_w / 2.0;
-
-            let label = format!("{} split into {} groups", a, b);
-            let lw = measure_text(&label, None, 14, 1.0).width;
-            draw_text(&label, cx - lw / 2.0, cy - 8.0, 14.0, HINT_GRAY);
-
-            for g in 0..groups {
-                let gx = start_x + g as f32 * s_group_w;
-                draw_rectangle_lines(gx, cy + 2.0, s_group_w - 4.0 * scale, s_dot_r * 2.0 + 8.0 * scale, 1.0,
-                    Color::new(0.329, 0.431, 0.478, 1.0));
-                let color = if g % 2 == 0 { BLUE_A } else { YELLOW_B };
-                for d in 0..per_group {
-                    let dx = gx + 4.0 * scale + d as f32 * s_step + s_dot_r;
-                    let dy = cy + 4.0 * scale + s_dot_r + 2.0;
-                    draw_circle(dx, dy, s_dot_r, color);
-                }
-                let count_str = format!("{}", per_group);
-                let font_size = (11.0 * scale).max(9.0);
-                let cw = measure_text(&count_str, None, font_size as u16, 1.0).width;
-                draw_text(&count_str, gx + (s_group_w - 4.0 * scale) / 2.0 - cw / 2.0,
-                    cy + s_dot_r * 2.0 + 18.0 * scale + 4.0, font_size, HINT_GRAY);
-            }
-        }
+        "\u{00f7}" | "/" => split_groups(p, a, b, answer.min(12), 3.0),
         _ => {}
     }
 }
 
-fn draw_op_symbol(x: f32, y: f32, symbol: &str, num_a: i32, num_b: i32) {
-    let h = content_height(num_a).max(content_height(num_b));
-    let cy = y + h / 2.0 + 4.0;
-    // Draw minus as a line since the default font may lack U+2212
-    if symbol == "\u{2212}" || symbol == "-" {
-        let half_w = 8.0;
-        draw_line(x - half_w, cy - 4.0, x + half_w, cy - 4.0, 3.0, WHITE);
-    } else {
-        let sw = measure_text(symbol, None, 28, 1.0).width;
-        draw_text(symbol, x - sw / 2.0, cy, 28.0, WHITE);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ::rand::rngs::SmallRng;
+    use ::rand::SeedableRng;
+    use robot_buddy_domain::learning::challenge_generator::{generate_challenge, ChallengeProfile};
+    use robot_buddy_domain::learning::operation_stats::OperationStats;
+
+    fn challenges(per_band: usize) -> Vec<Challenge> {
+        let mut rng = SmallRng::seed_from_u64(7);
+        (1..=10u8)
+            .flat_map(|band| {
+                let profile = ChallengeProfile { math_band: band, spread_width: 0.0, operation_stats: OperationStats::new() };
+                (0..per_band).map(|_| generate_challenge(&profile, &mut rng)).collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    /// The phone bug: a band-4 bond needed ~415px and reported the slot's
+    /// width instead. Now every visual fits every width a panel can offer,
+    /// and the extent is the box of what's actually drawn.
+    #[test]
+    fn every_visual_fits_the_width_it_was_given() {
+        for c in challenges(40) {
+            for max_w in [180.0, 272.0, 344.0, 432.0, 712.0] {
+                let v = plan(&c, max_w);
+                assert!(
+                    v.bbox.w <= max_w + 0.5,
+                    "{} {} {} (band {}, {}) is {}px wide in a {max_w}px slot",
+                    c.numbers.a, c.numbers.op, c.numbers.b, c.sampled_band, c.numbers.format, v.bbox.w
+                );
+                assert_eq!(extent(&c, max_w), VisualExtent { w: v.bbox.w, h: v.bbox.h });
+            }
+        }
+    }
+
+    #[test]
+    fn a_big_bond_squeezes_instead_of_lying() {
+        let mut c = challenges(1).remove(0);
+        c.numbers.format = "bond".into();
+        c.numbers.bond_total = Some(20);
+        c.numbers.b = 10;
+        c.correct_answer = 10;
+        let natural = plan(&c, 10_000.0).bbox.w;
+        assert!(natural > 400.0, "a 10+10 bond is wide ({natural})");
+        let squeezed = plan(&c, 272.0);
+        assert!(squeezed.bbox.w <= 272.0 && squeezed.bbox.w > 200.0, "{}", squeezed.bbox.w);
+    }
+
+    #[test]
+    fn a_visual_that_fits_is_not_squeezed() {
+        for c in challenges(5) {
+            let wide = plan(&c, 10_000.0);
+            if wide.bbox.w <= 300.0 && !grouped(&c) {
+                assert_eq!(plan(&c, 300.0), wide);
+            }
+        }
     }
 }

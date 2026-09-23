@@ -13,7 +13,7 @@ use robot_buddy_domain::types::Phase;
 
 use super::visuals;
 use crate::input::FrameInput;
-use crate::ui::layout::{self, col, gap_box, paint, region, row, text, Align, Fit, Frame, Justify, Kind, Node};
+use crate::ui::layout::{self, col, gap_box, paint, region, row, text, Fit, Frame, Justify, Kind, Node};
 pub use crate::ui::layout::UiRect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,8 +42,6 @@ pub enum ChallengeId {
 
 pub struct ChallengeLayout {
     pub frame: Frame<ChallengeId>,
-    /// Width the visual was sized for (grouped visuals squeeze into it).
-    visual_max_w: f32,
 }
 
 impl ChallengeLayout {
@@ -69,9 +67,11 @@ fn sanitize_math_text(text: &str) -> String {
         .replace('\u{00f7}', "/") // division sign → slash
 }
 
-fn visual(challenge: &Challenge, max_w: f32) -> Node<ChallengeId> {
-    let e = visuals::extent(challenge, max_w);
-    region(e.w, e.h()).id(ChallengeId::Visual).fixed().align_self(Align::Center)
+/// The CRA visual's slot: the panel's full inner width (stretched), `h` tall.
+/// [`layout`] measures the width first, then asks the visual how tall it is
+/// at that width — the same `visuals::plan` that draws it.
+fn visual(h: f32) -> Node<ChallengeId> {
+    region(0.0, h).auto_w().id(ChallengeId::Visual).fixed()
 }
 
 /// A labelled scaffold button ("Show me" / "Tell me").
@@ -96,8 +96,20 @@ fn answer_button(i: usize, label: &str) -> Node<ChallengeId> {
 
 /// Lay the overlay out for `screen`. Pure.
 pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) -> ChallengeLayout {
-    let (sw, sh) = screen;
-    let visual_max_w = (sw - 2.0 * MARGIN).min(PANEL_W) - 48.0;
+    let bounds = layout::screen_rect(screen);
+    let build = |visual_h: f32| tree(cs, challenge, screen, visual_h);
+    let mut frame = layout::layout(&build(0.0), bounds);
+    // Two passes: the first finds how wide the visual's slot is (the panel's
+    // width doesn't depend on its content), the second reserves its height
+    // at that width.
+    if let Some(slot) = frame.rect(ChallengeId::Visual) {
+        frame = layout::layout(&build(visuals::extent(challenge, slot.w).h), bounds);
+    }
+    ChallengeLayout { frame }
+}
+
+fn tree(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32), visual_h: f32) -> Node<ChallengeId> {
+    let sh = screen.1;
     // Short windows (640x480) get tighter spacing so a wrapped word problem,
     // the visual and feedback all fit above the buttons.
     let compact = sh < 600.0;
@@ -110,7 +122,7 @@ pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) ->
             .gap(gap.min(10.0))
             .child(text(header, 28, Fit::shrink(18)).id(ChallengeId::Header).center_text().fixed())
             .child(text(q_text, 34, Fit::shrink_then_wrap(20, 6)).id(ChallengeId::Question).center_text())
-            .child(visual(challenge, visual_max_w))
+            .child(visual(visual_h))
             .child(text(format!("= {}", challenge.correct_answer), 54, Fit::shrink(28)).id(ChallengeId::Answer).center_text())
             .maybe(cs.feedback.as_ref().map(|fb| {
                 text(fb.display.clone(), 24, Fit::wrap_lines(14, 2)).id(ChallengeId::Feedback).center_text()
@@ -148,7 +160,7 @@ pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) ->
         col()
             .gap(gap)
             .child(text(q_text, 42, Fit::shrink_then_wrap(22, 6)).id(ChallengeId::Question).center_text())
-            .maybe(cs.hint_used.then(|| visual(challenge, visual_max_w)))
+            .maybe(cs.hint_used.then(|| visual(visual_h)))
             .maybe(feedback_slot)
             .child(
                 row()
@@ -164,8 +176,7 @@ pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) ->
     };
 
     let panel = panel.id(ChallengeId::Panel).w(PANEL_W).min_w(0.0).pad_edges(24.0, pad_top, 24.0, 20.0);
-    let frame = layout::layout(&layout::centered_on_screen(panel, MARGIN), layout::screen_rect(screen));
-    ChallengeLayout { frame, visual_max_w }
+    layout::centered_on_screen(panel, MARGIN)
 }
 
 // ─── DRAWING ────────────────────────────────────────────
@@ -218,7 +229,7 @@ pub fn draw(layout: &ChallengeLayout, cs: &ChallengeState, challenge: &Challenge
                 paint::round_rect(r, 16.0, DARK_BG);
                 paint::outline(r, 4.0, if teaching { ORANGE } else { GOLD });
             }
-            ChallengeId::Visual => visuals::draw_visual(challenge, r.center().0, r.y + visuals::extent(challenge, layout.visual_max_w).above, layout.visual_max_w, time),
+            ChallengeId::Visual => visuals::draw(challenge, r),
             ChallengeId::Choice(i) => {
                 let correct = challenge.choices.get(i).is_some_and(|c| c.correct);
                 let color = if solved { if correct { GREEN_BTN } else { DIM_BTN } } else { BLUE_BTN };

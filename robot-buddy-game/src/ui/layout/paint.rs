@@ -114,6 +114,23 @@ impl Canvas {
         self.check(x1.min(x2), y1.min(y2), x1.max(x2), y1.max(y2));
         draw_line(x1, y1, x2, y2, thickness, color);
     }
+    pub fn rect(&self, r: UiRect, color: Color) {
+        self.check(r.x, r.y, r.right(), r.bottom());
+        draw_rectangle(r.x, r.y, r.w, r.h, color);
+    }
+    /// Outline drawn inside `r`.
+    pub fn rect_lines(&self, r: UiRect, thickness: f32, color: Color) {
+        self.check(r.x, r.y, r.right(), r.bottom());
+        draw_rectangle_lines(r.x, r.y, r.w, r.h, thickness, color);
+    }
+    /// One line of text, left edge at `x`, on `baseline`.
+    pub fn text(&self, s: &str, x: f32, baseline: f32, size: u16, color: Color) {
+        use super::metrics::{FontMetrics, TextMetrics};
+        let m = FontMetrics::bundled();
+        self.check(x, baseline - m.ascent(size), x + m.width(s, size), baseline + m.descent(size));
+        debug_check_width(s, size);
+        draw_text(s, x, baseline, size as f32, color);
+    }
 }
 
 /// Smallest font the unmigrated panels (leap, descent) shrink a line to.

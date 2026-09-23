@@ -271,6 +271,17 @@ mod challenge_sweep {
                                 e.join("\n  - ")
                             );
                         }
+                        // The CRA visual is custom art in a region: what
+                        // `visuals::draw` paints there (the same plan) must
+                        // fit the region the layout reserved.
+                        if let Some(r) = l.frame.rect(challenge::ChallengeId::Visual) {
+                            let v = robot_buddy_game::ui::visuals::plan(c, r.w);
+                            assert!(
+                                v.bbox.w <= r.w + 0.5 && v.bbox.h <= r.h + 0.5,
+                                "{name}: visual for {} {} {} (band {}, {}) is {:?}, its slot is {r:?} at {screen:?}",
+                                c.numbers.a, c.numbers.op, c.numbers.b, c.sampled_band, c.numbers.format, v.bbox
+                            );
+                        }
                     }
                 }
             }
