@@ -13,7 +13,7 @@ use robot_buddy_domain::types::Phase;
 
 use super::visuals;
 use crate::input::FrameInput;
-use crate::ui::layout::{self, col, gap_box, paint, region, row, text, Fit, Frame, Justify, Kind, Node};
+use crate::ui::layout::{self, col, paint, region, row, text, Fit, Frame, Justify, Kind, Node};
 pub use crate::ui::layout::UiRect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,7 +91,8 @@ fn answer_button(i: usize, label: &str) -> Node<ChallengeId> {
         // matching bottom gap.
         .child(text(format!("{}", i + 1), 20, Fit::shrink(12)).id(ChallengeId::ChoiceKey(i)).fixed())
         .child(text(label, 40, Fit::shrink(18)).id(ChallengeId::ChoiceLabel(i)).center_text().grow(1.0))
-        .child(gap_box(0.0, 20.0))
+        // Balances the key hint; gives way first when a short screen squeezes the button.
+        .child(region(0.0, 20.0).min_h(0.0))
 }
 
 /// Lay the overlay out for `screen`. Pure.

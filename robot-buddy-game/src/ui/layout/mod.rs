@@ -51,7 +51,7 @@ pub mod text;
 use std::fmt::Debug;
 
 pub use engine::{LayoutEngine, LayoutTree};
-pub use frame::{Element, Frame, Kind, PlacedLine, PlacedText};
+pub use frame::{Clipped, Element, Frame, Kind, PlacedLine, PlacedText};
 pub use metrics::{FontMetrics, TextMetrics};
 pub use node::{
     button, col, gap_box, region, row, spacer, text, Align, Dim, Direction, Edges, Fit, Justify, Node, Style,
@@ -145,6 +145,25 @@ mod tests {
             }
             assert_eq!(seen, 12, "every row lands on some page at {screen:?}");
         }
+    }
+
+    /// A clipped node without an id used to vanish without a trace; now
+    /// every dropped text / region is reported, and the sweep fails on it.
+    #[test]
+    fn clipping_an_anonymous_node_is_reported() {
+        let bounds = UiRect::new(0.0, 0.0, 200.0, 30.0);
+        let root: Node<T> = col().children([
+            text("I fit", 20, Fit::shrink(20)).fixed(),
+            text("I don't", 20, Fit::shrink(20)).fixed(),
+            region(50.0, 40.0).fixed(),
+            col().child(text("nested", 20, Fit::shrink(20)).fixed()).fixed(),
+        ]);
+        let frame = layout(&root, bounds);
+        let what: Vec<&str> = frame.clipped().iter().map(|c| c.what.as_str()).collect();
+        assert_eq!(what, ["text \"I don't\"", "region (node 3)", "text \"nested\""]);
+        assert_eq!(frame.clipped()[2].node, 5);
+        let issues = check_sane(&frame, bounds).unwrap_err();
+        assert_eq!(issues.iter().filter(|i| i.contains("clipped out")).count(), 3, "{issues:?}");
     }
 
     #[test]

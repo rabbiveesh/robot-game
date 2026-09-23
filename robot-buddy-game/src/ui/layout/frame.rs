@@ -47,19 +47,30 @@ pub struct Element<Id> {
     pub kind: Kind,
 }
 
+/// A node the engine dropped because it didn't fit.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Clipped<Id> {
+    /// Pre-order index of the node in the panel's tree.
+    pub node: usize,
+    pub id: Option<Id>,
+    /// Human-readable: the id, or the text, or "region".
+    pub what: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Frame<Id> {
     pub bounds: UiRect,
     elements: Vec<Element<Id>>,
-    clipped: Vec<Id>,
+    clipped: Vec<Clipped<Id>>,
 }
 
 impl<Id: Copy + PartialEq + Debug> Frame<Id> {
     /// Turn an engine's rects into placed elements. Every node that has an id,
     /// is a text leaf, or is a region becomes an element (in pre-order, so
     /// paint order = tree order and parents precede children); anonymous
-    /// containers only pass structure through. Ids of clipped nodes are
-    /// collected in [`Frame::clipped`].
+    /// containers only pass structure through. Every clipped node that would
+    /// have become an element — with or without an id — is recorded in
+    /// [`Frame::clipped`], so nothing can vanish silently.
     pub fn resolve(root: &Node<Id>, rects: &Rects, bounds: UiRect, m: &dyn TextMetrics) -> Self {
         let mut f = Frame { bounds, elements: Vec::new(), clipped: Vec::new() };
         let mut idx = 0;
@@ -71,7 +82,7 @@ impl<Id: Copy + PartialEq + Debug> Frame<Id> {
         let me = *idx;
         *idx += 1;
         let Some(rect) = rects[me] else {
-            self.collect_clipped(n);
+            self.collect_clipped(n, me);
             *idx += n.subtree_len() - 1;
             return;
         };
@@ -121,13 +132,22 @@ impl<Id: Copy + PartialEq + Debug> Frame<Id> {
         }
     }
 
-    fn collect_clipped(&mut self, n: &Node<Id>) {
-        if let Some(id) = n.id {
-            self.clipped.push(id);
+    /// Record `n` (pre-order index `at`) and its subtree as clipped.
+    fn collect_clipped(&mut self, n: &Node<Id>, at: usize) {
+        let what = match (&n.id, &n.content) {
+            (Some(id), _) => Some(format!("{id:?}")),
+            (None, Content::Text(t)) => Some(format!("text {:?}", t.text)),
+            (None, Content::Region) => Some(format!("region (node {at})")),
+            (None, Content::Container(_)) => None,
+        };
+        if let Some(what) = what {
+            self.clipped.push(Clipped { node: at, id: n.id, what });
         }
         if let Content::Container(kids) = &n.content {
+            let mut i = at + 1;
             for c in kids {
-                self.collect_clipped(c);
+                self.collect_clipped(c, i);
+                i += c.subtree_len();
             }
         }
     }
@@ -137,8 +157,8 @@ impl<Id: Copy + PartialEq + Debug> Frame<Id> {
         &self.elements
     }
 
-    /// Ids of nodes that didn't fit and were dropped.
-    pub fn clipped(&self) -> &[Id] {
+    /// Every node that didn't fit and was dropped (ids or not).
+    pub fn clipped(&self) -> &[Clipped<Id>] {
         &self.clipped
     }
 
