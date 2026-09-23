@@ -629,10 +629,35 @@ pub fn layout(ws: &Workspace, area: UiRect) -> Layout {
     };
     let grabbable = if done || carrying { vec![] } else { grabbable };
 
-    // Sticks: every full row of five still in the tray. They stay drawn while
-    // something's carried (a row with a gap in it isn't full, so it loses its
-    // stick); pickup is already blocked mid-carry.
+    // Sticks: every full row of five in the source — the tray, or (taking
+    // away) the frames, when the basket has room for all five. They stay drawn
+    // while something's carried (a row with a gap in it isn't full, so it
+    // loses its stick); pickup is already blocked mid-carry.
     let mut sticks = Vec::new();
+    let basket_room = side_slots.iter().filter(|s| s.1.is_none()).count();
+    if !side_is_source && !done && basket_room >= COLS {
+        // The handle sits at the row's right end, pointing at the basket (the
+        // "10" has the frames' left side).
+        let handle_w = (mid_gap * 0.4 - 4.0).max(12.0);
+        for (fi, f) in frames.iter().enumerate() {
+            if rods[fi] {
+                continue; // a rod is one ten; open it to break off a five
+            }
+            for r in 0..2 {
+                let first = fi * 10 + r * COLS;
+                let slots: Vec<usize> = (first..first + COLS).collect();
+                if slots.iter().all(|&i| frame_fill.get(i).copied().flatten() == Some(0)) {
+                    let y = f.y + r as f32 * cell;
+                    sticks.push(Stick {
+                        handle: UiRect { x: f.x + f.w + 4.0, y, w: handle_w, h: cell },
+                        row: UiRect { x: f.x, y, w: f.w, h: cell },
+                        slots,
+                        group: 0,
+                    });
+                }
+            }
+        }
+    }
     if side_is_source && !done {
         for &(group, first, count, first_row) in &tray_rows_of {
             for r in 0..count / COLS {
@@ -757,11 +782,13 @@ fn draw_segment(x: f32, y: f32, w: f32, h: f32, color: Color) {
     draw_rectangle_lines(x - w / 2.0, y - h / 2.0, w, h, 1.5, OUTLINE);
 }
 
-/// A stick running behind a row, with a knob to grab on its left.
+/// A stick running behind a row, with a knob to grab at one end.
 fn draw_stick(handle: UiRect, row: UiRect, cell: f32, lift: f32) {
     let bar_h = cell * 0.3;
     let y = row.y + row.h / 2.0 - bar_h / 2.0 - lift;
-    draw_rectangle(handle.x + handle.w / 2.0, y, row.x + row.w - handle.x - handle.w / 2.0, bar_h, STICK);
+    let knob_x = handle.x + handle.w / 2.0;
+    let (x0, x1) = (knob_x.min(row.x), knob_x.max(row.x + row.w));
+    draw_rectangle(x0, y, x1 - x0, bar_h, STICK);
     let knob = UiRect { x: handle.x, y: handle.y + handle.h * 0.15 - lift, w: handle.w, h: handle.h * 0.7 };
     draw_rectangle(knob.x, knob.y, knob.w, knob.h, STICK);
     draw_rectangle_lines(knob.x, knob.y, knob.w, knob.h, 2.0, OUTLINE);
@@ -839,10 +866,12 @@ pub fn draw(ws: &Workspace, area: UiRect) {
         draw_circle_lines(x, y, l.counter_r, 2.0, HELD_GAP);
     }
 
-    // A quiet chevron: counters travel left to right.
+    // A quiet chevron: counters travel left to right (stepped clear of the
+    // take-away knobs).
     let mid_y = area.y + l.cell;
-    draw_line(l.drop_line - 8.0, mid_y - 10.0, l.drop_line + 6.0, mid_y, 3.0, ARROW);
-    draw_line(l.drop_line - 8.0, mid_y + 10.0, l.drop_line + 6.0, mid_y, 3.0, ARROW);
+    let cx = l.drop_line + if l.side_is_source { 0.0 } else { 8.0 };
+    draw_line(cx - 8.0, mid_y - 10.0, cx + 6.0, mid_y, 3.0, ARROW);
+    draw_line(cx - 8.0, mid_y + 10.0, cx + 6.0, mid_y, 3.0, ARROW);
 
     for c in l.counters() {
         let (x, y) = ws.shown_at(c);
@@ -870,9 +899,14 @@ pub fn draw_drag(ws: &Workspace, area: UiRect) {
     let spots = carried_positions(d.pos, d.slots.len(), cell);
     if d.is_row() {
         let first = spots[0];
-        let handle_w = (BADGE_ROOM * scale - 8.0).max(12.0);
         let row = UiRect { x: first.0 - cell / 2.0, y: first.1 - cell / 2.0, w: cell * COLS as f32, h: cell };
-        let handle = UiRect { x: row.x - handle_w - 4.0, y: row.y, w: handle_w, h: cell };
+        let handle = if ws.session.puzzle.kind == ConcreteKind::TakeAway {
+            let handle_w = (MID_GAP * scale * 0.4 - 4.0).max(12.0);
+            UiRect { x: row.x + row.w + 4.0, y: row.y, w: handle_w, h: cell }
+        } else {
+            let handle_w = (BADGE_ROOM * scale - 8.0).max(12.0);
+            UiRect { x: row.x - handle_w - 4.0, y: row.y, w: handle_w, h: cell }
+        };
         draw_stick(handle, row, cell, 4.0);
     }
     for &(x, y) in &spots {
@@ -1063,6 +1097,37 @@ mod tests {
         drag(&mut w, loose, basket);
         assert!(layout(&w, AREA).rods[0], "ten is still ten");
         assert!(layout(&w, AREA).grabbable.is_empty(), "to take more, the ten has to be opened");
+    }
+
+    #[test]
+    fn taking_away_five_can_be_one_move() {
+        // 12 − 5: the first frame's rows ride sticks; one row fills the basket.
+        let mut w = ws(ConcreteKind::TakeAway, 12, 5);
+        let l = layout(&w, AREA);
+        assert_eq!(l.sticks.len(), 2, "both rows of the full frame");
+        let knob = l.sticks[1].handle;
+        assert!(knob.x > l.frames[0].x + l.frames[0].w, "the knob points at the basket");
+        match drag(&mut w, knob.center(), l.drop_zone.center()) {
+            Pointer::Landed(landed) => assert!(landed.row && landed.built),
+            _ => panic!("the row should land in the basket"),
+        }
+        let l = layout(&w, AREA);
+        assert_eq!(l.in_frames.len(), 7);
+        assert!(l.in_frames.iter().enumerate().all(|(i, c)| c.slot == i), "the frames close up");
+    }
+
+    #[test]
+    fn no_take_away_stick_without_room_for_five() {
+        let w = ws(ConcreteKind::TakeAway, 12, 4);
+        assert!(layout(&w, AREA).sticks.is_empty(), "the basket only holds four");
+    }
+
+    #[test]
+    fn a_rod_has_no_sticks_until_it_is_opened() {
+        let mut w = ws(ConcreteKind::TakeAway, 12, 6);
+        let badge = layout(&w, AREA).badges[0].unwrap().center();
+        tap(&mut w, badge);
+        assert!(layout(&w, AREA).sticks.is_empty(), "a ten is one thing until it's opened");
     }
 
     #[test]

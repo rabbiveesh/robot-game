@@ -61,9 +61,13 @@ changes the strategies they find: one at a time leads to counting; moving a
 group allows part-whole strategies. So the workspace offers both, and the
 choice is itself the signal.
 
-- A full row of five in the tray sits on a **stick**. Pressing the stick
-  picks up the whole row; pressing a counter still picks up one. (Take-away
-  doesn't offer row sticks yet.)
+- A full row of five sits on a **stick**: in the tray when putting together,
+  and in the frames when taking away (if the basket has room for all five, and
+  the row isn't part of a closed ten-rod). Pressing the stick's knob picks up
+  the whole row; pressing a counter still picks up one. Taking away five in one
+  move is the "break off a five" strategy: 12 − 5 leaves "5 and 2".
+- The knob sits on the row's outer end: left of the tray, and right of the
+  frames (toward the basket, since the "10" has the frames' left side).
 - The five land in the next five empty cells, in order, sliding like singles.
 - The buddy mentions it **once**, only after the kid has moved five singles
   while a full row was available: "Psst! Grab the stick to slide a whole row at
