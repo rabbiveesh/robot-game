@@ -11,7 +11,7 @@ use crate::prelude::*;
 use robot_buddy_domain::logic::descent::{DiveNudge, DivePhase, DiveSession};
 
 use crate::input::FrameInput;
-use crate::ui::shop::UiRect;
+use crate::ui::layout::{paint, UiRect};
 
 pub struct KickButton {
     pub rect: UiRect,
@@ -127,27 +127,6 @@ const WATER_BOTTOM: Color = Color::new(0.03, 0.09, 0.20, 1.0);
 const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0);
 const ROCK: Color = Color::new(0.35, 0.30, 0.26, 1.0);
 
-/// Largest size at or below `max` that fits `text` into `width`, measured with
-/// `width_of`. Split out so the shrink loop is testable without a window.
-fn fitted_by(text: &str, width: f32, max: u16, width_of: impl Fn(&str, u16) -> f32) -> u16 {
-    let mut size = max;
-    while size > 11 && width_of(text, size) > width {
-        size -= 1;
-    }
-    size
-}
-
-fn fitted(text: &str, width: f32, max: u16) -> u16 {
-    fitted_by(text, width, max, |t, size| measure_text(t, None, size, 1.0).width)
-}
-
-/// Draw `text` centered on `y`, shrunk to fit the panel.
-fn centered(text: &str, p: UiRect, y: f32, max: u16, color: Color) {
-    let room = p.w - 32.0;
-    let size = fitted(text, room, max);
-    let w = measure_text(text, None, size, 1.0).width;
-    draw_text(text, p.x + p.w / 2.0 - w / 2.0, y, size as f32, color);
-}
 
 pub fn draw(session: &DiveSession, layout: &DescentLayout, message: Option<&str>, time: f32) {
     let sw = screen_width();
@@ -170,9 +149,9 @@ pub fn draw(session: &DiveSession, layout: &DescentLayout, message: Option<&str>
     }
     draw_rectangle_lines(p.x, p.y, p.w, p.h, 4.0, GOLD);
 
-    centered("Dive to the trench!", p, p.y + 40.0, 30, GOLD);
+    paint::centered_fitted("Dive to the trench!", p, p.y + 40.0, 30, GOLD);
     let goal = format!("The door is {} marks down.", session.puzzle.door);
-    centered(&goal, p, p.y + 66.0, 22, WHITE);
+    paint::centered_fitted(&goal, p, p.y + 66.0, 22, WHITE);
 
     let (sx, top, bottom) = layout.shaft;
     // Shaft walls.
@@ -241,7 +220,7 @@ pub fn draw(session: &DiveSession, layout: &DescentLayout, message: Option<&str>
             DiveNudge::None => "Kick down to land right on the door.",
         },
     });
-    centered(msg, p, bottom + 32.0, 22, GOLD);
+    paint::centered_fitted(msg, p, bottom + 32.0, 22, GOLD);
 
     let c = layout.leave_btn;
     draw_rectangle(c.x, c.y, c.w, c.h, Color::new(0.329, 0.431, 0.478, 1.0));

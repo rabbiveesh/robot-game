@@ -9,7 +9,7 @@ use crate::prelude::*;
 use robot_buddy_domain::economy::shop::ShopItem;
 
 use crate::input::FrameInput;
-use crate::ui::shop::UiRect;
+use crate::ui::layout::UiRect;
 
 pub struct ItemRow {
     pub rect: UiRect,

@@ -10,7 +10,7 @@
 use crate::prelude::*;
 use robot_buddy_domain::logic::leap::{LeapPhase, LeapSession};
 
-use crate::ui::shop::UiRect;
+use crate::ui::layout::{paint, UiRect};
 
 pub struct LeapLayout {
     pub panel: UiRect,
@@ -94,34 +94,6 @@ pub fn absorbs_click(mx: f32, my: f32, layout: &LeapLayout) -> bool {
 const PANEL_BG: Color = Color::new(0.043, 0.157, 0.216, 0.92);
 const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0);
 
-/// Smallest font we'll shrink to before giving up and letting it clip.
-const MIN_FONT: u16 = 11;
-
-/// Largest size at or below `max` that fits `text` into `width`, measured with
-/// `width_of`. Split from `fitted` so the shrink loop can be tested without a
-/// macroquad context (text measurement needs a live window).
-fn fitted_by(text: &str, width: f32, max: u16, width_of: impl Fn(&str, u16) -> f32) -> u16 {
-    let mut size = max;
-    while size > MIN_FONT && width_of(text, size) > width {
-        size -= 1;
-    }
-    size
-}
-
-/// Largest size at or below `max` that fits `text` into `width`. Shelly's call
-/// is a whole sentence and the panel is only as wide as the window, so on a
-/// narrow screen it has to shrink rather than run off the edge.
-fn fitted(text: &str, width: f32, max: u16) -> u16 {
-    fitted_by(text, width, max, |t, size| measure_text(t, None, size, 1.0).width)
-}
-
-/// Draw `text` centered on `y`, shrunk to fit the panel's width.
-fn centered(text: &str, p: UiRect, y: f32, max: u16, color: Color) {
-    let room = p.w - 32.0;
-    let size = fitted(text, room, max);
-    let w = measure_text(text, None, size, 1.0).width;
-    draw_text(text, p.x + p.w / 2.0 - w / 2.0, y, size as f32, color);
-}
 
 pub fn draw(session: &LeapSession, layout: &LeapLayout, call: &str, mouse: (f32, f32)) {
     let p = layout.panel;
@@ -130,7 +102,7 @@ pub fn draw(session: &LeapSession, layout: &LeapLayout, call: &str, mouse: (f32,
 
     // Shelly's call, then a status line that tracks the trip. Both are
     // centered and shrink to fit — the call is a full sentence.
-    centered(call, p, p.y + CALL_Y, 24, GOLD);
+    paint::centered_fitted(call, p, p.y + CALL_Y, 24, GOLD);
 
     let status = match session.phase {
         LeapPhase::Choosing => "How big is each leap?".to_string(),
@@ -146,7 +118,7 @@ pub fn draw(session: &LeapSession, layout: &LeapLayout, call: &str, mouse: (f32,
             None => format!("On stone {}.", session.position),
         },
     };
-    centered(&status, p, p.y + STATUS_Y, 19, Color::new(1.0, 1.0, 1.0, 0.8));
+    paint::centered_fitted(&status, p, p.y + STATUS_Y, 19, Color::new(1.0, 1.0, 1.0, 0.8));
 
     let (mx, my) = mouse;
     for (i, (rect, size)) in layout.choices.iter().enumerate() {
@@ -183,6 +155,8 @@ pub fn draw(session: &LeapSession, layout: &LeapLayout, call: &str, mouse: (f32,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::layout::paint::MIN_FONT;
+    use crate::ui::layout::text::fit_size_by;
     use robot_buddy_domain::logic::leap::{Clue, LeapPuzzle};
 
     fn session() -> LeapSession {
@@ -215,22 +189,22 @@ mod tests {
     }
 
     /// Shelly's call is a full sentence; on a narrow window it has to shrink
-    /// rather than run off the edge. Measured with a stand-in for macroquad's
-    /// text metrics (roughly half the font size per character), since real
-    /// measurement needs a live window.
+    /// rather than run off the edge. Measured with the bundled game font
+    /// (headless, the same widths macroquad renders).
     #[test]
     fn a_long_call_shrinks_to_fit_the_panel() {
         let call = "My pearl's under stone 9! You get there in 3 leaps - how big is each one?";
-        let width_of = |t: &str, size: u16| t.chars().count() as f32 * size as f32 * 0.5;
+        let m = crate::ui::layout::FontMetrics::bundled();
+        let width_of = |t: &str, size: u16| crate::ui::layout::TextMetrics::width(m, t, size);
         for width in [480.0f32, 640.0, 960.0, 1600.0] {
             let room = width - 32.0;
-            let size = fitted_by(call, room, 24, width_of);
+            let size = fit_size_by(call, room, 24, MIN_FONT, width_of);
             assert!(width_of(call, size) <= room || size == MIN_FONT,
                 "at {width}px the call still overflows at size {size}");
             assert!(size <= 24, "never bigger than asked for");
         }
         // A roomy window keeps the full-size text.
-        assert_eq!(fitted_by("short", 900.0, 24, width_of), 24);
+        assert_eq!(fit_size_by("short", 900.0, 24, MIN_FONT, width_of), 24);
     }
 
     /// The panel keeps its buttons on screen at the sizes a kid actually plays at.
