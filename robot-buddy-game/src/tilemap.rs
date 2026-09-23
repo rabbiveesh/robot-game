@@ -123,6 +123,10 @@ pub fn all_portals() -> &'static [Portal] {
         Portal { from_map: "overworld", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0, dive: false },
         Portal { from_map: "dream", from_x: 5, from_y: 5, to_map: "doghouse", to_x: 7, to_y: 1, dir: Dir::Down, secret: true, cost: 0, fuel_cost: 0, dive: false },
         Portal { from_map: "doghouse", from_x: 7, from_y: 10, to_map: "overworld", to_x: 5, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        // The Dogfish House's bubble column. Its real destination is wherever
+        // the kid dove from (`Game::dive_return`); this entry is the fallback
+        // for when that's unknown, and the marker the column needs to exist.
+        Portal { from_map: DOGFISH_HOUSE, from_x: DOGFISH_RISE.0, from_y: DOGFISH_RISE.1, to_map: "home", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // SECRET: Hidden grove — tree at top border
         Portal { from_map: "overworld", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0, dive: false },
         Portal { from_map: "dream", from_x: 15, from_y: 0, to_map: "grove", to_x: 5, to_y: 8, dir: Dir::Up, secret: true, cost: 0, fuel_cost: 0, dive: false },
@@ -204,7 +208,33 @@ pub enum RenderMode {
     /// Space theme — dark void + twinkling starfield overlay. Used by the hub
     /// and every planet surface; per-tile colors carry each world's look.
     Cosmic,
+    /// Glitch AND Aquatic at once — the Dogfish House, where a dive from a map
+    /// with no shaft lands. Glitch tiles flicker in sea colors, everything else
+    /// is washed teal, and both overlays run (scanlines + tears over drifting
+    /// bubbles). The glitch is the joke; the water says where you are.
+    SunkenGlitch,
 }
+
+impl RenderMode {
+    /// Submerged maps: bubbles, blue tint, and the rule that every visible
+    /// exit sits on a marker tile.
+    pub fn is_underwater(self) -> bool {
+        matches!(self, RenderMode::Aquatic | RenderMode::SunkenGlitch)
+    }
+
+    /// Maps whose glitch tiles flicker and whose screen tears.
+    pub fn is_glitchy(self) -> bool {
+        matches!(self, RenderMode::Glitch | RenderMode::SunkenGlitch)
+    }
+}
+
+/// Where a dive lands when the map it started on has no shaft of its own.
+pub const DOGFISH_HOUSE: &str = "dogfish_house";
+/// The tile a diver arrives on in the Dogfish House (top of the room, like
+/// the doghouse's roof drop).
+pub const DOGFISH_ARRIVAL: (usize, usize) = (7, 1);
+/// The bubble column home — where the doghouse had its door.
+pub const DOGFISH_RISE: (usize, usize) = (7, 10);
 
 impl Map {
     pub fn pixel_width(&self) -> f32 { self.width as f32 * TILE_SIZE }
@@ -336,6 +366,26 @@ impl Map {
                 vec![GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW,GW],
             ],
         }
+    }
+
+    /// The doghouse, sunk. Same room, same chest, same glitch tiles — but
+    /// underwater, with a bubble column where the door was and a little kelp
+    /// and a few bubble vents so it reads as the sea floor at a glance.
+    pub fn dogfish_house() -> Self {
+        use Tile::*;
+        let mut m = Self::doghouse();
+        m.id = DOGFISH_HOUSE;
+        m.render_mode = RenderMode::SunkenGlitch;
+        m.tiles[DOGFISH_RISE.1][DOGFISH_RISE.0] = RiseSpot;
+        // Kelp tucked into the corners (solid, off every path) and bubble
+        // vents on open floor.
+        for (x, y) in [(1, 9), (14, 9), (1, 3), (14, 3)] {
+            m.tiles[y][x] = Kelp;
+        }
+        for (x, y) in [(3, 8), (12, 8), (4, 2), (10, 3)] {
+            m.tiles[y][x] = Bubble;
+        }
+        m
     }
 
     #[allow(non_snake_case)]
@@ -721,6 +771,7 @@ impl Map {
             "shop" => Self::shop(),
             "dream" => Self::dream(),
             "doghouse" => Self::doghouse(),
+            DOGFISH_HOUSE => Self::dogfish_house(),
             "grove" => Self::grove(),
             "dev" => Self::dev(),
             "control" => Self::control(),
@@ -740,9 +791,13 @@ impl Map {
 
 /// Tile color. Glitch mode uses shifting colors for high IDs.
 pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
-    if mode == RenderMode::Glitch && matches!(tile, Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98 | Tile::GlitchWall) {
+    if mode == RenderMode::Glitch && is_glitch_tile(tile) {
         let shift = ((time * 3.0 + (tile as u8) as f32 * 0.7).sin() * 127.0 + 128.0) as u8;
         return Color::from_rgba(shift, 255 - shift, shift / 2, 255);
+    }
+
+    if mode == RenderMode::SunkenGlitch {
+        return tile_color_sunken_glitch(tile, time);
     }
 
     if mode == RenderMode::Dream {
@@ -800,6 +855,46 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
     }
 
     tile_color_normal(tile)
+}
+
+fn is_glitch_tile(tile: Tile) -> bool {
+    matches!(tile, Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98 | Tile::GlitchWall)
+}
+
+/// The Dogfish House palette: Glitch and Aquatic composed. Glitch tiles still
+/// cycle, but through sea colors (teal <-> hot magenta) instead of the
+/// doghouse's green <-> red. Every other tile takes its underwater color, or
+/// its land color washed toward deep teal — so the doghouse's wood floor and
+/// rug read as a sunken room rather than turning into plain sea.
+fn tile_color_sunken_glitch(tile: Tile, time: f32) -> Color {
+    if is_glitch_tile(tile) {
+        let k = (time * 3.0 + (tile as u8) as f32 * 0.7).sin() * 0.5 + 0.5;
+        let (teal, magenta) = ((20.0, 200.0, 190.0), (230.0, 60.0, 200.0));
+        let mix = |a: f32, b: f32| (a + (b - a) * k) / 255.0;
+        let dim = if tile == Tile::GlitchWall { 0.55 } else { 1.0 };
+        return Color::new(
+            mix(teal.0, magenta.0) * dim,
+            mix(teal.1, magenta.1) * dim,
+            mix(teal.2, magenta.2) * dim,
+            1.0,
+        );
+    }
+    match tile {
+        // Dedicated sea tiles already have their real look.
+        Tile::SeaFloor | Tile::Sand | Tile::Coral | Tile::Kelp | Tile::Bubble
+        | Tile::Current | Tile::RiseSpot | Tile::DiveSpot => tile_color_aquatic(tile),
+        _ => {
+            let land = tile_color_normal(tile);
+            let sea = Color::from_rgba(24, 112, 132, 255);
+            let w = 0.55;
+            Color::new(
+                land.r + (sea.r - land.r) * w,
+                land.g + (sea.g - land.g) * w,
+                land.b + (sea.b - land.b) * w,
+                1.0,
+            )
+        }
+    }
 }
 
 /// Space palette. Dark void with per-world ground colors so the hub, Moon,
@@ -914,6 +1009,9 @@ pub fn draw_map(map: &Map, cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, tim
             let y = row as f32 * TILE_SIZE;
             draw_rectangle(x, y, TILE_SIZE, TILE_SIZE, color);
             draw_tile_detail(tile, x, y, time, map.render_mode);
+            if map.render_mode == RenderMode::SunkenGlitch && is_glitch_tile(tile) {
+                draw_sunken_glitch_tile(x, y, time, col, row);
+            }
         }
     }
 
@@ -922,14 +1020,19 @@ pub fn draw_map(map: &Map, cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, tim
         draw_dream_sparkles(cam_x, cam_y, view_w, view_h, time);
     }
 
-    // Glitch scanlines + screen tear
-    if map.render_mode == RenderMode::Glitch {
-        draw_glitch_overlay(cam_x, cam_y, view_w, view_h, time);
+    // Underwater bubbles + a soft blue light tint. Drawn before the glitch
+    // pass so, in the Dogfish House, the scanlines and tears cut across the
+    // bubbles too — the whole picture glitches, water included.
+    if map.render_mode.is_underwater() {
+        draw_aquatic_overlay(cam_x, cam_y, view_w, view_h, time);
+    }
+    if map.render_mode == RenderMode::SunkenGlitch {
+        draw_sunken_glitch_overlay(cam_x, cam_y, view_w, view_h, time);
     }
 
-    // Underwater bubbles + a soft blue light tint
-    if map.render_mode == RenderMode::Aquatic {
-        draw_aquatic_overlay(cam_x, cam_y, view_w, view_h, time);
+    // Glitch scanlines + screen tear
+    if map.render_mode.is_glitchy() {
+        draw_glitch_overlay(cam_x, cam_y, view_w, view_h, time);
     }
 
     // Twinkling starfield drifting over space
@@ -965,6 +1068,75 @@ fn draw_aquatic_overlay(cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, time: 
     }
 }
 
+/// The Dogfish House's extra layer: glitched bubbles. Chunky square "pixel"
+/// bubbles rise with a red/cyan channel split, and a band of the water keeps
+/// jumping sideways. Bubbles say underwater; the split says glitch.
+fn draw_sunken_glitch_overlay(cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, time: f32) {
+    // A stronger sea wash than the reef — this room is deep and dim.
+    draw_rectangle(cam_x, cam_y, view_w, view_h, Color::new(0.02, 0.30, 0.50, 0.14));
+    // Sunlight slanting down through the water: a few soft, swaying shafts.
+    for i in 0..4 {
+        let top_x = cam_x + view_w * (0.12 + i as f32 * 0.26) + (time * 0.4 + i as f32).sin() * 18.0;
+        let (w, lean) = (46.0 + i as f32 * 10.0, view_h * 0.35);
+        let shaft = Color::new(0.75, 0.95, 1.0, 0.07);
+        draw_triangle(vec2(top_x, cam_y), vec2(top_x + w, cam_y), vec2(top_x + lean + w * 1.8, cam_y + view_h), shaft);
+        draw_triangle(vec2(top_x, cam_y), vec2(top_x + lean, cam_y + view_h), vec2(top_x + lean + w * 1.8, cam_y + view_h), shaft);
+    }
+    // Big round bubbles wobbling up — the plain "we're underwater" read.
+    for i in 0..10 {
+        let seed = i as f32 * 61.7 + 5.0;
+        let bx = cam_x + ((seed * 5.1).sin() * 0.5 + 0.5) * view_w + (time * 1.1 + seed).sin() * 8.0;
+        let rise = ((time * 0.12 + seed * 0.093) % 1.0).abs();
+        let by = cam_y + view_h - rise * view_h;
+        let r = 6.0 + (seed * 0.7).sin().abs() * 6.0;
+        draw_circle(bx, by, r, Color::new(0.85, 0.97, 1.0, 0.18));
+        draw_circle_lines(bx, by, r, 1.5, Color::new(0.9, 1.0, 1.0, 0.6));
+        draw_circle(bx - r * 0.35, by - r * 0.35, r * 0.25, Color::new(1.0, 1.0, 1.0, 0.7));
+    }
+    for i in 0..18 {
+        let seed = i as f32 * 97.3 + 11.0;
+        let bx = cam_x + ((seed * 3.7).sin() * 0.5 + 0.5) * view_w;
+        let rise = ((time * 0.18 + seed * 0.071) % 1.0).abs();
+        let by = cam_y + view_h - rise * view_h;
+        let size = 5.0 + (seed * 0.9).sin().abs() * 7.0;
+        // Snap to a coarse grid so the bubbles step instead of glide.
+        let (bx, by) = ((bx / 4.0).floor() * 4.0, (by / 4.0).floor() * 4.0);
+        let split = 2.0 + ((time * 7.0 + seed).sin() * 1.5).abs();
+        draw_rectangle(bx - split, by, size, size, Color::new(1.0, 0.2, 0.5, 0.35));
+        draw_rectangle(bx + split, by, size, size, Color::new(0.2, 1.0, 0.95, 0.35));
+        draw_rectangle_lines(bx, by, size, size, 1.5, Color::new(0.9, 1.0, 1.0, 0.55));
+    }
+    // A slow, rolling band of displaced water — always somewhere on screen,
+    // so a still frame shows the tear as well as a moving one.
+    let band_y = cam_y + ((time * 0.23) % 1.0) * view_h;
+    let shift = (time * 9.0).sin() * 10.0;
+    draw_rectangle(cam_x + shift, band_y, view_w, 6.0, Color::new(0.3, 1.0, 0.9, 0.18));
+    draw_rectangle(cam_x - shift, band_y + 9.0, view_w, 3.0, Color::new(1.0, 0.3, 0.8, 0.16));
+}
+
+/// A glitch tile in the Dogfish House: flat color isn't glitchy enough on its
+/// own once it's teal. Each tile gets a couple of torn horizontal slices with
+/// a red/cyan fringe and a sprinkle of dead pixels, re-rolled a few times a
+/// second so it flickers in steps rather than smoothly.
+fn draw_sunken_glitch_tile(x: f32, y: f32, time: f32, col: usize, row: usize) {
+    let tick = (time * 6.0).floor() as i32;
+    let r = |k: i32| seeded_random(col as f32, row as f32, tick * 7 + k);
+    for k in 0..2 {
+        let sy = y + r(k) * (TILE_SIZE - 6.0);
+        let h = 2.0 + r(k + 10) * 5.0;
+        let shift = (r(k + 20) - 0.5) * 14.0;
+        draw_rectangle(x, sy, TILE_SIZE, h, Color::new(0.02, 0.10, 0.16, 0.35));
+        draw_rectangle(x + shift.max(0.0), sy, TILE_SIZE - shift.abs(), h * 0.5, Color::new(1.0, 0.25, 0.55, 0.55));
+        draw_rectangle(x + (-shift).max(0.0), sy + h * 0.5, TILE_SIZE - shift.abs(), h * 0.5, Color::new(0.2, 1.0, 0.95, 0.55));
+    }
+    for k in 0..5 {
+        let px = x + (r(k + 30) * (TILE_SIZE / 4.0)).floor() * 4.0;
+        let py = y + (r(k + 40) * (TILE_SIZE / 4.0)).floor() * 4.0;
+        let c = if k % 2 == 0 { Color::new(1.0, 1.0, 1.0, 0.8) } else { Color::new(0.0, 0.05, 0.1, 0.7) };
+        draw_rectangle(px, py, 4.0, 4.0, c);
+    }
+}
+
 /// Stable pseudo-random for per-tile variation (same as old JS seededRandom)
 fn seeded_random(x: f32, y: f32, seed: i32) -> f32 {
     let mut h = (x as i32).wrapping_mul(374761393)
@@ -976,7 +1148,7 @@ fn seeded_random(x: f32, y: f32, seed: i32) -> f32 {
 
 fn draw_tile_detail(tile: Tile, x: f32, y: f32, time: f32, mode: RenderMode) {
     // Skip details for glitch tiles
-    if mode == RenderMode::Glitch && matches!(tile, Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98 | Tile::GlitchWall) { return; }
+    if mode.is_glitchy() && is_glitch_tile(tile) { return; }
 
     match tile {
         Tile::Grass     => draw_grass_detail(x, y),
@@ -1313,7 +1485,7 @@ fn draw_flower_detail(x: f32, y: f32, time: f32) {
 /// other mode keeps the land look. One seam so no detail fn can flash a land
 /// color underwater.
 fn house_palette(mode: RenderMode) -> (Color, Color, Color) {
-    if mode == RenderMode::Aquatic {
+    if mode.is_underwater() {
         (
             Color::from_rgba(216, 196, 156, 255), // sandstone wall
             Color::from_rgba(26, 110, 130, 255),  // teal trim

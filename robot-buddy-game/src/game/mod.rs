@@ -70,7 +70,7 @@ use crate::ui::dialogue::{DialogueBox, DialogueLine};
 use crate::ui::title_screen::{TitleAction, NewGameAction, NewGameForm};
 use crate::ui::hud::{DumDumHud, PearlHud, DebugOverlay};
 use crate::ui::interaction_menu::MenuOption;
-use crate::save::{self, CompanionSave, SaveBackend, SaveData, SaveSlots, Gender};
+use crate::save::{self, CompanionSave, DiveReturn, SaveBackend, SaveData, SaveSlots, Gender};
 use crate::audio;
 use crate::session;
 use crate::input::FrameInput;
@@ -583,6 +583,10 @@ pub struct Game {
     /// the long "we're UNDERWATER!" speech is a first-time thrill instead of a
     /// toll paid on every dive.
     seen_intros: std::collections::HashSet<String>,
+    /// Where the Dogfish House's bubble column leads — the map and tile of the
+    /// dive that landed there. Set by a dive from a map with no shaft, spent by
+    /// the column. Persisted. See `game/descent.rs`.
+    dive_return: Option<DiveReturn>,
     /// How fast the arcade cabinet runs. A parent dial, set in the parent
     /// section of settings and persisted per save slot — the kid never sees a
     /// label for it (Invariant 6). It changes the clock, never the numbers.
@@ -703,6 +707,7 @@ impl Game {
             satisfied_gates: std::collections::HashSet::new(),
             paid_tolls: std::collections::HashSet::new(),
             seen_intros: std::collections::HashSet::new(),
+            dive_return: None,
             game_pace: GamePace::default(),
             upgrades: std::collections::BTreeSet::new(),
             fuel: FUEL_MAX,
@@ -3175,7 +3180,13 @@ impl Game {
             Some(p) => p,
             None => return,
         };
-        self.take_portal(*portal);
+        // The Dogfish House's bubble column goes back where the dive began.
+        let portal = if portal.from_map == tilemap::DOGFISH_HOUSE {
+            self.dogfish_exit(*portal)
+        } else {
+            *portal
+        };
+        self.take_portal(portal);
     }
 
     /// Travel through `portal`: tolls, fuel, the transfer itself, and the
@@ -3697,6 +3708,7 @@ impl Game {
             satisfied_gates: self.satisfied_gates.iter().cloned().collect(),
             paid_tolls: self.paid_tolls.iter().cloned().collect(),
             seen_intros: self.seen_intros.iter().cloned().collect(),
+            dive_return: self.dive_return.clone(),
             fuel: self.fuel,
             upgrades: self.upgrades.iter().cloned().collect(),
             game_pace: self.game_pace,
@@ -3716,6 +3728,7 @@ impl Game {
         self.satisfied_gates = save_data.satisfied_gates.iter().cloned().collect();
         self.paid_tolls = save_data.paid_tolls.iter().cloned().collect();
         self.seen_intros = save_data.seen_intros.iter().cloned().collect();
+        self.dive_return = save_data.dive_return.clone();
         self.fuel = save_data.fuel;
         self.upgrades = save_data.upgrades.iter().cloned().collect();
         self.game_pace = save_data.game_pace;
@@ -4156,6 +4169,12 @@ fn secret_entry_dialogue(map_id: &str, speaker: &str) -> Vec<DialogueLine> {
         "trench" => vec![
             line("WHOA, the deep trench! It's darker down here, boss... and look at all the glowing vents!"),
             line("There's another Shelly with number-stones — find her pearl! The bright bubble column takes us back up."),
+        ],
+        tilemap::DOGFISH_HOUSE => vec![
+            // Only Inkwell offers a dive, so she's the one saying this — keep
+            // it voice-neutral all the same (no robot parts, no "boss").
+            line("Blub blub... wait. Is this a DOGHOUSE? Underwater? And it's all glitchy and flickery!"),
+            line("It's the Dogfish House! Hee hee! The bubble column takes us back up, right where we jumped in."),
         ],
         "space_hub" => vec![
             line("3... 2... 1... BLAST OFF! WHEEEE! Boss, we're in SPACE! Actual outer SPACE!"),

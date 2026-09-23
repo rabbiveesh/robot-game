@@ -2412,9 +2412,152 @@ fn a_dive_can_be_abandoned_or_taken_the_long_way_round() {
     assert_eq!(h.game.pearls, 0, "the scenic route costs nothing and earns no pearl");
 }
 
+// ─── The Dogfish House: where a dive from a shaft-less map lands ─────────
+
+/// Put the kid in Gizmo's lab — a map with no dive shaft — with Inkwell
+/// tagging along as their buddy.
+fn in_the_lab_with_inkwell(h: &mut Harness) {
+    use robot_buddy_game::tilemap::Map;
+    h.start_dev_game();
+    h.game.map = Map::lab();
+    h.game.npcs.clear(); // nobody underfoot; the lab's residents aren't the point
+    h.game.npcs_offstage.clear();
+    h.warp_to(8, 6);
+    h.bring_buddy(NpcKind::Octopus, "reef");
+}
+
+#[test]
+fn diving_with_inkwell_where_there_is_no_shaft_lands_in_the_dogfish_house() {
+    let mut h = Harness::new(9);
+    in_the_lab_with_inkwell(&mut h);
+
+    h.dive_with_buddy();
+    assert_eq!(h.game.map.id, "dogfish_house", "a dive with nowhere to go lands in the Dogfish House");
+    assert_eq!(h.game.pearls, 1, "the clean-dive pearl pays here too");
+    assert!(h.game.map.render_mode.is_underwater() && h.game.map.render_mode.is_glitchy(),
+        "the Dogfish House is the doghouse, sunk — still glitchy");
+
+    // Inkwell came along, and she says something about the place.
+    assert!(h.game.is_dialogue_active(), "the first arrival gets a line of buddy chatter");
+    h.finish_dialogue();
+    let c = h.game.companion.as_ref().expect("Inkwell is still our buddy");
+    let (dx, dy) = (
+        c.entity.tile_x.abs_diff(h.game.player.tile_x),
+        c.entity.tile_y.abs_diff(h.game.player.tile_y),
+    );
+    assert!(dx + dy <= 2, "the buddy lands right beside the kid, not stranded in the lab's coordinates");
+}
+
+#[test]
+fn the_bubble_column_goes_back_to_the_exact_spot_the_dive_began() {
+    let mut h = Harness::new(9);
+    in_the_lab_with_inkwell(&mut h);
+    let dove_from = (h.game.player.tile_x, h.game.player.tile_y);
+
+    h.dive_with_buddy();
+    h.finish_dialogue();
+    h.rise_to("lab");
+
+    assert_eq!(h.game.map.id, "lab", "the column rises to the map we dove from");
+    assert_eq!((h.game.player.tile_x, h.game.player.tile_y), dove_from,
+        "... and to the very tile we jumped in from");
+    assert!(h.game.companion.is_some(), "Inkwell comes back up with us");
+}
+
+#[test]
+fn diving_again_inside_the_dogfish_house_still_leads_home() {
+    let mut h = Harness::new(9);
+    in_the_lab_with_inkwell(&mut h);
+    let dove_from = (h.game.player.tile_x, h.game.player.tile_y);
+
+    h.dive_with_buddy();
+    h.finish_dialogue();
+    // Down again from the bottom: it's the same house, not a house inside a house.
+    h.dive_with_buddy();
+    assert_eq!(h.game.map.id, "dogfish_house");
+    assert_eq!(h.game.pearls, 2, "every clean dive pays, wherever it starts");
+
+    h.rise_to("lab");
+    assert_eq!((h.game.player.tile_x, h.game.player.tile_y), dove_from,
+        "one column still takes us all the way back to the first jump");
+}
+
+#[test]
+fn quitting_inside_the_dogfish_house_does_not_strand_the_kid() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::save::InMemoryBackend;
+
+    let backend = InMemoryBackend::default();
+    let mut h = Harness::with_backend(9, backend.clone());
+    in_the_lab_with_inkwell(&mut h);
+    let dove_from = (h.game.player.tile_x, h.game.player.tile_y);
+    h.dive_with_buddy();
+    h.finish_dialogue();
+
+    // The tab closes (hiding it saves).
+    backend.set_page_hidden(true);
+    h.idle();
+    backend.set_page_hidden(false);
+
+    // Next session: pick the save back up.
+    let mut h = Harness::with_backend(9, backend.clone());
+    h.press(KeyCode::Key1);
+    h.finish_dialogue();
+    assert_eq!(h.game.map.id, "dogfish_house", "we pick up where we left off");
+
+    h.rise_to("lab");
+    assert_eq!((h.game.player.tile_x, h.game.player.tile_y), dove_from,
+        "the way back survives a save and reload");
+}
+
+#[test]
+fn an_old_save_inside_the_dogfish_house_still_has_a_way_out() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::save::{InMemoryBackend, STORAGE_KEY};
+
+    // Make a save down there, then strip the return point — as if it came
+    // from a build that never wrote one.
+    let backend = InMemoryBackend::default();
+    let mut h = Harness::with_backend(9, backend.clone());
+    in_the_lab_with_inkwell(&mut h);
+    h.dive_with_buddy();
+    h.finish_dialogue();
+    backend.set_page_hidden(true);
+    h.idle();
+    let mut slots: serde_json::Value = serde_json::from_str(&backend.raw(STORAGE_KEY).unwrap()).unwrap();
+    assert!(slots[0].get("dive_return").is_some(), "this build writes the return point");
+    slots[0].as_object_mut().unwrap().remove("dive_return");
+    let old = InMemoryBackend::with_raw_saves(&slots.to_string());
+
+    let mut h = Harness::with_backend(9, old);
+    h.press(KeyCode::Key1);
+    h.finish_dialogue();
+    assert_eq!(h.game.map.id, "dogfish_house", "the old save loads");
+
+    // With no record of where the dive began, the column goes somewhere safe.
+    h.rise_to("home");
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
+fn diving_with_inkwell_on_the_reef_still_goes_to_the_trench() {
+    use robot_buddy_game::tilemap::Map;
+
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = Map::reef();
+    h.game.npcs.clear();
+    h.game.npcs_offstage.clear();
+    h.warp_to(36, 10);
+    h.bring_buddy(NpcKind::Octopus, "reef");
+
+    h.dive_with_buddy();
+    assert_eq!(h.game.map.id, "trench", "the reef has a real shaft, so the dive takes it");
+}
+
 #[test]
 fn every_visible_underwater_exit_sits_on_a_marker_tile() {
-    use robot_buddy_game::tilemap::{self, Map, RenderMode, Tile};
+    use robot_buddy_game::tilemap::{self, Map, Tile};
 
     // The structural contract behind "the rise spots are invisible": any
     // non-secret portal leaving an underwater map must sit on a tile that
@@ -2422,7 +2565,7 @@ fn every_visible_underwater_exit_sits_on_a_marker_tile() {
     // floor is undiscoverable by a kid.
     for p in tilemap::all_portals() {
         let map = Map::by_id(p.from_map);
-        if map.render_mode != RenderMode::Aquatic || p.secret {
+        if !map.render_mode.is_underwater() || p.secret {
             continue;
         }
         let tile = map.tiles[p.from_y][p.from_x];

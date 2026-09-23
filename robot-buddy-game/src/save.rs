@@ -88,6 +88,21 @@ pub struct SaveData {
     /// `migrate_legacy` can infer they've already seen).
     #[serde(default)]
     pub seen_intros: Vec<String>,
+    /// Where the Dogfish House's bubble column leads: the map and tile the kid
+    /// dove from. Saved so quitting down there never strands anyone. Older
+    /// saves (and saves made anywhere else) load as None, and the column falls
+    /// back to a safe spot.
+    #[serde(default)]
+    pub dive_return: Option<DiveReturn>,
+}
+
+/// The spot a dive from a shaft-less map started from — the way back up out
+/// of the Dogfish House.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DiveReturn {
+    pub map_id: String,
+    pub tile_x: usize,
+    pub tile_y: usize,
 }
 
 fn default_fuel() -> u32 { 10 }

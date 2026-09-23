@@ -649,6 +649,73 @@ impl Harness {
         panic!("the descent never resolved after landing on the door");
     }
 
+    // ─── Buddy helpers ───────────────────────────────────
+
+    /// Make `kind` (from `home_map`'s roster) the buddy following the player,
+    /// standing on an open tile beside them. Sparky waits at home, as he does
+    /// whenever someone else is tagging along.
+    pub fn bring_buddy(&mut self, kind: NpcKind, home_map: &'static str) {
+        let mut buddy = robot_buddy_game::npc::npcs_for_map(home_map).into_iter()
+            .find(|n| n.kind == kind)
+            .unwrap_or_else(|| panic!("no {kind:?} in the {home_map} roster"));
+        let (px, py) = (self.game.player.tile_x, self.game.player.tile_y);
+        let (bx, by) = [(px + 1, py), (px.wrapping_sub(1), py), (px, py + 1), (px, py.wrapping_sub(1))]
+            .into_iter()
+            .find(|&(x, y)| !self.game.map.is_solid(x, y)
+                && !self.game.npcs.iter().any(|n| (n.entity.tile_x, n.entity.tile_y) == (x, y)))
+            .expect("no open tile beside the player for the buddy");
+        buddy.entity.tile_x = bx;
+        buddy.entity.tile_y = by;
+        buddy.entity.x = bx as f32 * 48.0;
+        buddy.entity.y = by as f32 * 48.0;
+        buddy.entity.target_x = buddy.entity.x;
+        buddy.entity.target_y = buddy.entity.y;
+        buddy.start_following();
+        self.game.companion = Some(buddy);
+        self.game.sparky_parked = true;
+    }
+
+    /// Turn to the buddy following us and talk to them. They're always right
+    /// beside the player after a warp, so no walking is needed.
+    pub fn talk_to_buddy(&mut self) {
+        let (bx, by) = {
+            let c = self.game.companion.as_ref().expect("talk_to_buddy: nobody's following");
+            (c.entity.tile_x, c.entity.tile_y)
+        };
+        let dx = bx as i32 - self.game.player.tile_x as i32;
+        let dy = by as i32 - self.game.player.tile_y as i32;
+        let key = match (dx, dy) {
+            (0, -1) => KeyCode::Up,
+            (0, 1)  => KeyCode::Down,
+            (-1, 0) => KeyCode::Left,
+            (1, 0)  => KeyCode::Right,
+            _ => panic!("the buddy isn't beside the player (offset {dx},{dy})"),
+        };
+        self.hold(key);
+        self.interact();
+    }
+
+    /// Ask the buddy for a dive and play it cleanly to the bottom.
+    pub fn dive_with_buddy(&mut self) {
+        self.talk_to_buddy();
+        self.select_option("dive");
+        assert_eq!(self.game.state, GameState::Descent, "asking the buddy for a dive opens the descent");
+        self.dive_to_the_door();
+    }
+
+    /// Walk onto the map's rising bubble column and ride it up to `dest_map`.
+    pub fn rise_to(&mut self, dest_map: &str) {
+        use robot_buddy_game::tilemap::Tile;
+        let map = &self.game.map;
+        let (rx, ry) = (0..map.height)
+            .flat_map(|y| (0..map.width).map(move |x| (x, y)))
+            .find(|&(x, y)| map.tiles[y][x] == Tile::RiseSpot)
+            .unwrap_or_else(|| panic!("no bubble column on '{}'", map.id));
+        // Walk to the tile above the column, then step down into it.
+        self.walk_to(rx, ry - 1);
+        self.step_through_portal(KeyCode::Down, dest_map);
+    }
+
     // ─── Give-Swag helpers ───────────────────────────────
 
     /// Click the row for `item_id` in the open "Give Swag" picker, handing it
