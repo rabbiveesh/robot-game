@@ -165,6 +165,10 @@ pub struct TextSpec {
     /// Extra space between wrapped lines at the preferred size (scales down
     /// with the font).
     pub line_gap: f32,
+    /// Hold room for at least this many lines even when the text is shorter
+    /// (or empty). A slot that fills in later — feedback under a question —
+    /// then can't shove the buttons below it around.
+    pub reserve_lines: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -210,6 +214,7 @@ pub fn text<Id>(s: impl Into<String>, size: u16, fit: Fit) -> Node<Id> {
             fit,
             align: TextAlign::Left,
             line_gap: (size as f32 * 0.25).round(),
+            reserve_lines: 0,
         }),
         id: None,
         hit: false,
@@ -371,6 +376,11 @@ impl<Id> Node<Id> {
     }
     pub fn line_gap(mut self, v: f32) -> Self {
         self.text_spec().line_gap = v;
+        self
+    }
+    /// Keep room for `n` lines whether or not the text needs them.
+    pub fn reserve_lines(mut self, n: usize) -> Self {
+        self.text_spec().reserve_lines = n;
         self
     }
 

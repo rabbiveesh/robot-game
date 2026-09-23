@@ -151,7 +151,7 @@ pub fn min_width(spec: &TextSpec, m: &dyn TextMetrics) -> f32 {
 /// Height the text wants at width `w` (no height limit).
 pub fn natural_height(spec: &TextSpec, w: f32, m: &dyn TextMetrics) -> f32 {
     let s = shape(spec, w, f32::INFINITY, m);
-    block_height(spec, s.lines.len(), s.size, m)
+    block_height(spec, s.lines.len(), s.size, m).max(block_height(spec, spec.reserve_lines, spec.size, m))
 }
 
 /// The least height the text can live in at width `w` without cutting.
@@ -162,7 +162,7 @@ pub fn min_height(spec: &TextSpec, w: f32, m: &dyn TextMetrics) -> f32 {
         0 => lines,
         cap => lines.min(cap),
     };
-    block_height(spec, lines, min, m)
+    block_height(spec, lines.max(spec.reserve_lines), min, m)
 }
 
 #[cfg(test)]
@@ -172,7 +172,16 @@ mod tests {
     use crate::ui::layout::node::TextAlign;
 
     fn spec(t: &str, size: u16, fit: Fit) -> TextSpec {
-        TextSpec { text: t.into(), size, fit, align: TextAlign::Left, line_gap: 4.0 }
+        TextSpec { text: t.into(), size, fit, align: TextAlign::Left, line_gap: 4.0, reserve_lines: 0 }
+    }
+
+    #[test]
+    fn reserved_lines_hold_their_room_when_empty() {
+        let m = FontMetrics::bundled();
+        let empty = TextSpec { reserve_lines: 2, ..spec("", 20, Fit::wrap_lines(14, 2)) };
+        let full = spec("aaaa bbbb cccc dddd", 20, Fit::wrap_lines(14, 2)); // 10px/char: two 9-char lines
+        assert_eq!(natural_height(&empty, 120.0, m), natural_height(&full, 120.0, m),
+            "an empty 2-line slot is as tall as two lines of text");
     }
 
     #[test]

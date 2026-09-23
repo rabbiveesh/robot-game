@@ -14,7 +14,7 @@ use crate::prelude::*;
 use robot_buddy_domain::economy::shop::ShopItem;
 
 use crate::input::FrameInput;
-use crate::ui::layout::{self, button, col, gap_box, paint, region, row, spacer, text, Fit, Frame, Kind, Node, Page};
+use crate::ui::layout::{self, button, col, paint, region, row, spacer, text, Fit, Frame, Kind, Node, Page};
 pub use crate::ui::layout::UiRect;
 
 /// Everything the picker shows.
@@ -70,7 +70,6 @@ impl SwagLayout {
 }
 
 const PANEL_W: f32 = 560.0;
-const PANEL_H: f32 = 560.0;
 const PREVIEW: (f32, f32) = (60.0, 64.0);
 
 fn build(m: &SwagModel, page: Page) -> Node<SwagId> {
@@ -117,7 +116,9 @@ fn build(m: &SwagModel, page: Page) -> Node<SwagId> {
     layout::centered_on_screen(
         col()
             .id(SwagId::Panel)
-            .size(PANEL_W, PANEL_H)
+            // As tall as the wardrobe needs, up to the screen; paging only
+            // kicks in once even the whole screen can't hold it.
+            .w(PANEL_W)
             .min_h(0.0)
             .min_w(0.0)
             .pad_edges(32.0, 8.0, 16.0, 14.0)

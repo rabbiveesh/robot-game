@@ -155,6 +155,17 @@ fn swag_picker_is_sane_with_a_full_wardrobe() {
     }
 }
 
+/// The panel grows with the screen: a tall phone shows the whole wardrobe
+/// instead of paging with room to spare.
+#[test]
+fn a_tall_screen_shows_the_whole_wardrobe_on_one_page() {
+    let items = swag_items();
+    let taken = BTreeSet::new();
+    let m = swag::SwagModel { recipient: "Tali", items: &items, taken: &taken, message: None, page: 0 };
+    let l = swag::layout(&m, (480.0, 800.0));
+    assert!(!l.page.paged(), "all {} pieces fit at 480x800: {:?}", items.len(), l.page);
+}
+
 #[test]
 fn empty_swag_picker_is_sane() {
     let taken = BTreeSet::new();
@@ -260,6 +271,25 @@ mod challenge_sweep {
                                 e.join("\n  - ")
                             );
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A miss shows "Hmm, not quite!" in a slot that was already there, so the
+    /// answer buttons don't jump out from under the kid's finger.
+    #[test]
+    fn a_wrong_answer_does_not_move_the_answer_buttons() {
+        for &screen in &SWEEP_SCREENS {
+            for c in challenges().iter().take(12) {
+                for display in [c.display_text.as_str(), WORD_PROBLEM] {
+                    let p = presented(c, display);
+                    let fed = challenge_reducer(p.clone(), ChallengeAction::AnswerSubmitted { answer: wrong(c) });
+                    assert_eq!(fed.phase, Phase::Feedback);
+                    let (before, after) = (challenge::layout(&p, c, screen), challenge::layout(&fed, c, screen));
+                    for i in 0..c.choices.len() {
+                        assert_eq!(before.choice(i), after.choice(i), "button {i} moved at {screen:?} for {display:?}");
                     }
                 }
             }

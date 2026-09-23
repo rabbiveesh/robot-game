@@ -13,7 +13,7 @@ use robot_buddy_domain::types::Phase;
 
 use super::visuals;
 use crate::input::FrameInput;
-use crate::ui::layout::{self, col, gap_box, paint, region, row, spacer, text, Align, Fit, Frame, Justify, Kind, Node};
+use crate::ui::layout::{self, col, gap_box, paint, region, row, text, Align, Fit, Frame, Justify, Kind, Node};
 pub use crate::ui::layout::UiRect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,7 +107,6 @@ pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) ->
     let panel = if cs.phase == Phase::Teaching {
         let header = if cs.told_me { "Here's how it works!" } else { "Let's figure it out!" };
         col()
-            .min_h(460.0_f32.min(sh - 2.0 * MARGIN))
             .gap(gap.min(10.0))
             .child(text(header, 28, Fit::shrink(18)).id(ChallengeId::Header).center_text().fixed())
             .child(text(q_text, 34, Fit::shrink_then_wrap(20, 6)).id(ChallengeId::Question).center_text())
@@ -116,10 +115,17 @@ pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) ->
             .maybe(cs.feedback.as_ref().map(|fb| {
                 text(fb.display.clone(), 24, Fit::wrap_lines(14, 2)).id(ChallengeId::Feedback).center_text()
             }))
-            .child(spacer())
             .child(text("Press SPACE or click to continue", 22, Fit::shrink(14)).id(ChallengeId::Dismiss).center_text().fixed())
     } else {
         let feedback = (cs.phase == Phase::Feedback).then_some(cs.feedback.as_ref()).flatten();
+        // While the kid is answering, the feedback line is always laid out —
+        // empty until they miss — so "Hmm, not quite!" appearing can't shove
+        // the answer buttons out from under their finger.
+        let answering = cs.phase == Phase::Presented || cs.phase == Phase::Feedback;
+        let feedback_slot = answering.then(|| {
+            let msg = feedback.map(|fb| fb.display.clone()).unwrap_or_default();
+            text(msg, 28, Fit::wrap_lines(16, 2)).id(ChallengeId::Feedback).center_text().reserve_lines(2)
+        });
         let scaffolds = (cs.phase == Phase::Presented || cs.phase == Phase::Feedback).then(|| {
             row()
                 .gap(12.0)
@@ -140,11 +146,10 @@ pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) ->
                 .child(text(praise, 44, Fit::shrink(24)).id(ChallengeId::Praise).center_text())
         });
         col()
-            .min_h((if cs.hint_used { 560.0_f32 } else { 420.0 }).min(sh - 2.0 * MARGIN))
             .gap(gap)
             .child(text(q_text, 42, Fit::shrink_then_wrap(22, 6)).id(ChallengeId::Question).center_text())
             .maybe(cs.hint_used.then(|| visual(challenge, visual_max_w)))
-            .maybe(feedback.map(|fb| text(fb.display.clone(), 28, Fit::wrap_lines(16, 2)).id(ChallengeId::Feedback).center_text()))
+            .maybe(feedback_slot)
             .child(
                 row()
                     .gap(20.0)
