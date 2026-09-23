@@ -24,3 +24,5 @@ robot-buddy-domain = { path = "../robot-buddy-domain" }
 # source for rendered string/char literals (syn).
 ttf-parser = "0.21"
 syn = { version = "2", features = ["full", "visit"] }
+# Layout discipline test: walk macro token streams for forbidden calls.
+proc-macro2 = "1"
