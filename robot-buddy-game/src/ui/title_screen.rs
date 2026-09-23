@@ -48,16 +48,12 @@ pub enum TitleActionKind {
 /// Which slots hold a save this build can't read (see `SaveBackend::unreadable_slots`).
 pub type RestingSlots = [Option<UnreadableSlot>; 3];
 
-/// No resting slots — for callers that haven't wired `unreadable_slots` yet.
+/// No resting slots: a fresh game before storage has been read.
 pub const NO_RESTING_SLOTS: RestingSlots = [None, None, None];
-
-pub fn layout_title(slots: &SaveSlots, screen: (f32, f32)) -> TitleLayout {
-    layout_title_guarded(slots, &NO_RESTING_SLOTS, screen)
-}
 
 /// Title layout that keeps unreadable ("resting") slots from being offered
 /// as free.
-pub fn layout_title_guarded(slots: &SaveSlots, resting: &RestingSlots, screen: (f32, f32)) -> TitleLayout {
+pub fn layout_title(slots: &SaveSlots, resting: &RestingSlots, screen: (f32, f32)) -> TitleLayout {
     let (sw, _) = screen;
     let slot_w = 400.0;
     let slot_h = 70.0;
@@ -143,12 +139,8 @@ pub fn handle_title_input(layout: &TitleLayout, input: &FrameInput) -> Option<Ti
     None
 }
 
-pub fn draw_title(layout: &TitleLayout, slots: &SaveSlots, time: f32, mouse_pos: (f32, f32)) {
-    draw_title_guarded(layout, slots, &NO_RESTING_SLOTS, time, mouse_pos)
-}
-
 /// Title screen that draws unreadable slots as "resting" rather than empty.
-pub fn draw_title_guarded(
+pub fn draw_title(
     layout: &TitleLayout,
     slots: &SaveSlots,
     resting: &RestingSlots,

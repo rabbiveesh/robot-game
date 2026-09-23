@@ -600,6 +600,9 @@ pub struct Game {
     pub dum_dums: u32,
     pub gifts_given: HashMap<String, u32>,
     save_slots: SaveSlots,
+    /// Slots whose JSON this build can't read. The title screen shows them as
+    /// napping (no Load/New) so a kid can't start a game over a real save.
+    resting_slots: ui::title_screen::RestingSlots,
     active_slot: usize,
     auto_save_timer: f32,
     save_backend: Box<dyn SaveBackend>,
@@ -701,6 +704,7 @@ impl Game {
             dum_dums: 0,
             gifts_given: HashMap::new(),
             save_slots: [None, None, None],
+            resting_slots: ui::title_screen::NO_RESTING_SLOTS,
             active_slot: 0,
             auto_save_timer: 0.0,
             save_backend,
@@ -726,6 +730,7 @@ impl Game {
     /// at startup so the title screen reflects what's on disk.
     pub fn refresh_save_slots(&mut self) {
         self.save_slots = self.save_backend.load_all();
+        self.resting_slots = self.save_backend.unreadable_slots();
     }
 
     // ─── Test-friendly accessors ────────────────────────
@@ -1093,7 +1098,7 @@ impl Game {
     // ─── State arms ─────────────────────────────────────
 
     fn step_title(&mut self, input: &FrameInput, screen: (f32, f32)) {
-        let layout = ui::title_screen::layout_title(&self.save_slots, screen);
+        let layout = ui::title_screen::layout_title(&self.save_slots, &self.resting_slots, screen);
         let action = ui::title_screen::handle_title_input(&layout, input);
         if let Some(action) = action {
             match action {
@@ -1125,7 +1130,7 @@ impl Game {
                 }
                 TitleAction::DeleteSlot(slot) => {
                     self.save_backend.delete(slot);
-                    self.save_slots = self.save_backend.load_all();
+                    self.refresh_save_slots();
                 }
             }
         }
@@ -1197,7 +1202,7 @@ impl Game {
 
                         let save_data = self.gather_save_data();
                         self.save_backend.save_to(slot, &save_data);
-                        self.save_slots = self.save_backend.load_all();
+                        self.refresh_save_slots();
                         self.auto_save_timer = 0.0;
 
                         self.intake = Some(IntakeState::new(form.math_band));
@@ -3531,8 +3536,8 @@ impl Game {
     pub fn render(&mut self, screen: (f32, f32), input: &FrameInput) {
         match self.state {
             GameState::Title => {
-                let layout = ui::title_screen::layout_title(&self.save_slots, screen);
-                ui::title_screen::draw_title(&layout, &self.save_slots, self.game_time, input.mouse_pos);
+                let layout = ui::title_screen::layout_title(&self.save_slots, &self.resting_slots, screen);
+                ui::title_screen::draw_title(&layout, &self.save_slots, &self.resting_slots, self.game_time, input.mouse_pos);
                 return;
             }
             GameState::NewGame => {

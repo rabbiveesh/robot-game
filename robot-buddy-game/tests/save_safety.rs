@@ -122,6 +122,23 @@ fn an_unreadable_save_file_is_backed_up_before_anything_overwrites_it() {
     assert_eq!(backend.load_all()[0].as_ref().unwrap().name, "Ari");
 }
 
+/// Through the real game: a kid mashing "2" on a napping slot stays on the
+/// title screen, and the save underneath is still there afterwards.
+#[test]
+fn a_kid_on_the_title_screen_cannot_start_over_a_napping_save() {
+    let backend = InMemoryBackend::with_raw_saves(&format!("[null,{},{}]", corrupt_noa(), ari()));
+    let before = backend.raw(robot_buddy_game::save::STORAGE_KEY).unwrap();
+    let mut h = common::Harness::with_backend(3, backend.clone());
+    assert_eq!(h.game.state, robot_buddy_game::game::GameState::Title);
+    for _ in 0..3 {
+        h.press(macroquad::prelude::KeyCode::Key2);
+    }
+    assert_eq!(h.game.state, robot_buddy_game::game::GameState::Title,
+        "the napping slot must not open the new-game form");
+    assert_eq!(backend.raw(robot_buddy_game::save::STORAGE_KEY).unwrap(), before,
+        "nothing was written over the unreadable save");
+}
+
 fn decode_first_save(json: &str) -> SaveData {
     match decode_saves(json).slots.into_iter().next().unwrap() {
         StoredSlot::Save(s) => s,
@@ -134,7 +151,7 @@ fn decode_first_save(json: &str) -> SaveData {
 #[test]
 fn the_title_screen_never_offers_an_unreadable_slot_as_new() {
     let backend = InMemoryBackend::with_raw_saves(&format!("[null,{},{}]", corrupt_noa(), ari()));
-    let layout = title_screen::layout_title_guarded(
+    let layout = title_screen::layout_title(
         &backend.load_all(), &backend.unreadable_slots(), common::SCREEN);
 
     assert_eq!(layout.slots[0].primary_action, TitleActionKind::NewGame);
