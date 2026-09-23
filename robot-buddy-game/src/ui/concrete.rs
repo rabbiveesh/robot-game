@@ -15,8 +15,11 @@
 //!   - Structured, not scattered: counters snap into 2×5 ten-frames, filled in
 //!     order. Pull one from the middle and the rest slide over, so the frame is
 //!     always "full up to here" and 8 + 5 shows up as a full ten and 3 more.
-//!   - Ten is a thing: a filled row of five glows; a full frame pulses and
-//!     wears a "10" (and the buddy says so — see `Landed::filled_ten`).
+//!   - Ten is a thing (`docs/grouping-axis-spec.md`): a filled row of five
+//!     glows; a full frame pulses and wears a "10" (the buddy says so — see
+//!     `Landed::filled_ten`). A full row in the tray sits on a stick that moves
+//!     all five at once; tapping a full frame's "10" snaps its ten counters
+//!     into one rod, and tapping the rod opens it again.
 //!   - Drag, not tap: a press-and-release in place slides the counter home.
 //!     (Where the platform drops releases — X11 touchscreens — a second press
 //!     places the carried counter instead, so it degrades to tap-tap.)
@@ -25,9 +28,10 @@
 //!   - No words on screen: the buddy narrates (`intro_line`); a pre-reader can
 //!     use this cold. The "10" badge is a numeral tied to its quantity.
 //!
-//! The math lives in `logic::manipulate_concrete`; this module is layout
-//! (pure, hit-testable), pointer handling, and drawing, plus the purely visual
-//! slides and glows that make each move legible.
+//! The math lives in `logic::manipulate_concrete` (a row move is five `Place`s;
+//! a rod is only a way of showing a full frame). This module is layout (pure,
+//! hit-testable), pointer handling, and drawing, plus the purely visual slides
+//! and glows that make each move legible.
 
 use ::rand::Rng;
 use crate::prelude::*;
@@ -42,7 +46,8 @@ use crate::input::FrameInput;
 use crate::ui::layout::UiRect;
 
 /// The workspace's natural size: two blocks of five spaces, the gap between
-/// them, and room either side for a frame's "10".
+/// them, and room either side (the row sticks' handles on the left of the
+/// tray; a frame's "10" on the frames' outer side).
 const NATURAL_H: f32 = 184.0;
 const BADGE_ROOM: f32 = 46.0;
 const NATURAL_W: f32 = 2.0 * COLS as f32 * CELL + MID_GAP + 2.0 * BADGE_ROOM;
@@ -68,11 +73,14 @@ const OUTLINE: Color = Color::new(0.0, 0.0, 0.0, 0.35);
 const SHADOW: Color = Color::new(0.0, 0.0, 0.0, 0.35);
 const FRAME_BG: Color = Color::new(1.0, 1.0, 1.0, 0.06);
 const FRAME_LINE: Color = Color::new(0.690, 0.745, 0.773, 0.9);  // #B0BEC5
+const FRAME_LINE_FAINT: Color = Color::new(0.690, 0.745, 0.773, 0.25);
 const SLOT_GHOST: Color = Color::new(1.0, 1.0, 1.0, 0.12);
 const HELD_GAP: Color = Color::new(1.0, 1.0, 1.0, 0.45);
 const ARROW: Color = Color::new(1.0, 1.0, 1.0, 0.25);
 const GLOW: Color = Color::new(1.0, 0.95, 0.6, 1.0);
 const TEN_BADGE: Color = Color::new(0.412, 0.941, 0.682, 1.0);   // #69F0AE
+const STICK: Color = Color::new(0.635, 0.490, 0.353, 1.0);       // wood
+const STICK_GRIP: Color = Color::new(0.0, 0.0, 0.0, 0.3);
 
 /// The two places counters live.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,15 +100,23 @@ pub struct CounterId {
     pub rank: usize,
 }
 
-/// A counter the kid is carrying. UI-only — the domain session only changes
-/// when it lands on target.
-#[derive(Clone, Copy, Debug)]
+/// What the kid is carrying: one counter, or a whole row of five. UI-only —
+/// the domain session only changes when it lands on target.
+#[derive(Clone, Debug)]
 pub struct Drag {
     pub group: u8,
-    /// Which space it was lifted from (index into that zone's spaces). It
-    /// stays empty while carried.
-    pub slot: usize,
+    /// The spaces it was lifted from (indices into the source zone's spaces).
+    /// They stay empty while carried.
+    pub slots: Vec<usize>,
     pub pos: (f32, f32),
+    /// Picked up one by one while a whole row was there for the taking.
+    single_past_a_row: bool,
+}
+
+impl Drag {
+    pub fn is_row(&self) -> bool {
+        self.slots.len() > 1
+    }
 }
 
 /// A counter gliding from where it was drawn to its new space.
@@ -115,7 +131,7 @@ struct Slide {
 enum GlowKind {
     /// A row of five just filled (frame index, row 0/1).
     Row(usize, usize),
-    /// A whole frame of ten just filled.
+    /// A whole frame of ten just filled, or became a rod.
     Frame(usize),
 }
 
@@ -128,22 +144,40 @@ struct Glow {
 pub struct Workspace {
     pub session: ConcreteSession,
     pub drag: Option<Drag>,
+    /// Which frames the kid has snapped into a ten-rod. Only honored while the
+    /// frame is full.
+    rods: [bool; 2],
+    /// Singles moved while a whole row was available (the row-stick nudge
+    /// waits for a few of these).
+    singles_past_a_row: usize,
     slides: Vec<Slide>,
     glows: Vec<Glow>,
     clock: f32,
 }
 
-/// What a landed counter did, for the game to react to.
+/// What a landing did, for the game to react to.
 pub struct Landed {
     /// Every counter is where it's going: the model is built.
     pub built: bool,
-    /// This counter completed a ten-frame.
+    /// This move completed a ten-frame.
     pub filled_ten: bool,
+    /// It was a whole row of five, moved as one.
+    pub row: bool,
+    /// How many singles the kid has moved while a row was available, so far.
+    pub singles_past_a_row: usize,
 }
 
 impl Workspace {
     pub fn new(session: ConcreteSession) -> Self {
-        Workspace { session, drag: None, slides: vec![], glows: vec![], clock: 0.0 }
+        Workspace {
+            session,
+            drag: None,
+            rods: [false; 2],
+            singles_past_a_row: 0,
+            slides: vec![],
+            glows: vec![],
+            clock: 0.0,
+        }
     }
 
     /// A workspace for this challenge, or `None` if it doesn't fit on the
@@ -186,55 +220,116 @@ impl Workspace {
         }
     }
 
-    /// Land the carried counter at `pos`: apply the move to the session, then
-    /// slide every counter whose space changed from where it was shown.
-    fn land(&mut self, action: ConcreteAction, pos: (f32, f32), area: UiRect) -> Landed {
-        let before = layout(self, area);
-        let shown: Vec<(CounterId, (f32, f32))> =
-            before.counters().map(|c| (c.id, self.shown_at(c))).collect();
-        let frame_count = |l: &Layout| l.in_frames.len();
-        let had = frame_count(&before);
+    /// Where every counter is drawn right now, before a change.
+    fn snapshot(&self, area: UiRect) -> Vec<(CounterId, (f32, f32))> {
+        layout(self, area).counters().map(|c| (c.id, self.shown_at(c))).collect()
+    }
 
-        self.drag = None;
-        self.session = concrete_reducer(self.session.clone(), action);
+    /// After a change: every counter whose space moved slides there from where
+    /// it was drawn. Counters that didn't exist before come from `arrivals`,
+    /// in order (where the kid let go).
+    fn slide_from(&mut self, before: &[(CounterId, (f32, f32))], arrivals: &[(f32, f32)], area: UiRect) {
         let after = layout(self, area);
-
+        let mut arrivals = arrivals.iter();
         let mut slides = Vec::new();
         for c in after.counters() {
-            let from = shown.iter().find(|(id, _)| *id == c.id).map(|&(_, p)| p).unwrap_or(pos);
+            let from = match before.iter().find(|(id, _)| *id == c.id) {
+                Some(&(_, p)) => p,
+                None => arrivals.next().copied().unwrap_or(c.center),
+            };
             if from != c.center {
                 slides.push(Slide { id: c.id, from, age: 0.0 });
             }
         }
         self.slides = slides;
+    }
 
-        // Filling a row of five, or a whole ten, is worth a moment.
-        let now = frame_count(&after);
+    /// Land what's carried at `pos`: apply the move to the session (once per
+    /// counter), then slide everything whose space changed.
+    fn land(&mut self, pos: (f32, f32), area: UiRect) -> Landed {
+        let Some(drag) = self.drag.clone() else {
+            return Landed { built: self.is_built(), filled_ten: false, row: false, singles_past_a_row: self.singles_past_a_row };
+        };
+        let before = self.snapshot(area);
+        let had = layout(self, area).in_frames.len();
+        let cell = layout(self, area).cell;
+
+        let action = match self.session.puzzle.kind {
+            ConcreteKind::TakeAway => ConcreteAction::Remove { group: drag.group },
+            _ => ConcreteAction::Place { group: drag.group },
+        };
+        self.drag = None;
+        for _ in &drag.slots {
+            self.session = concrete_reducer(self.session.clone(), action);
+        }
+        if drag.single_past_a_row {
+            self.singles_past_a_row += 1;
+        }
+        // A rod only stands while its frame is full.
+        let full = frames_full(&layout(self, area));
+        for (i, rod) in self.rods.iter_mut().enumerate() {
+            *rod &= full.get(i).copied().unwrap_or(false);
+        }
+
+        self.slide_from(&before, &carried_positions(pos, drag.slots.len(), cell), area);
+
+        // Filling a row of five, or a whole ten, is worth a moment — for every
+        // one this move completed (a row of five can finish both).
+        let now = layout(self, area).in_frames.len();
         let mut filled_ten = false;
-        if now > had {
-            if now % 10 == 0 {
-                self.glows.push(Glow { kind: GlowKind::Frame(now / 10 - 1), age: 0.0 });
+        for k in (had + 1)..=now {
+            if k % 10 == 0 {
+                self.glows.push(Glow { kind: GlowKind::Frame(k / 10 - 1), age: 0.0 });
                 filled_ten = true;
-            } else if now % 5 == 0 {
-                self.glows.push(Glow { kind: GlowKind::Row(now / 10, 0), age: 0.0 });
+            } else if k % 5 == 0 {
+                self.glows.push(Glow { kind: GlowKind::Row(k / 10, 0), age: 0.0 });
             }
         }
-        Landed { built: self.is_built(), filled_ten }
+        Landed { built: self.is_built(), filled_ten, row: drag.is_row(), singles_past_a_row: self.singles_past_a_row }
     }
 
-    /// The carried counter missed: it glides back into the space it left.
+    /// What's carried missed: it glides back into the spaces it left.
     fn slide_home(&mut self, pos: (f32, f32), area: UiRect) {
-        let Some(drag) = self.drag.take() else { return };
+        let Some(drag) = self.drag.clone() else { return };
+        let cell = layout(self, area).cell;
+        self.drag = None;
+        // The returning counters are the ones whose spaces were gaps.
         let after = layout(self, area);
-        let home = match after.source_zone() {
-            Zone::Frames => after.frame_cells.get(drag.slot).copied(),
-            Zone::Side => after.side_slots.get(drag.slot).map(|s| s.0),
-        };
-        let id = after.counters().find(|c| Some(c.center) == home).map(|c| c.id);
-        if let Some(id) = id {
-            self.slides = vec![Slide { id, from: pos, age: 0.0 }];
-        }
+        let homes: Vec<(f32, f32)> = drag
+            .slots
+            .iter()
+            .filter_map(|&slot| match after.source_zone() {
+                Zone::Frames => after.frame_cells.get(slot).copied(),
+                Zone::Side => after.side_slots.get(slot).map(|s| s.0),
+            })
+            .collect();
+        let from = carried_positions(pos, drag.slots.len(), cell);
+        self.slides = after
+            .counters()
+            .filter_map(|c| {
+                let k = homes.iter().position(|&h| h == c.center)?;
+                Some(Slide { id: c.id, from: from[k], age: 0.0 })
+            })
+            .collect();
     }
+
+    /// Snap a full frame into a ten-rod, or open a rod back into a frame.
+    fn toggle_rod(&mut self, frame: usize, area: UiRect) -> bool {
+        let before = self.snapshot(area);
+        self.rods[frame] = !self.rods[frame];
+        self.slide_from(&before, &[], area);
+        if self.rods[frame] {
+            self.glows.push(Glow { kind: GlowKind::Frame(frame), age: 0.0 });
+        }
+        self.rods[frame]
+    }
+}
+
+/// Where carried counters sit around the pointer: one under the finger, or a
+/// row of five centered on it.
+fn carried_positions(pos: (f32, f32), n: usize, cell: f32) -> Vec<(f32, f32)> {
+    let mid = (n as f32 - 1.0) / 2.0;
+    (0..n).map(|k| (pos.0 + (k as f32 - mid) * cell, pos.1)).collect()
 }
 
 /// The manipulatives on the control room's bench, in the order it cycles
@@ -269,6 +364,14 @@ pub fn intro_line(ws: &Workspace) -> &'static str {
     }
 }
 
+/// What the buddy says when a ten-frame fills up.
+pub const FULL_TEN_LINE: &str = "A full ten!";
+
+/// The once-only nudge toward moving a row as one piece, after the kid moves
+/// `ROW_NUDGE_AFTER` singles while a whole row sat there.
+pub const ROW_NUDGE_LINE: &str = "Psst! Grab the stick to slide a whole row at once!";
+pub const ROW_NUDGE_AFTER: usize = 5;
+
 /// The least of its natural height the workspace will give up on a short
 /// screen (the panel lays it out between this and natural).
 pub const MIN_HEIGHT_SHARE: f32 = 0.45;
@@ -284,9 +387,6 @@ pub fn extent(_ws: &Workspace, max_w: f32) -> (f32, f32) {
     let s = (max_w / NATURAL_W).min(1.0);
     (NATURAL_W * s, NATURAL_H * s)
 }
-
-/// What the buddy says when a ten-frame fills up.
-pub const FULL_TEN_LINE: &str = "A full ten!";
 
 fn rows_for(n: usize) -> usize {
     n.div_ceil(COLS)
@@ -306,6 +406,19 @@ pub struct Counter {
     pub id: CounterId,
     /// Index of its space within its zone (what a `Drag` records).
     pub slot: usize,
+    /// Part of a ten-rod (drawn as a segment of the bar, can't be picked up).
+    pub in_rod: bool,
+}
+
+/// A full row of five in the tray, on a stick that carries all five.
+#[derive(Clone, Debug)]
+pub struct Stick {
+    /// The knob to grab, left of the row.
+    pub handle: UiRect,
+    /// The row itself (the stick runs behind it).
+    pub row: UiRect,
+    pub slots: Vec<usize>,
+    pub group: u8,
 }
 
 pub struct Layout {
@@ -313,6 +426,10 @@ pub struct Layout {
     pub frames: Vec<UiRect>,
     /// Center of every frame cell, in fill order.
     pub frame_cells: Vec<(f32, f32)>,
+    /// Which frames are showing as a ten-rod.
+    pub rods: Vec<bool>,
+    /// Where each full frame's "10" sits (tap it to snap / open the rod).
+    pub badges: Vec<Option<UiRect>>,
     /// Counters sitting in the frames.
     pub in_frames: Vec<Counter>,
     /// The tray (put together) or basket (take away).
@@ -321,8 +438,10 @@ pub struct Layout {
     pub side_slots: Vec<((f32, f32), Option<u8>)>,
     /// Counters sitting in the tray/basket.
     pub in_side: Vec<Counter>,
-    /// Counters the kid can pick up right now.
+    /// Counters the kid can pick up one at a time right now.
     pub grabbable: Vec<Counter>,
+    /// Full rows the kid can pick up whole right now.
+    pub sticks: Vec<Stick>,
     /// Where a carried counter has to land to count.
     pub drop_zone: UiRect,
     /// Releases right of this x land (everything flows left to right).
@@ -330,8 +449,8 @@ pub struct Layout {
     /// True when the tray is the source (put together); false when the frames
     /// are (take away).
     pub side_is_source: bool,
-    /// The space the carried counter came from, drawn as an empty outline.
-    pub held_gap: Option<(f32, f32)>,
+    /// The spaces the carried counters came from, drawn as empty outlines.
+    pub held_gaps: Vec<(f32, f32)>,
     /// Space size and counter radius at this scale.
     pub cell: f32,
     pub counter_r: f32,
@@ -347,6 +466,13 @@ impl Layout {
     }
 }
 
+/// Which frames hold all ten.
+fn frames_full(l: &Layout) -> Vec<bool> {
+    (0..l.frames.len())
+        .map(|i| l.in_frames.iter().filter(|c| c.slot / 10 == i).count() == 10)
+        .collect()
+}
+
 /// Give each occupied space a counter, numbering each group in reading order.
 fn place(zone: Zone, spaces: &[((f32, f32), Option<u8>)]) -> Vec<Counter> {
     let mut seen = [0usize; 2];
@@ -357,13 +483,13 @@ fn place(zone: Zone, spaces: &[((f32, f32), Option<u8>)]) -> Vec<Counter> {
             let group = fill?;
             let rank = seen[group as usize];
             seen[group as usize] += 1;
-            Some(Counter { center, group, id: CounterId { zone, group, rank }, slot })
+            Some(Counter { center, group, id: CounterId { zone, group, rank }, slot, in_rod: false })
         })
         .collect()
 }
 
 /// Pure layout. `area` is the rect the challenge panel reserves for the
-/// workspace. A carried counter's space is left empty (see `held_gap`).
+/// workspace. A carried counter's space is left empty (see `held_gaps`).
 pub fn layout(ws: &Workspace, area: UiRect) -> Layout {
     let s = &ws.session;
     let p = &s.puzzle;
@@ -413,6 +539,8 @@ pub fn layout(ws: &Workspace, area: UiRect) -> Layout {
         (side_x + col as f32 * cell + cell / 2.0, area.y + row as f32 * cell + cell / 2.0)
     };
     let mut side_slots = Vec::new();
+    // For the tray: where each group's rows start (in rows) and its spaces begin.
+    let mut tray_rows_of: Vec<(u8, usize, usize, usize)> = Vec::new(); // (group, first slot, count, first row)
     if side_is_source {
         // Blue rows first, yellow starts on a fresh row: two visible groups.
         let left_a = (p.a - s.bucket_a) as usize;
@@ -424,6 +552,8 @@ pub fn layout(ws: &Workspace, area: UiRect) -> Layout {
         for i in 0..p.b as usize {
             side_slots.push((slot_center(b_row + i / COLS, i % COLS), (i < left_b).then_some(1)));
         }
+        tray_rows_of.push((0, 0, p.a as usize, 0));
+        tray_rows_of.push((1, p.a as usize, p.b as usize, b_row));
     } else {
         let taken = (p.a - s.bucket_a) as usize;
         for i in 0..p.b as usize {
@@ -431,24 +561,55 @@ pub fn layout(ws: &Workspace, area: UiRect) -> Layout {
         }
     }
 
-    // The carried counter's space stays empty while it's in hand.
-    let mut held_gap = None;
-    if let Some(d) = ws.drag {
-        if side_is_source {
-            if let Some(space) = side_slots.get_mut(d.slot) {
-                space.1 = None;
-                held_gap = Some(space.0);
+    // The carried counters' spaces stay empty while they're in hand.
+    let mut held_gaps = Vec::new();
+    if let Some(d) = &ws.drag {
+        for &slot in &d.slots {
+            if side_is_source {
+                if let Some(space) = side_slots.get_mut(slot) {
+                    space.1 = None;
+                    held_gaps.push(space.0);
+                }
+            } else if let Some(fill) = frame_fill.get_mut(slot) {
+                *fill = None;
+                if let Some(&c) = frame_cells.get(slot) {
+                    held_gaps.push(c);
+                }
             }
-        } else if let Some(fill) = frame_fill.get_mut(d.slot) {
-            *fill = None;
-            held_gap = frame_cells.get(d.slot).copied();
         }
     }
 
     let frame_spaces: Vec<((f32, f32), Option<u8>)> =
         frame_cells.iter().copied().zip(frame_fill.iter().copied()).collect();
-    let in_frames = place(Zone::Frames, &frame_spaces);
+    let mut in_frames = place(Zone::Frames, &frame_spaces);
     let in_side = place(Zone::Side, &side_slots);
+
+    // Rods: a full frame the kid has snapped. Its counters line up as the ten
+    // segments of one bar across the middle of the frame.
+    let full: Vec<bool> = (0..n_frames)
+        .map(|i| in_frames.iter().filter(|c| c.slot / 10 == i).count() == 10)
+        .collect();
+    let rods: Vec<bool> = (0..n_frames).map(|i| full[i] && ws.rods[i]).collect();
+    for c in &mut in_frames {
+        let fi = c.slot / 10;
+        if rods[fi] {
+            let f = frames[fi];
+            let k = c.slot % 10;
+            c.center = (f.x + (k as f32 + 0.5) * f.w / 10.0, f.y + f.h / 2.0);
+            c.in_rod = true;
+        }
+    }
+    let badge_w = (BADGE_ROOM * scale - 6.0).max(12.0);
+    let badges: Vec<Option<UiRect>> = frames
+        .iter()
+        .zip(&full)
+        .map(|(f, &full)| {
+            full.then(|| {
+                let x = if side_is_source { f.x + f.w + 4.0 } else { f.x - 4.0 - badge_w };
+                UiRect { x, y: f.y, w: badge_w, h: f.h }
+            })
+        })
+        .collect();
 
     let side_rows = side_slots.len().div_ceil(COLS).max(1);
     let side = UiRect { x: side_x, y: area.y, w: block_w, h: side_rows as f32 * cell };
@@ -460,16 +621,39 @@ pub fn layout(ws: &Workspace, area: UiRect) -> Layout {
     };
 
     let done = s.phase == ConcretePhase::Complete;
+    let carrying = ws.drag.is_some();
     let (grabbable, drop_zone) = if side_is_source {
         (in_side.clone(), frames_rect)
     } else {
-        (in_frames.clone(), side)
+        (in_frames.iter().filter(|c| !c.in_rod).copied().collect(), side)
     };
-    let grabbable = if done || ws.drag.is_some() { vec![] } else { grabbable };
+    let grabbable = if done || carrying { vec![] } else { grabbable };
+
+    // Sticks: every full row of five still in the tray. They stay drawn while
+    // something's carried (a row with a gap in it isn't full, so it loses its
+    // stick); pickup is already blocked mid-carry.
+    let mut sticks = Vec::new();
+    if side_is_source && !done {
+        for &(group, first, count, first_row) in &tray_rows_of {
+            for r in 0..count / COLS {
+                let slots: Vec<usize> = (0..COLS).map(|c| first + r * COLS + c).collect();
+                if slots.iter().all(|&i| side_slots.get(i).is_some_and(|s| s.1 == Some(group))) {
+                    let y = area.y + (first_row + r) as f32 * cell;
+                    let handle_w = (BADGE_ROOM * scale - 8.0).max(12.0);
+                    sticks.push(Stick {
+                        handle: UiRect { x: side_x - handle_w - 4.0, y, w: handle_w, h: cell },
+                        row: UiRect { x: side_x, y, w: block_w, h: cell },
+                        slots,
+                        group,
+                    });
+                }
+            }
+        }
+    }
 
     Layout {
-        frames, frame_cells, in_frames, side, side_slots, in_side,
-        grabbable, drop_zone, drop_line, side_is_source, held_gap,
+        frames, frame_cells, rods, badges, in_frames, side, side_slots, in_side,
+        grabbable, sticks, drop_zone, drop_line, side_is_source, held_gaps,
         cell, counter_r: COUNTER_R * scale,
     }
 }
@@ -481,8 +665,10 @@ pub enum Pointer {
     Idle,
     /// Picked up, carrying, or slid home. Consumed; nothing for the game.
     Busy,
-    /// A counter landed on target and the session moved on.
+    /// Counters landed on target and the session moved on.
     Landed(Landed),
+    /// A full frame snapped into a ten-rod (`bundled`), or a rod opened.
+    Rod { frame: usize, bundled: bool },
 }
 
 /// Advance the drag by one frame of input.
@@ -495,42 +681,62 @@ pub fn handle_pointer(ws: &mut Workspace, input: &FrameInput, area: UiRect) -> P
         if !let_go {
             return Pointer::Busy;
         }
-        let (group, pos) = (drag.group, input.mouse_pos);
+        let (group, n, pos) = (drag.group, drag.slots.len(), input.mouse_pos);
         let over_target = pos.0 >= layout(ws, area).drop_line
             && pos.1 >= area.y - DROP_Y_SLOP
             && pos.1 <= area.y + area.h + DROP_Y_SLOP;
         if over_target {
-            let action = match ws.session.puzzle.kind {
-                ConcreteKind::TakeAway => ConcreteAction::Remove { group },
-                _ => ConcreteAction::Place { group },
-            };
-            crate::trace!("drag drop    group={group} at ({:.0},{:.0}) -> {action:?}", pos.0, pos.1);
-            return Pointer::Landed(ws.land(action, pos, area));
+            crate::trace!("drag drop    group={group} x{n} at ({:.0},{:.0})", pos.0, pos.1);
+            return Pointer::Landed(ws.land(pos, area));
         }
-        crate::trace!("drag miss    group={group} at ({:.0},{:.0}) -> slides home", pos.0, pos.1);
+        crate::trace!("drag miss    group={group} x{n} at ({:.0},{:.0}) -> slides home", pos.0, pos.1);
         ws.slide_home(pos, area);
         return Pointer::Busy;
     }
 
-    if input.mouse_clicked {
-        let l = layout(ws, area);
-        let (mx, my) = input.mouse_pos;
-        // Anywhere in a counter's space grabs it — fingers are fat.
-        let reach = l.cell * 0.6;
-        let nearest = l
-            .grabbable
-            .iter()
-            .map(|c| (c, (c.center.0 - mx).hypot(c.center.1 - my)))
-            .filter(|&(_, d)| d <= reach)
-            .min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((c, d)) = nearest {
-            crate::trace!("drag grab    group={} slot={} at ({mx:.0},{my:.0}), {d:.0}px from center", c.group, c.slot);
-            ws.drag = Some(Drag { group: c.group, slot: c.slot, pos: input.mouse_pos });
-            ws.slides.retain(|s| s.id != c.id);
-            return Pointer::Busy;
-        }
-        crate::trace!("drag nothing to grab at ({mx:.0},{my:.0})");
+    if !input.mouse_clicked {
+        return Pointer::Idle;
     }
+    let l = layout(ws, area);
+    let (mx, my) = input.mouse_pos;
+
+    // The "10" on a full frame, or the rod itself: snap / open.
+    for (i, badge) in l.badges.iter().enumerate() {
+        let on_badge = badge.is_some_and(|b| b.contains(mx, my));
+        let on_rod = l.rods[i] && l.frames[i].contains(mx, my);
+        // Putting together, the frames aren't a source — the whole full frame
+        // is a fair place to tap.
+        let on_full_frame = badge.is_some() && l.side_is_source && l.frames[i].contains(mx, my);
+        if on_badge || on_rod || on_full_frame {
+            let bundled = ws.toggle_rod(i, area);
+            crate::trace!("rod {} frame={i}", if bundled { "snap" } else { "open" });
+            return Pointer::Rod { frame: i, bundled };
+        }
+    }
+
+    // A stick's handle picks up the whole row.
+    if let Some(stick) = l.sticks.iter().find(|s| s.handle.expand(6.0).contains(mx, my)) {
+        crate::trace!("drag grab    row of {} group={}", stick.slots.len(), stick.group);
+        ws.drag = Some(Drag { group: stick.group, slots: stick.slots.clone(), pos: input.mouse_pos, single_past_a_row: false });
+        return Pointer::Busy;
+    }
+
+    // Anywhere in a counter's space grabs it — fingers are fat.
+    let reach = l.cell * 0.6;
+    let nearest = l
+        .grabbable
+        .iter()
+        .map(|c| (c, (c.center.0 - mx).hypot(c.center.1 - my)))
+        .filter(|&(_, d)| d <= reach)
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    if let Some((c, d)) = nearest {
+        crate::trace!("drag grab    group={} slot={} at ({mx:.0},{my:.0}), {d:.0}px from center", c.group, c.slot);
+        let single_past_a_row = !l.sticks.is_empty();
+        ws.drag = Some(Drag { group: c.group, slots: vec![c.slot], pos: input.mouse_pos, single_past_a_row });
+        ws.slides.retain(|s| s.id != c.id);
+        return Pointer::Busy;
+    }
+    crate::trace!("drag nothing to grab at ({mx:.0},{my:.0})");
     Pointer::Idle
 }
 
@@ -545,6 +751,26 @@ fn draw_counter(x: f32, y: f32, r: f32, color: Color) {
     draw_circle_lines(x, y, r, 2.0, OUTLINE);
 }
 
+/// One segment of a ten-rod, centered on (x, y).
+fn draw_segment(x: f32, y: f32, w: f32, h: f32, color: Color) {
+    draw_rectangle(x - w / 2.0, y - h / 2.0, w, h, color);
+    draw_rectangle_lines(x - w / 2.0, y - h / 2.0, w, h, 1.5, OUTLINE);
+}
+
+/// A stick running behind a row, with a knob to grab on its left.
+fn draw_stick(handle: UiRect, row: UiRect, cell: f32, lift: f32) {
+    let bar_h = cell * 0.3;
+    let y = row.y + row.h / 2.0 - bar_h / 2.0 - lift;
+    draw_rectangle(handle.x + handle.w / 2.0, y, row.x + row.w - handle.x - handle.w / 2.0, bar_h, STICK);
+    let knob = UiRect { x: handle.x, y: handle.y + handle.h * 0.15 - lift, w: handle.w, h: handle.h * 0.7 };
+    draw_rectangle(knob.x, knob.y, knob.w, knob.h, STICK);
+    draw_rectangle_lines(knob.x, knob.y, knob.w, knob.h, 2.0, OUTLINE);
+    for k in 1..4 {
+        let gy = knob.y + knob.h * k as f32 / 4.0;
+        draw_line(knob.x + 4.0, gy, knob.x + knob.w - 4.0, gy, 1.5, STICK_GRIP);
+    }
+}
+
 /// Quick rise, slow fade: 0 → 1 → 0 over a glow's life.
 fn glow_strength(age: f32) -> f32 {
     let t = (age / GLOW_S).clamp(0.0, 1.0);
@@ -553,6 +779,8 @@ fn glow_strength(age: f32) -> f32 {
 
 pub fn draw(ws: &Workspace, area: UiRect) {
     let l = layout(ws, area);
+    let seg_w = l.cell * 0.95;
+    let seg_h = l.cell * 0.8;
 
     for (i, f) in l.frames.iter().enumerate() {
         draw_rectangle(f.x, f.y, f.w, f.h, FRAME_BG);
@@ -571,25 +799,30 @@ pub fn draw(ws: &Workspace, area: UiRect) {
             }
         }
 
+        // As a rod the grid fades back: the ten is one thing now.
+        let grid = if l.rods[i] { FRAME_LINE_FAINT } else { FRAME_LINE };
         for col in 1..COLS {
             let x = f.x + col as f32 * l.cell;
-            draw_line(x, f.y, x, f.y + f.h, 1.5, FRAME_LINE);
+            draw_line(x, f.y, x, f.y + f.h, 1.5, grid);
         }
-        draw_line(f.x, f.y + l.cell, f.x + f.w, f.y + l.cell, 1.5, FRAME_LINE);
+        draw_line(f.x, f.y + l.cell, f.x + f.w, f.y + l.cell, 1.5, grid);
 
         // A full frame is a ten: thicker border, and it wears the numeral on
-        // its outer side (away from the tray/basket).
-        let full = l.in_frames.iter().filter(|c| c.slot / 10 == i).count() == 10;
+        // its outer side (away from the tray/basket). Tap it to make a rod.
         let pulse = ws.glows.iter().find(|g| g.kind == GlowKind::Frame(i)).map_or(0.0, |g| glow_strength(g.age));
+        let full = l.badges[i].is_some();
         let border = if full { 4.0 + 3.0 * pulse } else { 3.0 };
-        let border_color = if full { TEN_BADGE } else { FRAME_LINE };
-        draw_rectangle_lines(f.x, f.y, f.w, f.h, border, border_color);
-        if full {
+        draw_rectangle_lines(f.x, f.y, f.w, f.h, border, if full { TEN_BADGE } else { FRAME_LINE });
+        if let Some(b) = l.badges[i] {
             let size = (30.0 + 14.0 * pulse) * l.cell / CELL;
             let tw = measure_text("10", None, size as u16, 1.0).width;
-            let tx = if l.side_is_source { f.x + f.w + 12.0 } else { f.x - 12.0 - tw };
-            draw_text("10", tx, f.y + f.h / 2.0 + size * 0.35, size, TEN_BADGE);
+            draw_text("10", b.x + (b.w - tw) / 2.0, b.y + b.h / 2.0 + size * 0.35, size, TEN_BADGE);
         }
+    }
+
+    // Sticks behind the tray's full rows.
+    for stick in &l.sticks {
+        draw_stick(stick.handle, stick.row, l.cell, 0.0);
     }
 
     // Basket outline (take away) — its empty spaces say how many to take.
@@ -602,7 +835,7 @@ pub fn draw(ws: &Workspace, area: UiRect) {
             draw_circle_lines(x, y, l.counter_r, 1.5, SLOT_GHOST);
         }
     }
-    if let Some((x, y)) = l.held_gap {
+    for &(x, y) in &l.held_gaps {
         draw_circle_lines(x, y, l.counter_r, 2.0, HELD_GAP);
     }
 
@@ -617,21 +850,40 @@ pub fn draw(ws: &Workspace, area: UiRect) {
             (Zone::Side, false) => BLUE_TAKEN, // in the basket: taken away
             _ => group_color(c.group),
         };
-        draw_counter(x, y, l.counter_r, color);
+        if c.in_rod {
+            draw_segment(x, y, seg_w / 2.0, seg_h, color);
+        } else {
+            draw_counter(x, y, l.counter_r, color);
+        }
     }
 }
 
-/// The carried counter, drawn last so it rides above the whole panel. Lifted
-/// — bigger, shadowed, ringed — so it's obvious it's in hand even when the
-/// platform can't report the finger moving.
+/// What's carried, drawn last so it rides above the whole panel. Lifted —
+/// bigger, shadowed, ringed — so it's obvious it's in hand even when the
+/// platform can't report the finger moving. A row travels on its stick.
 pub fn draw_drag(ws: &Workspace, area: UiRect) {
-    if let Some(d) = ws.drag {
-        let (x, y) = d.pos;
-        let r = COUNTER_R * scale_in(area) * 1.3;
-        let ring = r + 6.0 + 3.0 * (ws.clock * 6.0).sin();
+    let Some(d) = &ws.drag else { return };
+    let scale = scale_in(area);
+    let cell = CELL * scale;
+    let r = COUNTER_R * scale * if d.is_row() { 1.1 } else { 1.3 };
+    let color = group_color(d.group);
+    let spots = carried_positions(d.pos, d.slots.len(), cell);
+    if d.is_row() {
+        let first = spots[0];
+        let handle_w = (BADGE_ROOM * scale - 8.0).max(12.0);
+        let row = UiRect { x: first.0 - cell / 2.0, y: first.1 - cell / 2.0, w: cell * COLS as f32, h: cell };
+        let handle = UiRect { x: row.x - handle_w - 4.0, y: row.y, w: handle_w, h: cell };
+        draw_stick(handle, row, cell, 4.0);
+    }
+    for &(x, y) in &spots {
         draw_circle(x + 4.0, y + 7.0, r, SHADOW);
-        draw_circle_lines(x, y, ring, 3.0, Color { a: 0.8, ..group_color(d.group) });
-        draw_counter(x, y - 4.0, r, group_color(d.group));
+    }
+    if !d.is_row() {
+        let ring = r + 6.0 + 3.0 * (ws.clock * 6.0).sin();
+        draw_circle_lines(d.pos.0, d.pos.1, ring, 3.0, Color { a: 0.8, ..color });
+    }
+    for &(x, y) in &spots {
+        draw_counter(x, y - 4.0, r, color);
     }
 }
 
@@ -661,6 +913,10 @@ mod tests {
         handle_pointer(w, &release(to), AREA)
     }
 
+    fn tap(w: &mut Workspace, at: (f32, f32)) -> Pointer {
+        handle_pointer(w, &press(at), AREA)
+    }
+
     #[test]
     fn put_together_fills_blue_first_then_yellow_across_the_ten() {
         let mut w = ws(ConcreteKind::AddGroups, 8, 5);
@@ -678,7 +934,7 @@ mod tests {
         let second = layout(&w, AREA).in_side[1];
         handle_pointer(&mut w, &press(second.center), AREA);
         let l = layout(&w, AREA);
-        assert_eq!(l.held_gap, Some(second.center));
+        assert_eq!(l.held_gaps, vec![second.center]);
         assert!(l.in_side.iter().all(|c| c.center != second.center));
         assert_eq!(l.in_side.len(), 5, "the others stay put while it's carried");
     }
@@ -731,6 +987,82 @@ mod tests {
             Pointer::Landed(l) => assert!(l.filled_ten, "the tenth counter completes the frame"),
             _ => panic!("should have landed"),
         }
+    }
+
+    #[test]
+    fn a_full_row_rides_a_stick_and_moves_as_one() {
+        let mut w = ws(ConcreteKind::AddGroups, 7, 5); // blue: one full row + 2; yellow: one full row
+        let l = layout(&w, AREA);
+        assert_eq!(l.sticks.len(), 2, "one stick per full row");
+        let yellow_row = l.sticks.iter().find(|s| s.group == 1).unwrap().handle.center();
+        let target = l.drop_zone.center();
+        match drag(&mut w, yellow_row, target) {
+            Pointer::Landed(landed) => assert!(landed.row),
+            _ => panic!("the row should land"),
+        }
+        assert_eq!(w.session.bucket_b, 5, "all five in one move");
+    }
+
+    #[test]
+    fn a_partial_row_has_no_stick() {
+        let w = ws(ConcreteKind::AddGroups, 4, 3);
+        assert!(layout(&w, AREA).sticks.is_empty());
+    }
+
+    #[test]
+    fn a_row_landing_across_the_ten_fills_the_frame() {
+        // 8 + 5: the five finish the first ten and spill 3 into the next.
+        let mut w = ws(ConcreteKind::AddGroups, 8, 5);
+        w.session.bucket_a = 8;
+        let l = layout(&w, AREA);
+        let stick = l.sticks.iter().find(|s| s.group == 1).unwrap().handle.center();
+        match drag(&mut w, stick, l.drop_zone.center()) {
+            Pointer::Landed(landed) => assert!(landed.filled_ten && landed.built),
+            _ => panic!("should land"),
+        }
+    }
+
+    #[test]
+    fn singles_moved_past_a_whole_row_are_counted() {
+        let mut w = ws(ConcreteKind::AddGroups, 5, 1);
+        for _ in 0..2 {
+            let one = layout(&w, AREA).grabbable.iter().find(|c| c.group == 0).unwrap().center;
+            let target = layout(&w, AREA).drop_zone.center();
+            drag(&mut w, one, target);
+        }
+        // Only the first was taken with a full row still there.
+        assert_eq!(w.singles_past_a_row, 1);
+    }
+
+    #[test]
+    fn tapping_the_ten_snaps_the_frame_into_a_rod_and_back() {
+        let mut w = ws(ConcreteKind::TakeAway, 13, 2);
+        let l = layout(&w, AREA);
+        let badge = l.badges[0].expect("the first frame starts full").center();
+        assert!(matches!(tap(&mut w, badge), Pointer::Rod { frame: 0, bundled: true }));
+
+        let l = layout(&w, AREA);
+        assert!(l.rods[0]);
+        assert_eq!(l.in_frames.iter().filter(|c| c.in_rod).count(), 10);
+        assert_eq!(l.grabbable.len(), 3, "a rod's ones can't be picked off it");
+
+        w.tick(1.0);
+        let rod = l.frames[0].center();
+        assert!(matches!(tap(&mut w, rod), Pointer::Rod { frame: 0, bundled: false }));
+        assert!(!layout(&w, AREA).rods[0]);
+    }
+
+    #[test]
+    fn a_rod_only_stands_while_its_frame_is_full() {
+        let mut w = ws(ConcreteKind::TakeAway, 11, 5);
+        let badge = layout(&w, AREA).badges[0].unwrap().center();
+        tap(&mut w, badge);
+        // Take the one loose counter; the rod still holds ten.
+        let loose = layout(&w, AREA).grabbable[0].center;
+        let basket = layout(&w, AREA).drop_zone.center();
+        drag(&mut w, loose, basket);
+        assert!(layout(&w, AREA).rods[0], "ten is still ten");
+        assert!(layout(&w, AREA).grabbable.is_empty(), "to take more, the ten has to be opened");
     }
 
     #[test]

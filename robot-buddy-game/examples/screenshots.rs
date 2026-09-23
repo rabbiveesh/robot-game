@@ -337,4 +337,41 @@ async fn main() {
             }
         }
     }
+
+    // ── Hands-on "Show me": the manipulatives bench, put together then take away ──
+    {
+        let mut h = Harness::new(7);
+        h.start_dev_game();
+        h.game.profile.math_band = 4; // numbers past ten: two frames
+        h.open_manipulatives_bench();
+        h.advance(30);
+        snap_game("15_workspace_add_open", &mut h).await;
+
+        // Mid-drag: a counter in hand over the frames.
+        let (from, to) = (h.a_grabbable_counter(), h.drop_target());
+        h.step(&FrameInput::empty().with_mouse_click(from.0, from.1));
+        h.step(&FrameInput::empty().with_mouse_held(to.0, to.1));
+        snap_game("16_workspace_carrying", &mut h).await;
+        h.step(&FrameInput::empty().with_mouse_release(to.0, to.1));
+
+        h.build_the_model();
+        h.advance(60);
+        snap_game("17_workspace_add_built", &mut h).await;
+
+        let ten = h.game.challenge_workspace().and_then(|ws| {
+            let area = h.game.challenge_layout(common::SCREEN)?.workspace()?;
+            robot_buddy_game::ui::concrete::layout(ws, area).badges[0]
+        });
+        if let Some(badge) = ten {
+            h.click(badge.center().0, badge.center().1);
+            h.advance(60);
+            snap_game("18_workspace_add_rod", &mut h).await;
+        }
+        h.answer_correctly();
+        h.wait_until(|g| g.state == GameState::Playing);
+
+        h.open_manipulatives_bench();
+        h.advance(30);
+        snap_game("19_workspace_take_away_open", &mut h).await;
+    }
 }

@@ -404,6 +404,10 @@ pub enum GameEvent {
     /// The kid finished building the problem in the workspace (all counters
     /// moved). Not an answer — the quiz still decides.
     ManipulativeBuilt { kind: ConcreteKind },
+    /// A whole row of five moved as one piece (a grouping signal).
+    ManipulativeRowMoved,
+    /// A full ten-frame snapped into a ten-rod (`bundled`), or a rod opened.
+    TenRod { bundled: bool },
     /// A gate guardian's puzzle was solved; the passage is now open.
     GateOpened { gate_id: String },
     /// The rocket spent fuel taking a space jump.
@@ -585,6 +589,8 @@ pub struct Game {
     steps_since_encounter: u32,
     /// Which manipulative the control room's bench opens next (dev only).
     manip_bench_next: usize,
+    /// The "grab the stick" nudge has been said this play session.
+    row_nudge_given: bool,
     pending_challenge: bool,
     /// Gate id whose challenge is currently on screen (set when the kid takes
     /// on a gate guardian; cleared when that challenge resolves).
@@ -718,6 +724,7 @@ impl Game {
             features: FeatureFlags::default(),
             steps_since_encounter: 0,
             manip_bench_next: 0,
+            row_nudge_given: false,
             pending_challenge: false,
             opening_gate: None,
             satisfied_gates: std::collections::HashSet::new(),
@@ -1996,14 +2003,27 @@ impl Game {
                     ui::concrete::Pointer::Busy => pointer_busy = true,
                     ui::concrete::Pointer::Landed(landed) => {
                         pointer_busy = true;
+                        if landed.row {
+                            self.events.push(GameEvent::ManipulativeRowMoved);
+                        }
                         if landed.filled_ten {
                             audio::tts::speak(&buddy, ui::concrete::FULL_TEN_LINE);
+                        } else if !self.row_nudge_given
+                            && landed.singles_past_a_row >= ui::concrete::ROW_NUDGE_AFTER
+                        {
+                            // Once, and only after a whole row's worth of singles.
+                            self.row_nudge_given = true;
+                            audio::tts::speak(&buddy, ui::concrete::ROW_NUDGE_LINE);
                         }
                         if landed.built {
                             self.events.push(GameEvent::ManipulativeBuilt {
                                 kind: ws.session.puzzle.kind,
                             });
                         }
+                    }
+                    ui::concrete::Pointer::Rod { bundled, .. } => {
+                        pointer_busy = true;
+                        self.events.push(GameEvent::TenRod { bundled });
                     }
                 }
             }
