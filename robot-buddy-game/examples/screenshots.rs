@@ -244,6 +244,23 @@ async fn main() {
         snap_game("18_shooter_all_clear", &mut h).await;
     }
 
+    // ── The Dogfish House: dive with Inkwell from a map with no shaft ──
+    // Must read as underwater AND glitchy at once.
+    {
+        let mut h = Harness::new(9);
+        h.start_dev_game();
+        to_home(&mut h);
+        h.game.npcs.clear();
+        h.bring_buddy(NpcKind::Octopus, "reef");
+        h.dive_with_buddy();
+        h.advance(120); // let the arrival line type out
+        snap_game("19_dogfish_house_arrival", &mut h).await;
+        h.finish_dialogue();
+        h.walk_to(7, 8);
+        h.advance(40);
+        snap_game("20_dogfish_house", &mut h).await;
+    }
+
     // ── Panels drawn directly: a 4-line dialogue and a wrapped word problem ──
     {
         use robot_buddy_game::ui::dialogue::{DialogueBox, DialogueLine};
