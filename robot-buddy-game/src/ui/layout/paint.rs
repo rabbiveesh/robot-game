@@ -1,5 +1,11 @@
-//! Render-side helpers for painting a [`Frame`](super::Frame). macroquad-only:
-//! never called from `step` or the headless tests.
+//! The painter: the ONLY place migrated panels' pixels come from.
+//!
+//! Migrated panels (`tests/layout_discipline.rs` lists them) may not call
+//! macroquad's raw-coordinate drawing or measuring functions. They paint by
+//! handing this module rects and placed texts taken from their `Frame`, plus
+//! style (colors, radii, stroke widths). Custom art inside a `Region` goes
+//! through a [`Canvas`] bound to that region's rect. macroquad-only: never
+//! called from `step` or the headless tests.
 
 use crate::prelude::*;
 
@@ -22,6 +28,38 @@ pub fn text_opt(t: Option<&PlacedText>, color: Color) {
     }
 }
 
+/// Draw only the first `chars` characters of a placed text, in reading order
+/// (the dialogue typewriter). Line breaks were decided on the full text, so
+/// words never jump lines as they appear.
+pub fn text_prefix(t: &PlacedText, mut chars: usize, color: Color) {
+    for l in &t.lines {
+        if chars == 0 {
+            break;
+        }
+        let n = l.text.chars().count();
+        let shown: String = l.text.chars().take(chars).collect();
+        draw_text(&shown, l.rect.x, l.baseline, t.size as f32, color);
+        // +1 for the space the wrap swallowed between lines.
+        chars = chars.saturating_sub(n + 1);
+    }
+}
+
+/// Solid fill.
+pub fn fill(r: UiRect, color: Color) {
+    draw_rectangle(r.x, r.y, r.w, r.h, color);
+}
+
+/// Rectangle outline.
+pub fn outline(r: UiRect, thickness: f32, color: Color) {
+    draw_rectangle_lines(r.x, r.y, r.w, r.h, thickness, color);
+}
+
+/// Filled box with an outline — the plain kid-panel tile.
+pub fn boxed(r: UiRect, fill_color: Color, thickness: f32, stroke: Color) {
+    fill(r, fill_color);
+    outline(r, thickness, stroke);
+}
+
 /// Filled rounded rectangle (center rect + corner circles).
 pub fn round_rect(r: UiRect, radius: f32, color: Color) {
     let rad = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
@@ -33,10 +71,49 @@ pub fn round_rect(r: UiRect, radius: f32, color: Color) {
     draw_circle(r.x + r.w - rad, r.y + r.h - rad, rad, color);
 }
 
-/// Filled box with a thin outline — the plain kid-panel tile.
-pub fn boxed(r: UiRect, fill: Color, line: f32, stroke: Color) {
-    draw_rectangle(r.x, r.y, r.w, r.h, fill);
-    draw_rectangle_lines(r.x, r.y, r.w, r.h, line, stroke);
+/// Dim everything behind a modal (pass the frame's bounds).
+pub fn dim(bounds: UiRect, alpha: f32) {
+    fill(bounds, Color::new(0.0, 0.0, 0.0, alpha));
+}
+
+/// A slow on/off toggle for "press SPACE" hints (`hz` flips per second).
+/// Wall-clock, so render-only — never read it from `step`.
+pub fn blink(hz: f64) -> bool {
+    (get_time() * hz).sin() > 0.0
+}
+
+/// Custom art confined to one rect from the frame (a `Region`, or a box the
+/// art decorates). Coordinates are absolute; debug builds warn if art strays
+/// outside the rect.
+pub struct Canvas {
+    pub rect: UiRect,
+}
+
+pub fn canvas(rect: UiRect) -> Canvas {
+    Canvas { rect }
+}
+
+impl Canvas {
+    fn check(&self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        #[cfg(debug_assertions)]
+        if !self.rect.expand(1.0).contains_rect(&UiRect::new(x0, y0, x1 - x0, y1 - y0)) {
+            warn_once("canvas art strays outside its rect");
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = (x0, y0, x1, y1);
+    }
+    pub fn circle(&self, x: f32, y: f32, r: f32, color: Color) {
+        self.check(x - r, y - r, x + r, y + r);
+        draw_circle(x, y, r, color);
+    }
+    pub fn circle_lines(&self, x: f32, y: f32, r: f32, thickness: f32, color: Color) {
+        self.check(x - r, y - r, x + r, y + r);
+        draw_circle_lines(x, y, r, thickness, color);
+    }
+    pub fn line(&self, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, color: Color) {
+        self.check(x1.min(x2), y1.min(y2), x1.max(x2), y1.max(y2));
+        draw_line(x1, y1, x2, y2, thickness, color);
+    }
 }
 
 /// Smallest font the unmigrated panels (leap, descent) shrink a line to.
@@ -52,24 +129,25 @@ pub fn centered_fitted(text: &str, p: UiRect, y: f32, max: u16, color: Color) {
     draw_text(text, p.x + p.w / 2.0 - w / 2.0, y, size as f32, color);
 }
 
+#[cfg(debug_assertions)]
+fn warn_once(msg: &str) {
+    use std::cell::Cell;
+    thread_local!(static WARNED: Cell<bool> = const { Cell::new(false) });
+    if !WARNED.with(|w| w.replace(true)) {
+        macroquad::logging::warn!("{msg}");
+    }
+}
+
 /// Debug builds: warn (once) if the headless metrics used for layout ever
 /// disagree with what macroquad actually renders.
 fn debug_check_width(s: &str, size: u16) {
     #[cfg(debug_assertions)]
     {
         use super::metrics::{FontMetrics, MacroquadMetrics, TextMetrics};
-        use std::cell::Cell;
-        thread_local!(static WARNED: Cell<bool> = const { Cell::new(false) });
-        if WARNED.with(|w| w.get()) {
-            return;
-        }
         let ours = FontMetrics::bundled().width(s, size);
         let theirs = MacroquadMetrics.width(s, size);
         if (ours - theirs).abs() > 1.0 {
-            WARNED.with(|w| w.set(true));
-            macroquad::logging::warn!(
-                "layout metrics drift: {s:?} at {size}px is {ours} headless vs {theirs} rendered"
-            );
+            warn_once(&format!("layout metrics drift: {s:?} at {size}px is {ours} headless vs {theirs} rendered"));
         }
     }
     #[cfg(not(debug_assertions))]

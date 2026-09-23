@@ -280,6 +280,16 @@ impl<Id> Node<Id> {
         self.style.height = Dim::Px(v);
         self
     }
+    /// Content/stretch width instead of a fixed one.
+    pub fn auto_w(mut self) -> Self {
+        self.style.width = Dim::Auto;
+        self
+    }
+    /// Content height instead of a fixed one.
+    pub fn auto_h(mut self) -> Self {
+        self.style.height = Dim::Auto;
+        self
+    }
     pub fn size(self, w: f32, h: f32) -> Self {
         self.w(w).h(h)
     }

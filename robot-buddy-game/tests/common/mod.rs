@@ -510,35 +510,35 @@ impl Harness {
 
     /// Click the catalog row for the item with `item_id` in the open shop.
     pub fn select_shop_item(&mut self, item_id: &str) {
-        let (x, y) = {
+        let idx = {
             let ash = self.game.active_shop().expect("select_shop_item: shop not open");
-            // Browsing view (no item selected yet).
-            let view = ui::shop::ShopView::Browsing;
-            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
-            let idx = ash.catalog.iter().position(|i| i.id == item_id)
-                .unwrap_or_else(|| panic!("no shop item {item_id}"));
-            let row = layout.items.iter().find(|r| r.index == idx)
-                .expect("item row not visible (already buying?)").rect;
-            (row.x + row.w / 2.0, row.y + row.h / 2.0)
+            ash.catalog.iter().position(|i| i.id == item_id)
+                .unwrap_or_else(|| panic!("no shop item {item_id}"))
         };
-        self.click(x, y);
+        // Page through the shelf like a kid would until the row is on screen.
+        for _ in 0..8 {
+            let layout = self.game.shop_layout(SCREEN).expect("shop open");
+            if let Some(row) = layout.item(idx) {
+                let (x, y) = row.center();
+                self.click(x, y);
+                return;
+            }
+            let more = layout.frame.rect(ui::shop::ShopId::NextPage)
+                .expect("item row not visible and no More button (already buying?)");
+            let (x, y) = more.center();
+            self.click(x, y);
+        }
+        panic!("never found the {item_id} row");
     }
 
     /// Tap the answer tile with value `value` during a purchase subtraction.
     pub fn answer_shop_math(&mut self, value: u32) {
         let (x, y) = {
-            let ash = self.game.active_shop().expect("answer_shop_math: shop not open");
-            let i = ash.selected.expect("answer_shop_math: not currently buying");
-            let view = ui::shop::ShopView::Buying {
-                item: &ash.catalog[i],
-                balance: ash.balance_before,
-                cost: ash.cost,
-                choices: &ash.choices,
-            };
-            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
-            let tile = layout.answers.iter().find(|t| t.value == value)
-                .unwrap_or_else(|| panic!("no answer tile {value}")).rect;
-            (tile.x + tile.w / 2.0, tile.y + tile.h / 2.0)
+            let model = self.game.shop_model().expect("answer_shop_math: shop not open");
+            assert!(!model.view.choices().is_empty(), "answer_shop_math: no sum on the counter");
+            ui::shop::layout(&model, SCREEN).answer(&model.view, value)
+                .unwrap_or_else(|| panic!("no answer tile {value}"))
+                .center()
         };
         self.click(x, y);
     }
@@ -555,17 +555,7 @@ impl Harness {
 
     /// Click the shop's "Done" button to leave and return to Playing.
     pub fn close_shop(&mut self) {
-        let (x, y) = {
-            let ash = self.game.active_shop().expect("close_shop: shop not open");
-            let view = match ash.selected {
-                Some(i) => ui::shop::ShopView::Buying {
-                    item: &ash.catalog[i], balance: ash.balance_before, cost: ash.cost, choices: &ash.choices,
-                },
-                None => ui::shop::ShopView::Browsing,
-            };
-            let layout = ui::shop::layout(&ash.catalog, &view, SCREEN);
-            (layout.close_btn.x + layout.close_btn.w / 2.0, layout.close_btn.y + layout.close_btn.h / 2.0)
-        };
+        let (x, y) = self.game.shop_layout(SCREEN).expect("close_shop: shop not open").done().center();
         self.click(x, y);
         self.wait_until(|g| g.state == GameState::Playing);
     }
@@ -655,26 +645,29 @@ impl Harness {
     /// Click the row for `item_id` in the open "Give Swag" picker, handing it
     /// to whoever the kid is talking to.
     pub fn give_swag(&mut self, item_id: &str) {
-        let (x, y) = {
+        let idx = {
             let asw = self.game.active_swag().expect("give_swag: picker not open");
-            let layout = ui::swag::layout(&asw.items, SCREEN);
-            let idx = asw.items.iter().position(|i| i.id == item_id)
+            asw.items.iter().position(|i| i.id == item_id)
                 .unwrap_or_else(|| panic!("the kid isn't wearing {item_id} (has: {:?})",
-                    asw.items.iter().map(|i| &i.id).collect::<Vec<_>>()));
-            let row = layout.items[idx].rect;
-            (row.x + row.w / 2.0, row.y + row.h / 2.0)
+                    asw.items.iter().map(|i| &i.id).collect::<Vec<_>>()))
         };
-        self.click(x, y);
+        for _ in 0..8 {
+            let layout = self.game.swag_layout(SCREEN).expect("picker open");
+            if let Some(row) = layout.item(idx) {
+                let (x, y) = row.center();
+                self.click(x, y);
+                return;
+            }
+            let (x, y) = layout.frame.rect(ui::swag::SwagId::NextPage)
+                .expect("row not visible and no More button").center();
+            self.click(x, y);
+        }
+        panic!("never found the {item_id} row");
     }
 
     /// Click the swag picker's "Done" button and return to Playing.
     pub fn close_swag(&mut self) {
-        let (x, y) = {
-            let asw = self.game.active_swag().expect("close_swag: picker not open");
-            let layout = ui::swag::layout(&asw.items, SCREEN);
-            (layout.close_btn.x + layout.close_btn.w / 2.0,
-             layout.close_btn.y + layout.close_btn.h / 2.0)
-        };
+        let (x, y) = self.game.swag_layout(SCREEN).expect("close_swag: picker not open").done().center();
         self.click(x, y);
         self.wait_until(|g| g.state == GameState::Playing);
     }

@@ -44,6 +44,11 @@ impl UiRect {
         }
     }
 
+    /// Grow by `d` on every side (negative shrinks).
+    pub fn expand(&self, d: f32) -> UiRect {
+        UiRect { x: self.x - d, y: self.y - d, w: (self.w + 2.0 * d).max(0.0), h: (self.h + 2.0 * d).max(0.0) }
+    }
+
     /// `other` lies inside `self` (within [`EPS`]).
     pub fn contains_rect(&self, other: &UiRect) -> bool {
         other.x >= self.x - EPS
