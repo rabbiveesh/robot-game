@@ -118,10 +118,8 @@ impl DialogueBox {
                 (Some(DialogueId::Tab), _) => paint::fill(el.rect, border),
                 (Some(DialogueId::Speaker), Kind::Text(t)) => paint::text(t, Color::from_rgba(26, 26, 46, 255)),
                 (Some(DialogueId::Body), Kind::Text(t)) => paint::text_prefix(t, visible, WHITE),
-                (Some(DialogueId::Continue), Kind::Text(t)) => {
-                    if self.waiting_for_input && paint::blink(6.0) {
-                        paint::text(t, Color::from_rgba(150, 150, 150, 255));
-                    }
+                (Some(DialogueId::Continue), Kind::Text(t)) if self.waiting_for_input && paint::blink(6.0) => {
+                    paint::text(t, Color::from_rgba(150, 150, 150, 255));
                 }
                 _ => {}
             }

@@ -193,7 +193,7 @@ pub fn pile_dots(quote: &TradeQuote, r: UiRect) -> Vec<(f32, f32, f32)> {
     let (step_x, step_y, stagger, radius, inset) = (26.0, 24.0, 4.0, 8.0, 12.0);
     let natural_w = inset + (per_row as f32 - 1.0) * step_x + (rows - 1.0) * stagger + 2.0 * radius;
     let natural_h = (rows - 1.0) * step_y + 2.0 * radius;
-    let scale = (r.w / natural_w).min(r.h / natural_h).min(1.0).max(0.0);
+    let scale = (r.w / natural_w).min(r.h / natural_h).clamp(0.0, 1.0);
     (0..pile_count(quote))
         .map(|i| {
             let (col, row) = ((i % per_row) as f32, (i / per_row) as f32);

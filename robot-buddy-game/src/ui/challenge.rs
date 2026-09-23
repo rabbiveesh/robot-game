@@ -118,7 +118,7 @@ pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) ->
             .child(spacer())
             .child(text("Press SPACE or click to continue", 22, Fit::shrink(14)).id(ChallengeId::Dismiss).center_text().fixed())
     } else {
-        let feedback = (cs.phase == Phase::Feedback).then(|| cs.feedback.as_ref()).flatten();
+        let feedback = (cs.phase == Phase::Feedback).then_some(cs.feedback.as_ref()).flatten();
         let scaffolds = (cs.phase == Phase::Presented || cs.phase == Phase::Feedback).then(|| {
             row()
                 .gap(12.0)

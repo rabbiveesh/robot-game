@@ -68,8 +68,9 @@ pub trait LayoutEngine {
     /// Lay the tree out inside `bounds` (node 0 is the root). Contract every
     /// engine must keep:
     /// * every placed child lies inside its parent's padding box, and
-    /// * siblings never overlap;
-    /// anything that can't satisfy both is returned as `None` (clipped).
+    /// * siblings never overlap.
+    ///
+    /// Anything that can't satisfy both is returned as `None` (clipped).
     /// Text leaves are measured with [`super::text`] against `metrics`.
     fn compute(&self, tree: &LayoutTree, bounds: UiRect, metrics: &dyn TextMetrics) -> Rects;
 }
