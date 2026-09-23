@@ -127,16 +127,6 @@ impl GamePace {
         }
     }
 
-    /// Scales how fast the ship glides. Relaxed nudges it up as well: a kid who
-    /// needs more thinking time usually needs more aiming time too, and a
-    /// nippier ship is help, never a handicap.
-    pub fn ship_multiplier(self) -> f32 {
-        match self {
-            GamePace::Relaxed => 1.15,
-            GamePace::Steady | GamePace::Brisk => 1.0,
-        }
-    }
-
     /// Shown in the parent panel only.
     pub fn label(self) -> &'static str {
         match self {
@@ -155,7 +145,6 @@ mod pace_tests {
     fn steady_is_the_default_and_changes_nothing() {
         assert_eq!(GamePace::default(), GamePace::Steady);
         assert_eq!(GamePace::Steady.drift_multiplier(), 1.0);
-        assert_eq!(GamePace::Steady.ship_multiplier(), 1.0);
     }
 
     #[test]
@@ -166,9 +155,5 @@ mod pace_tests {
         }
         assert!(GamePace::Relaxed.drift_multiplier() < 0.6,
             "Relaxed has to be a real difference, not a nudge");
-        // Slowing the drift must never also slow the ship.
-        for p in GamePace::ALL {
-            assert!(p.ship_multiplier() >= 1.0, "{p:?} would handicap the ship");
-        }
     }
 }

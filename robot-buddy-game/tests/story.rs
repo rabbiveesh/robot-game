@@ -1732,36 +1732,164 @@ fn goyish_shooter_can_be_left_with_a_tap() {
     assert_eq!(h.game.dum_dums, dum_dums, "walking away pays nothing and costs nothing");
 }
 
-/// Slide the ship under alien `id` (by holding the correct arrow), fire, then
-/// wait for the bolt to travel up and land (the alien is tagged, or popped as
-/// part of a completed pair). Returns early if the alien is already gone.
+/// Walk up to Blaster Bubbe on the Goyish Map and start the shooter.
+fn enter_shooter(h: &mut Harness) {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use macroquad::prelude::KeyCode;
+
+    h.game.map = Map::goyish_map();
+    h.game.npcs = npc_mod::npcs_for_map("goyish_map");
+    h.game.npcs_offstage.clear();
+    h.game.sparky_parked = true;
+    h.warp_to(6, 4);
+    h.hold(KeyCode::Up);
+    h.interact();
+    assert_eq!(h.game.state, GameState::Shooter);
+}
+
+/// Two on-screen, untagged aliens whose values do (`bond`) or don't sum to the
+/// target.
+fn shooter_pair(h: &Harness, bond: bool) -> (u32, u32) {
+    let s = &h.game.active_shooter().expect("shooter should be active").session;
+    let free: Vec<_> = s.aliens.iter().filter(|a| !a.selected).collect();
+    for i in 0..free.len() {
+        for j in (i + 1)..free.len() {
+            if (free[i].value + free[j].value == s.target) == bond {
+                return (free[i].id, free[j].id);
+            }
+        }
+    }
+    panic!("no {} pair on screen", if bond { "summing" } else { "non-summing" });
+}
+
+/// Pair off the current wave with the keyboard only. Returns whether a cheer
+/// went up as the wave cleared.
+fn clear_shooter_wave(h: &mut Harness) -> bool {
+    let wave = h.game.active_shooter().unwrap().session.wave;
+    for _ in 0..10 {
+        let (a, b) = shooter_pair(h, true);
+        aim_and_fire(h, a);
+        aim_and_fire(h, b);
+        let s = &h.game.active_shooter().unwrap().session;
+        if s.wave > wave {
+            return h.game.track_toast_text().is_some();
+        }
+    }
+    panic!("wave {wave} never cleared");
+}
+
+/// Dum Dums paid out since `mark`, and the resolved run's clean-wave count.
+fn shooter_payout_since(h: &Harness, mark: usize) -> (u32, u8) {
+    let events = h.events_since(mark);
+    let paid = events.iter().filter_map(|e| match e {
+        GameEvent::DumDumsAwarded { amount } => Some(*amount),
+        _ => None,
+    }).sum();
+    let clean = events.iter().find_map(|e| match e {
+        GameEvent::ShooterResolved { clean_waves, .. } => Some(*clean_waves),
+        _ => None,
+    }).expect("the run should resolve");
+    (paid, clean)
+}
+
+/// Keyboard-only lanes: hop to each alien, pair every wave with no wrong
+/// pairs, and every wave cheers and pays its extra Dum Dum on top of the run.
+#[test]
+fn goyish_shooter_clean_keyboard_run_pays_a_bonus_per_wave() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_domain::economy::rewards::determine_reward;
+    use robot_buddy_domain::logic::shooter::{ShotSource, TOTAL_WAVES};
+
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    enter_shooter(&mut h);
+    let before = h.game.dum_dums;
+    let mark = h.mark();
+
+    for wave in 0..TOTAL_WAVES {
+        assert!(clear_shooter_wave(&mut h), "clean wave {wave} should get a cheer");
+    }
+    let s = &h.game.active_shooter().unwrap().session;
+    assert!(s.cleared_waves.iter().all(|w| w.misses == 0), "every wave was clean");
+    assert!(s.attempts.iter().all(|a| a.sources == [ShotSource::Keys; 2]),
+        "every shot came from the keyboard");
+    h.press(KeyCode::Space);
+    assert_eq!(h.game.state, GameState::Playing);
+
+    let base = determine_reward(true, 0).unwrap().amount;
+    let (paid, clean) = shooter_payout_since(&h, mark);
+    assert_eq!(clean as usize, TOTAL_WAVES);
+    assert_eq!(paid, base + 3, "finishing pays the base, each clean wave one more");
+    assert_eq!(h.game.dum_dums, before + base + 3, "paid exactly once");
+}
+
+/// One wrong pair in the first wave: the run still finishes and still pays,
+/// that wave just doesn't earn the extra Dum Dum (and gets no cheer).
+#[test]
+fn goyish_shooter_a_wrong_pair_forfeits_only_that_waves_bonus() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_domain::economy::rewards::determine_reward;
+    use robot_buddy_domain::logic::shooter::TOTAL_WAVES;
+
+    let mut h = Harness::new(7);
+    h.start_dev_game();
+    enter_shooter(&mut h);
+    let before = h.game.dum_dums;
+    let mark = h.mark();
+
+    let (a, b) = shooter_pair(&h, false);
+    aim_and_fire(&mut h, a);
+    aim_and_fire(&mut h, b);
+    assert!(h.game.active_shooter().unwrap().session.aliens.iter().all(|al| !al.selected),
+        "a wrong pair just lets go of both aliens");
+
+    assert!(!clear_shooter_wave(&mut h), "no cheer for the wave with a wrong pair");
+    for wave in 1..TOTAL_WAVES {
+        assert!(clear_shooter_wave(&mut h), "clean wave {wave} should get a cheer");
+    }
+    h.press(KeyCode::Space);
+    assert_eq!(h.game.state, GameState::Playing);
+
+    let base = determine_reward(true, 0).unwrap().amount;
+    let (paid, clean) = shooter_payout_since(&h, mark);
+    assert_eq!(clean as usize, TOTAL_WAVES - 1);
+    assert_eq!(paid, base + 2);
+    assert_eq!(h.game.dum_dums, before + base + 2);
+}
+
+/// Hop the ship alien-to-alien with the arrow keys until it's under alien
+/// `id`, fire, then wait for the bolt to travel up and land (the alien is
+/// tagged, or popped as part of a completed pair). Returns early if the alien
+/// is already gone.
 fn aim_and_fire(h: &mut Harness, id: u32) {
     use macroquad::prelude::KeyCode;
 
-    // Align the ship under the alien.
+    // Hop to the alien's lane: one press, one alien.
     let mut fired = false;
-    for _ in 0..300 {
+    for _ in 0..12 {
         let aim = {
             let s = &h.game.active_shooter().expect("shooter should be active").session;
             s.aliens.iter().find(|a| a.id == id).map(|a| (s.ship_x, a.x))
         };
         let Some((ship_x, ax)) = aim else { return };
-        if (ship_x - ax).abs() <= 2.0 {
+        if (ship_x - ax).abs() <= 0.5 {
             h.press(KeyCode::Space);
             fired = true;
             break;
         }
-        if ship_x < ax { h.hold(KeyCode::Right); } else { h.hold(KeyCode::Left); }
+        if ship_x < ax { h.press(KeyCode::Right); } else { h.press(KeyCode::Left); }
     }
     assert!(fired, "aim_and_fire: never aligned on alien {}", id);
 
-    // Idle-tick until the bolt lands: the alien is tagged, or gone.
+    // Idle-tick until the bolt lands: the alien is tagged, gone (a bond
+    // popped), or the bolt is spent (a wrong pair let both go).
     for _ in 0..200 {
         let landed = {
             let s = &h.game.active_shooter().expect("shooter should be active").session;
             match s.aliens.iter().find(|a| a.id == id) {
                 None => true,
-                Some(a) => a.selected,
+                Some(a) => a.selected || s.shots.is_empty(),
             }
         };
         if landed { return; }

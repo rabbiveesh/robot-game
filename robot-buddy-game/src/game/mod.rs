@@ -211,6 +211,9 @@ pub struct ActiveSudoku {
 /// mirroring the other `Active*` structs.
 pub struct ActiveShooter {
     pub session: ShooterSession,
+    /// Where the ship is drawn: glides after `session.ship_x`, which snaps
+    /// lane to lane. View-only; never read by the game logic.
+    pub ship_draw_x: f32,
     pub complete_timer: f32,
     pub start_time: f32,
     pub source_npc: String,
@@ -471,7 +474,9 @@ pub enum GameEvent {
     ShooterWaveCleared { wave: u8 },
     /// The shooter run ended. `waves` is how many were cleared; `hits`/`misses`
     /// are correct/incorrect number-bond pairings (stealth-assessment signal).
-    ShooterResolved { waves: u8, hits: u32, misses: u32, response_ms: f64 },
+    /// `clean_waves` were paired off with no wrong pairs; each paid one extra
+    /// Dum Dum on top of the run's base payout.
+    ShooterResolved { waves: u8, hits: u32, misses: u32, clean_waves: u8, response_ms: f64 },
 }
 
 // ─── The Game ───────────────────────────────────────────
@@ -3616,7 +3621,7 @@ impl Game {
 
         // Goyish Map shooter — a full-screen minigame.
         if let Some(ref a) = self.active_shooter {
-            ui::shooter::draw(&a.session, screen, self.game_time);
+            ui::shooter::draw(&a.session, a.ship_draw_x, self.track_toast_text(), screen, self.game_time);
         }
 
         self.render_shop_overlay(screen);

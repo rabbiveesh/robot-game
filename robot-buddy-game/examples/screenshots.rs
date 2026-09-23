@@ -78,6 +78,38 @@ fn open_hermie(h: &mut Harness) {
     h.wait_until(|g| g.state == GameState::Shop);
 }
 
+/// Hop the shooter's ship to alien `id` with the arrows, fire, and let the
+/// bolt land.
+fn shooter_hop_and_fire(h: &mut Harness, id: u32) {
+    for _ in 0..12 {
+        let s = &h.game.active_shooter().unwrap().session;
+        let Some(ax) = s.aliens.iter().find(|a| a.id == id).map(|a| a.x) else { return };
+        if (s.ship_x - ax).abs() <= 0.5 { break; }
+        let key = if s.ship_x < ax { KeyCode::Right } else { KeyCode::Left };
+        h.press(key);
+    }
+    h.press(KeyCode::Space);
+    h.run_until(|g| g.active_shooter().is_none_or(|a| a.session.shots.is_empty()), 300);
+}
+
+/// Pair off the shooter's current wave, correctly.
+fn shooter_clear_wave(h: &mut Harness) {
+    let wave = h.game.active_shooter().unwrap().session.wave;
+    while h.game.active_shooter().is_some_and(|a| a.session.wave == wave) {
+        let (a, b) = {
+            let s = &h.game.active_shooter().unwrap().session;
+            let v = &s.aliens;
+            (0..v.len())
+                .flat_map(|i| ((i + 1)..v.len()).map(move |j| (i, j)))
+                .find(|&(i, j)| v[i].value + v[j].value == s.target)
+                .map(|(i, j)| (v[i].id, v[j].id))
+                .unwrap()
+        };
+        shooter_hop_and_fire(h, a);
+        shooter_hop_and_fire(h, b);
+    }
+}
+
 fn open_bolt(h: &mut Harness) {
     h.walk_to_npc(NpcKind::Shopkeeper);
     h.interact();
@@ -187,6 +219,29 @@ async fn main() {
         if h.game.state == GameState::InteractionMenu {
             snap_game("12_interaction_menu", &mut h).await;
         }
+    }
+
+    // ── The Goyish Map shooter: lanes, a mid-hop glide, the clean-wave cheer ──
+    {
+        let mut h = Harness::new(7);
+        h.start_dev_game();
+        h.game.map = Map::goyish_map();
+        h.game.npcs = npc_mod::npcs_for_map("goyish_map");
+        h.game.npcs_offstage.clear();
+        h.game.sparky_parked = true;
+        h.warp_to(6, 4);
+        h.hold(KeyCode::Up);
+        h.interact();
+        h.wait_until(|g| g.state == GameState::Shooter);
+        h.advance(240); // let the wave drift down a way
+        snap_game("15_shooter_in_a_lane", &mut h).await;
+        h.press(KeyCode::Right);
+        snap_game("16_shooter_mid_hop", &mut h).await;
+        shooter_clear_wave(&mut h);
+        snap_game("17_shooter_perfect_wave", &mut h).await;
+        shooter_clear_wave(&mut h);
+        shooter_clear_wave(&mut h);
+        snap_game("18_shooter_all_clear", &mut h).await;
     }
 
     // ── Panels drawn directly: a 4-line dialogue and a wrapped word problem ──

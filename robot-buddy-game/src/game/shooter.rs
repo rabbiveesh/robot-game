@@ -1,6 +1,11 @@
 //! The Goyish Map number-bond shooter: launch, per-frame step, resolve.
 
 use super::*;
+use robot_buddy_domain::logic::shooter::HopDir;
+
+/// The cheer when a wave pairs off with no wrong pairs. It only ever shows for
+/// a clean wave; any other wave just clears (no "you missed", Invariant 7).
+pub const CLEAN_WAVE_CHEER: &str = "Perfect wave!";
 
 impl Game {
     /// Launch the number-bond space shooter. Difficulty rides the math band and
@@ -16,8 +21,10 @@ impl Game {
             band: self.profile.math_band,
             source: source.clone(),
         });
+        let ship_draw_x = session.ship_x;
         self.active_shooter = Some(ActiveShooter {
             session,
+            ship_draw_x,
             complete_timer: 0.0,
             start_time: self.game_time,
             source_npc: source,
@@ -26,10 +33,6 @@ impl Game {
     }
 
     pub(super) fn step_shooter(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
-        // Ship glide speed in logical field units/sec (the field is 100 wide),
-        // nudged up at a relaxed pace so aiming keeps up with thinking.
-        let ship_speed = 70.0 * self.game_pace.ship_multiplier();
-
         // Bail out any time — no reward, no penalty. The kid can just walk away,
         // by key or by tapping Leave (a tablet has no ESC).
         let tapped_leave = input.mouse_clicked
@@ -41,6 +44,7 @@ impl Game {
         }
 
         let prev_wave = self.active_shooter.as_ref().map(|a| a.session.wave).unwrap_or(0);
+        let prev_cleared = self.active_shooter.as_ref().map_or(0, |a| a.session.cleared_waves.len());
         let mut finished = false;
 
         if let Some(a) = self.active_shooter.as_mut() {
@@ -58,12 +62,14 @@ impl Game {
                 // Reducers are pure (state in, state out); run the frame's
                 // actions through a detached session, then store the result.
                 let mut s = a.session.clone();
-                let left = input.down(KeyCode::Left) || input.down(KeyCode::A);
-                let right = input.down(KeyCode::Right) || input.down(KeyCode::D);
+                // Arrows hop the ship one alien at a time — one press, one hop,
+                // so every keyboard shot is aimed at exactly one number.
+                let left = input.pressed(KeyCode::Left) || input.pressed(KeyCode::A);
+                let right = input.pressed(KeyCode::Right) || input.pressed(KeyCode::D);
                 if left && !right {
-                    s = shooter_reducer(s, ShooterAction::MoveShip { dx: -ship_speed * dt });
+                    s = shooter_reducer(s, ShooterAction::Hop { dir: HopDir::Left });
                 } else if right && !left {
-                    s = shooter_reducer(s, ShooterAction::MoveShip { dx: ship_speed * dt });
+                    s = shooter_reducer(s, ShooterAction::Hop { dir: HopDir::Right });
                 }
                 if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) {
                     s = shooter_reducer(s, ShooterAction::FireFrom { source: ShotSource::Keys });
@@ -81,6 +87,22 @@ impl Game {
                 s = shooter_reducer(s, ShooterAction::Tick { dt });
                 a.session = s;
             }
+            // The domain snaps lane to lane; the drawn ship glides there fast.
+            let gap = a.session.ship_x - a.ship_draw_x;
+            a.ship_draw_x = if gap.abs() < 0.05 {
+                a.session.ship_x
+            } else {
+                a.ship_draw_x + gap * (1.0 - (-18.0 * dt).exp())
+            };
+        }
+
+        // A wave just paired off with no wrong pairs: cheer, right as it clears.
+        let clean_now = self.active_shooter.as_ref().is_some_and(|a| {
+            a.session.cleared_waves.len() > prev_cleared
+                && a.session.cleared_waves.last().is_some_and(|w| w.is_clean())
+        });
+        if clean_now {
+            self.track_toast = Some((CLEAN_WAVE_CHEER.to_string(), 1.8));
         }
 
         // A wave just cleared (index advanced but the run isn't over yet).
@@ -95,6 +117,8 @@ impl Game {
                 let waves = a.session.wave as u8;
                 let hits = a.session.hits;
                 let misses = a.session.misses;
+                let clean_waves = rewards::clean_waves(&a.session.cleared_waves) as u8;
+                let payout = rewards::shooter_payout(&a.session.cleared_waves);
                 let representation = a.session.representation;
                 let response_ms = self.elapsed_ms(a.start_time, 600000.0);
 
@@ -118,9 +142,12 @@ impl Game {
                     });
                 }
 
-                // Finishing the run pays out. A number-bond hunt naturally
-                // involves trial-and-error, so misses don't void the reward.
-                self.finish_puzzle(true, 0, GameEvent::ShooterResolved { waves, hits, misses, response_ms });
+                // Finishing the run pays out (a bond hunt is trial-and-error,
+                // so misses don't void it), plus one per clean wave — the
+                // domain's rule, paid once through the shared tail.
+                self.finish_puzzle_paying(payout, GameEvent::ShooterResolved {
+                    waves, hits, misses, clean_waves, response_ms,
+                });
             }
         }
     }

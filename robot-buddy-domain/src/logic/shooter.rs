@@ -1,10 +1,12 @@
 //! The Goyish Map — a number-bond space shooter. Pure logic, no rendering.
 //!
 //! A row of numbered aliens drifts slowly down toward the ship. A target is
-//! shown ("MAKE 10"). The kid slides the ship left/right and fires a bolt that
-//! travels visibly up its column and tags the first alien it reaches — so you
-//! can see exactly where you're lined up. Tag two aliens whose numbers *sum to
-//! the target* and both pop — number bonds (part-part-whole) ARE the aiming
+//! shown ("MAKE 10"). The ship sits in *lanes* — one per alien column. The kid
+//! hops it from alien to alien (`Hop`) and fires a bolt that travels visibly up
+//! its column and tags the alien there — so every keyboard shot is aimed at
+//! exactly one number, and a wrong pair is a maths signal, never bad aim. A tap
+//! on the field snaps the ship to the tapped column and fires from there. Tag
+//! two aliens whose numbers *sum to the target* and both pop — number bonds (part-part-whole) ARE the aiming
 //! logic, so this passes the Broccoli Test. A wrong pair simply deselects
 //! (never a "WRONG", never punishment).
 //!
@@ -85,7 +87,7 @@ pub struct Alien {
 pub enum ShotSource {
     /// Tap/click on the field: the ship snapped to the tapped column.
     Tap,
-    /// Arrow keys (or A/D) to line up, then Space/Enter.
+    /// Arrow keys (or A/D) to hop lanes, then Space/Enter.
     Keys,
     /// Fired via the legacy `ShooterAction::Fire`, which doesn't say.
     #[default]
@@ -137,6 +139,14 @@ pub struct WaveRecord {
     pub misses: u32,
 }
 
+impl WaveRecord {
+    /// Every pair in the wave was a real bond — no mis-pairs. Time never
+    /// enters into it (Invariant 4).
+    pub fn is_clean(&self) -> bool {
+        self.misses == 0
+    }
+}
+
 /// One wave's worth of aliens, expressed as the target and the values on the
 /// aliens (already paired so it's fully clearable). Positions are assigned when
 /// the wave is spawned.
@@ -146,6 +156,17 @@ pub struct Wave {
     pub target: u32,
     pub values: Vec<u32>,
 }
+
+/// Which way a `Hop` goes along the lane row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HopDir {
+    Left,
+    Right,
+}
+
+/// Two lane positions closer than this are the same lane (the ship is "on" it).
+const LANE_EPS: f32 = 0.5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -255,6 +276,33 @@ impl ShooterSession {
         session
     }
 
+    /// The ship's lanes: the column of every alien still waiting to be tagged,
+    /// left to right. Aliens never move sideways, so a lane is fixed until its
+    /// alien is tagged or popped.
+    pub fn lanes(&self) -> Vec<f32> {
+        let mut xs: Vec<f32> = self.aliens.iter().filter(|a| !a.selected).map(|a| a.x).collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        xs
+    }
+
+    /// The lane nearest `x` (a tie goes left, so it's deterministic), or `None`
+    /// when no alien is waiting.
+    fn nearest_lane(&self, x: f32) -> Option<f32> {
+        self.lanes().into_iter().fold(None, |best: Option<f32>, lane| match best {
+            Some(b) if (b - x).abs() <= (lane - x).abs() + 1e-3 => Some(b),
+            _ => Some(lane),
+        })
+    }
+
+    /// Put the ship in the lane nearest where it already is, so the kid's eye
+    /// doesn't have to jump — used when a wave spawns and when a pair pops out
+    /// from under the ship. A ship already in a lane stays put.
+    fn settle_ship(&mut self) {
+        if let Some(lane) = self.nearest_lane(self.ship_x) {
+            self.ship_x = lane;
+        }
+    }
+
     /// Waves finished by pairing. (The only way a wave ever finishes.)
     pub fn waves_cleared(&self) -> usize {
         self.cleared_waves.len()
@@ -282,6 +330,7 @@ impl ShooterSession {
             self.next_id += 1;
         }
         self.aliens = aliens;
+        self.settle_ship();
     }
 
     fn selected_count(&self) -> usize {
@@ -353,7 +402,12 @@ pub enum ShooterAction {
     /// Advance the world by `dt` seconds (alien drift down to the floor, bolt
     /// flight and collisions, and the silent session clock).
     Tick { dt: f32 },
-    /// Slide the ship horizontally (clamped to the field).
+    /// Hop the ship to the next lane (the next alien still waiting) in `dir`.
+    /// At the end of the row it stays put — nothing wraps, so the ship is
+    /// always where the kid expects it. The keyboard path.
+    Hop { dir: HopDir },
+    /// Slide the ship horizontally (clamped to the field). Tap-to-shoot uses
+    /// it to snap the ship to the tapped column.
     MoveShip { dx: f32 },
     /// Fire a bolt up the ship's column, without saying how it was aimed
     /// (logged as `ShotSource::Unknown`). Prefer `FireFrom`.
@@ -398,6 +452,9 @@ fn resolve_selection(s: &mut ShooterSession) {
 
     if correct {
         s.aliens.retain(|a| !a.selected);
+        // The pair popped from under the ship: slide it into the nearest
+        // lane that's left, so the next Space always has something to tag.
+        s.settle_ship();
         s.score += 1;
         s.hits += 1;
         s.miss_streak = 0; // a correct pair clears the struggle streak
@@ -427,6 +484,17 @@ pub fn shooter_reducer(state: ShooterSession, action: ShooterAction) -> ShooterS
     }
     let mut next = state;
     match action {
+        ShooterAction::Hop { dir } => {
+            let x = next.ship_x;
+            let lanes = next.lanes();
+            let to = match dir {
+                HopDir::Left => lanes.into_iter().rev().find(|&l| l < x - LANE_EPS),
+                HopDir::Right => lanes.into_iter().find(|&l| l > x + LANE_EPS),
+            };
+            if let Some(lane) = to {
+                next.ship_x = lane;
+            }
+        }
         ShooterAction::MoveShip { dx } => {
             next.ship_x = (next.ship_x + dx).clamp(0.0, FIELD_W);
         }
@@ -914,5 +982,123 @@ mod tests {
         assert_eq!(s.ship_x, 0.0);
         let s = shooter_reducer(s, ShooterAction::MoveShip { dx: 1000.0 });
         assert_eq!(s.ship_x, FIELD_W);
+    }
+
+    fn hop(s: ShooterSession, dir: HopDir) -> ShooterSession {
+        shooter_reducer(s, ShooterAction::Hop { dir })
+    }
+
+    fn on_a_lane(s: &ShooterSession) -> bool {
+        s.lanes().iter().any(|&l| (l - s.ship_x).abs() < 1e-3)
+    }
+
+    /// Keyboard-only: hop toward alien `id` until the ship is under it, fire,
+    /// and let the bolt land. Panics if hopping can't reach it.
+    fn hop_and_fire(mut s: ShooterSession, id: u32) -> ShooterSession {
+        for _ in 0..20 {
+            let ax = s.aliens.iter().find(|a| a.id == id).expect("alien on screen").x;
+            if (s.ship_x - ax).abs() < 1e-3 {
+                s = shooter_reducer(s, ShooterAction::FireFrom { source: ShotSource::Keys });
+                while !s.shots.is_empty() {
+                    s = shooter_reducer(s, ShooterAction::Tick { dt: 1.0 / 60.0 });
+                }
+                return s;
+            }
+            let dir = if ax > s.ship_x { HopDir::Right } else { HopDir::Left };
+            s = hop(s, dir);
+        }
+        panic!("hopping never reached alien {id}");
+    }
+
+    #[test]
+    fn a_fresh_wave_puts_the_ship_in_a_lane() {
+        for band in 0..=10u8 {
+            let s = ShooterSession::new(band, CraStage::Abstract, GamePace::Steady, &mut rng());
+            assert!(on_a_lane(&s), "band {band}: ship at {} is between aliens", s.ship_x);
+            // Space straight away tags something — no dead first shot.
+            let s = shooter_reducer(s, ShooterAction::FireFrom { source: ShotSource::Keys });
+            let s = idle(s, 1.5);
+            assert_eq!(s.aliens.iter().filter(|a| a.selected).count(), 1, "band {band}");
+        }
+    }
+
+    #[test]
+    fn hops_walk_the_row_in_order_and_stop_at_the_ends() {
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
+        let lanes = s.lanes();
+        assert_eq!(lanes.len(), 6);
+        // Walk off the left end: it stops on the leftmost alien and stays.
+        for _ in 0..10 {
+            s = hop(s, HopDir::Left);
+        }
+        assert_eq!(s.ship_x, lanes[0], "left end: stays put, no wrap");
+        // Right, one alien at a time, in order.
+        for want in &lanes[1..] {
+            s = hop(s, HopDir::Right);
+            assert_eq!(s.ship_x, *want);
+        }
+        let s = hop(s, HopDir::Right);
+        assert_eq!(s.ship_x, *lanes.last().unwrap(), "right end: stays put, no wrap");
+    }
+
+    #[test]
+    fn a_hop_from_between_lanes_lands_on_the_next_one_that_way() {
+        let mut s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
+        let lanes = s.lanes();
+        s.ship_x = (lanes[1] + lanes[2]) / 2.0; // e.g. after tapping empty space
+        assert_eq!(hop(s.clone(), HopDir::Right).ship_x, lanes[2]);
+        assert_eq!(hop(s, HopDir::Left).ship_x, lanes[1]);
+    }
+
+    #[test]
+    fn a_hop_skips_an_alien_already_tagged() {
+        let s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
+        let lanes = s.lanes();
+        let second = s.aliens.iter().find(|a| a.x == lanes[1]).unwrap().id;
+        let mut s = hop_and_fire(s, second);
+        assert!(s.aliens.iter().any(|a| a.id == second && a.selected));
+        s.ship_x = lanes[0];
+        let s = hop(s, HopDir::Right);
+        assert_eq!(s.ship_x, lanes[2], "the tagged alien is not a lane");
+    }
+
+    #[test]
+    fn after_a_pair_pops_the_ship_lands_in_the_nearest_lane_left() {
+        let s = ShooterSession::new(3, CraStage::Abstract, GamePace::Steady, &mut rng());
+        let (a, b) = a_matching_pair(&s);
+        let popped_at = s.aliens.iter().find(|al| al.id == b).unwrap().x;
+        let s = hop_and_fire(hop_and_fire(s, a), b);
+        assert_eq!((s.hits, s.aliens.len()), (1, 4));
+        assert!(on_a_lane(&s), "ship at {} after the pop is between aliens", s.ship_x);
+        let nearest = s.lanes().into_iter()
+            .min_by(|x, y| (x - popped_at).abs().partial_cmp(&(y - popped_at).abs()).unwrap())
+            .unwrap();
+        assert_eq!(s.ship_x, nearest, "the ship slides to the closest alien left");
+    }
+
+    #[test]
+    fn hopping_alone_can_clear_every_wave_at_every_band() {
+        // Lanes must never strand an alien: with only hops and Space, every
+        // wave pairs off and the run completes.
+        for seed in 0..8u64 {
+            for band in 0..=10u8 {
+                let mut r = SmallRng::seed_from_u64(seed);
+                let mut s = ShooterSession::new(band, CraStage::Abstract, GamePace::Steady, &mut r);
+                let mut guard = 0;
+                while s.phase == ShooterPhase::Playing {
+                    guard += 1;
+                    assert!(guard < 40, "seed {seed} band {band}: run never finished");
+                    let (a, b) = a_matching_pair(&s);
+                    s = hop_and_fire(s, a);
+                    s = hop_and_fire(s, b);
+                    if s.phase == ShooterPhase::Playing {
+                        assert!(on_a_lane(&s), "seed {seed} band {band}: ship off-lane");
+                    }
+                }
+                assert_eq!(s.waves_cleared(), TOTAL_WAVES);
+                assert!(s.cleared_waves.iter().all(|w| w.is_clean()));
+                assert!(s.attempts.iter().all(|t| t.sources == [ShotSource::Keys; 2]));
+            }
+        }
     }
 }

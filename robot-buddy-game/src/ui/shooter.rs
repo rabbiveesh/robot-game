@@ -30,7 +30,7 @@ pub enum FooterId {
     Hint,
 }
 
-const HINT: &str = "TAP a target  \u{2022}  or \u{2190}\u{2192} + SPACE";
+const HINT: &str = "TAP an alien  \u{2022}  or \u{2190}\u{2192} to hop + SPACE";
 
 /// The bottom strip under the play field, laid out so the button and the hint
 /// share it without overlapping at any width. Read by both `draw` and the
@@ -60,7 +60,9 @@ pub fn field_x_at(screen: (f32, f32), mx: f32, my: f32) -> Option<f32> {
     Some(((mx - px) / pw * FIELD_W).clamp(0.0, FIELD_W))
 }
 
-pub fn draw(session: &ShooterSession, screen: (f32, f32), time: f32) {
+/// `ship_x` is where to draw the ship (the game glides it after the domain's
+/// lane snap); `cheer` is a short celebration to float over the field, if any.
+pub fn draw(session: &ShooterSession, ship_x: f32, cheer: Option<&str>, screen: (f32, f32), time: f32) {
     let (sw, sh) = screen;
 
     // Backdrop: deep space with a drifting starfield.
@@ -100,7 +102,7 @@ pub fn draw(session: &ShooterSession, screen: (f32, f32), time: f32) {
     }
 
     // ── Ship on the bottom rail ──
-    let (ship_x, ship_y) = to_screen(session.ship_x, FIELD_H);
+    let (ship_x, ship_y) = to_screen(ship_x, FIELD_H);
     draw_ship(ship_x, ship_y - alien_r * 0.6, alien_r);
 
     // Aiming guide: a soft beam up the ship's column so kids see where a shot goes.
@@ -119,6 +121,20 @@ pub fn draw(session: &ShooterSession, screen: (f32, f32), time: f32) {
     } else {
         draw_footer(screen);
     }
+
+    // A clean wave's cheer: mid-field while play goes on (the next wave is
+    // still up top), above the ALL CLEAR banner on the last one.
+    if let Some(msg) = cheer {
+        let y = if session.phase == ShooterPhase::Complete { sh / 2.0 - 72.0 } else { play_y + play_h * 0.55 };
+        draw_cheer(sw, y, msg);
+    }
+}
+
+fn draw_cheer(sw: f32, y: f32, msg: &str) {
+    let size = 40.0;
+    let w = measure_text(msg, None, size as u16, 1.0).width;
+    draw_rectangle(sw / 2.0 - w / 2.0 - 18.0, y - 36.0, w + 36.0, 50.0, color_u8!(10, 14, 30, 190));
+    draw_text(msg, sw / 2.0 - w / 2.0, y, size, color_u8!(255, 226, 120, 255));
 }
 
 fn draw_footer(screen: (f32, f32)) {

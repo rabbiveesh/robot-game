@@ -106,8 +106,15 @@ impl Game {
     /// The shared tail of every resolved puzzle: pay out a clean solve,
     /// log the resolution, return to the overworld, save.
     pub(super) fn finish_puzzle(&mut self, correct: bool, mistakes: u32, resolved: GameEvent) {
-        if let Some(reward) = rewards::determine_reward(correct, mistakes) {
-            self.award_dum_dums(reward.amount);
+        let payout = rewards::determine_reward(correct, mistakes).map_or(0, |r| r.amount);
+        self.finish_puzzle_paying(payout, resolved);
+    }
+
+    /// `finish_puzzle` for an activity with its own domain payout rule (the
+    /// shooter's clean-wave bonus): pay exactly `payout`, once, then the same tail.
+    pub(super) fn finish_puzzle_paying(&mut self, payout: u32, resolved: GameEvent) {
+        if payout > 0 {
+            self.award_dum_dums(payout);
         }
         self.events.push(resolved);
         self.set_state(GameState::Playing);
