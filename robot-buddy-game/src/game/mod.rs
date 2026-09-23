@@ -1759,8 +1759,7 @@ impl Game {
                 let npc_info = NpcInfo {
                     id: target_id.clone(),
                     can_receive_gifts: Some(can_receive_gifts),
-                    has_shop: Some(matches!(target_kind,
-                        npc::NpcKind::Shopkeeper | npc::NpcKind::HermitCrab)),
+                    has_shop: Some(target_kind.shop().is_some()),
                     is_puzzler: Some(is_puzzler),
                     runs_dive: Some(is_dive),
                 };
@@ -2422,11 +2421,8 @@ impl Game {
                 }
                 "shop" => {
                     let source = self.menu_target_id.clone();
-                    let shop = if self.menu_target_id == "hermit_crab" {
-                        ShopKind::Hermie
-                    } else {
-                        ShopKind::Bolt
-                    };
+                    // The menu only offers "shop" for an NPC that runs one.
+                    let Some(shop) = npc::NpcKind::from_id(&source).and_then(|k| k.shop()) else { return };
                     self.active_shop = Some(ActiveShop {
                         shop,
                         catalog: shop.catalog(),

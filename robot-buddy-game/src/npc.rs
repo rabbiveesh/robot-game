@@ -114,6 +114,18 @@ impl NpcKind {
         }
     }
 
+    /// The counter this NPC runs, if any. The one place that decides it: the
+    /// menu offers "shop" from this and opening the shop reads it back, so a
+    /// new shopkeeper can't quietly open someone else's counter.
+    pub fn shop(self) -> Option<robot_buddy_domain::economy::shop::ShopKind> {
+        use robot_buddy_domain::economy::shop::ShopKind;
+        match self {
+            NpcKind::Shopkeeper => Some(ShopKind::Bolt),
+            NpcKind::HermitCrab => Some(ShopKind::Hermie),
+            _ => None,
+        }
+    }
+
     pub fn display_name(self) -> &'static str {
         match self {
             NpcKind::Sage | NpcKind::SageLab => "Professor Gizmo",

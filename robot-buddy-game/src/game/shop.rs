@@ -81,7 +81,7 @@ impl Game {
                 let item = ash.catalog[i].clone();
                 // An owned Color Change re-opens the picker — buying it once
                 // means you get to change colors whenever you like.
-                if item.id == "color_change" && ash.owned.contains(&item.id) {
+                if item.id == domain_shop::COLOR_CHANGE && ash.owned.contains(&item.id) {
                     ash.picking_color = true;
                     ash.message = None;
                     return;
@@ -163,7 +163,7 @@ impl Game {
                         ash.owned.insert(item.id.clone());
                         ash.selected = None;
                         ash.choices.clear();
-                        if item.id == "color_change" {
+                        if item.id == domain_shop::COLOR_CHANGE {
                             // The fun part of Color Change is choosing — go
                             // straight to the swatches.
                             ash.picking_color = true;

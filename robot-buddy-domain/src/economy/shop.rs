@@ -219,6 +219,9 @@ pub fn pearl_payout(base: u32, clean_bonus: u32, was_clean: bool, owned: &BTreeS
 /// hard-coding the string in three places.
 pub const DIVING_NET: &str = "diving_net";
 
+/// Item id of Bolt's Color Change, the one piece of swag that opens a picker.
+pub const COLOR_CHANGE: &str = "color_change";
+
 pub fn item_by_id(id: &str) -> Option<ShopItem> {
     all_items().into_iter().find(|i| i.id == id)
 }

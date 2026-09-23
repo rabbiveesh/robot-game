@@ -85,7 +85,7 @@ pub fn draw_gear(
     // glinting in it. Sits to the side rather than the back so it reads from
     // every facing — and swaps sides when the kid turns, so it never covers
     // their face.
-    if gear.contains("diving_net") {
+    if gear.contains(robot_buddy_domain::economy::shop::DIVING_NET) {
         let side = if dir == Dir::Right { -1.0 } else { 1.0 };
         let px = |dx: f32| cx + side * dx * s;
         let hip = (chest + ground) / 2.0 + 1.0 * s;
@@ -151,7 +151,7 @@ pub fn draw_swag(
 
     // Color change: recolor the wearer's middle, from just under the collar to
     // most of the way to the ground.
-    if worn.contains("color_change") {
+    if worn.contains(robot_buddy_domain::economy::shop::COLOR_CHANGE) {
         let base = outfit_color(color_choice);
         let mut tint = base;
         tint.a = 0.6;
