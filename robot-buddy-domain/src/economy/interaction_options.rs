@@ -17,7 +17,7 @@ pub struct NpcInfo {
     /// she just also runs the way down.
     #[serde(default)]
     pub runs_dive: Option<bool>,
-    /// True while this buddy wears Color Change: they get a "New colour?"
+    /// True while this buddy wears Color Change: they get a "New color?"
     /// option to pick their outfit colour again.
     #[serde(default)]
     pub wears_color_change: Option<bool>,
@@ -76,7 +76,7 @@ pub fn get_interaction_options(npc: &NpcInfo, player_state: &PlayerState) -> Vec
         let key = (options.len() + 1).to_string();
         options.push(InteractionOption {
             option_type: "recolor".into(),
-            label: "New colour?".into(),
+            label: "New color?".into(),
             key,
         });
     }
@@ -265,7 +265,7 @@ mod tests {
         let kid = PlayerState { dum_dums: 0, swag_worn: 0 };
         let opts = get_interaction_options(&buddy(true), &kid);
         let recolor = opts.iter().find(|o| o.option_type == "recolor").expect("Tali in Color Change gets a new colour");
-        assert_eq!(recolor.label, "New colour?");
+        assert_eq!(recolor.label, "New color?");
         assert!(!get_interaction_options(&buddy(false), &kid).iter().any(|o| o.option_type == "recolor"),
             "nothing to recolour on a buddy who isn't wearing it");
     }

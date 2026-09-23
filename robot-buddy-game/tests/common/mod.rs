@@ -765,7 +765,7 @@ impl Harness {
     }
 
     /// Tap the swatch for outfit colour `color` in the swag panel's colour
-    /// picker (up after handing over Color Change, or from "New colour?").
+    /// picker (up after handing over Color Change, or from "New color?").
     pub fn pick_swag_color(&mut self, color: &str) {
         let i = outfit_color_index(color);
         let (x, y) = self.game.swag_layout(SCREEN).expect("pick_swag_color: panel not open")

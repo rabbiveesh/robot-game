@@ -162,7 +162,7 @@ pub fn a_tall_screen_shows_the_whole_wardrobe_on_one_page() {
 }
 
 /// Picking a buddy's Color Change colour: every swatch on screen and tappable,
-/// with a long name in the "What colour for …?" heading.
+/// with a long name in the "What color for …?" heading.
 pub fn buddy_colour_picker_is_sane_everywhere() {
     let items = swag_items();
     let taken = owned(&["color_change"]);

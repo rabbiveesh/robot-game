@@ -5,7 +5,7 @@
 //! with the buddy they'd go to named at the top. Tap one and it's theirs — no
 //! math gate here, the arithmetic already happened at Bolt's counter. And the
 //! colour picker: hand over Color Change (or ask a buddy wearing it for a "New
-//! colour?") and the rows give way to swatches — "What colour for Tali?".
+//! color?") and the rows give way to swatches — "What color for Tali?".
 //!
 //! Layout is declarative (see `ui::layout`): the `Frame` in [`SwagLayout`] is
 //! what both [`draw`] and [`handle_click`] read.
@@ -169,7 +169,7 @@ fn build(m: &SwagModel, page: Page) -> Node<SwagId> {
 /// The panel's heading: whose outfit it is, and what's being chosen.
 fn title(m: &SwagModel) -> String {
     match m.picking {
-        Some(_) => format!("What colour for {}?", m.recipient),
+        Some(_) => format!("What color for {}?", m.recipient),
         None => format!("Dress up {}!", m.recipient),
     }
 }

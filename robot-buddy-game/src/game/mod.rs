@@ -274,7 +274,7 @@ pub struct ActiveSwag {
     pub page: usize,
     /// Swatches are up: the kid is picking the recipient's Color Change colour.
     pub picking_color: bool,
-    /// Opened straight to the swatches from the buddy's "New colour?" option,
+    /// Opened straight to the swatches from the buddy's "New color?" option,
     /// so Done closes the panel rather than going back to the list.
     pub recolor_only: bool,
 }

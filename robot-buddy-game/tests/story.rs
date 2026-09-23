@@ -455,7 +455,7 @@ fn a_buddy_keeps_the_colour_picked_for_them() {
     h.select_option("swag");
     h.wait_until(|g| g.state == GameState::Swag);
     h.give_swag("color_change");
-    assert_eq!(swag_title(&h), "What colour for Tali?");
+    assert_eq!(swag_title(&h), "What color for Tali?");
     let pick = h.game.swag_model().unwrap().picking.map(|p| p.current);
     assert_eq!(pick, Some(common::outfit_color_index("red")), "the shirt arrives in the colour it was");
     let mark = h.mark();
@@ -506,10 +506,10 @@ fn new_colour_is_offered_to_a_buddy_in_color_change_and_recolours_only_them() {
     h.interact();
     let option = h.game.menu_options.iter().find(|o| o.option_type == "recolor")
         .expect("Tali in Color Change is offered a new colour");
-    assert_eq!(option.label, "New colour?");
+    assert_eq!(option.label, "New color?");
     h.select_option("recolor");
     h.wait_until(|g| g.state == GameState::Swag);
-    assert_eq!(swag_title(&h), "What colour for Tali?");
+    assert_eq!(swag_title(&h), "What color for Tali?");
     h.pick_swag_color("green");
     h.close_swag();
 

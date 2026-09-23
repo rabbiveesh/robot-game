@@ -307,7 +307,7 @@ impl Game {
 
     /// Open the Give-Swag panel for whoever the menu is talking to: to the
     /// list of what the kid is wearing, or (`recolor_only`, from a buddy's "New
-    /// colour?") straight to that buddy's Color Change swatches.
+    /// color?") straight to that buddy's Color Change swatches.
     pub(super) fn open_swag(&mut self, recolor_only: bool) {
         // Sparky is a robot rather than a roster NPC, hence the sprite-less
         // preview; everyone else previews as themselves.
