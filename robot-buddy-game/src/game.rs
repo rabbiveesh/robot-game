@@ -2389,7 +2389,7 @@ impl Game {
         if dismiss {
             if let Some(ak) = self.active_kenken.take() {
                 let was_correct = ak.session.phase == KenKenPhase::Complete;
-                let response_ms = ((self.game_time - ak.start_time) as f64 * 1000.0).min(120000.0);
+                let response_ms = self.elapsed_ms(ak.start_time, 120000.0);
                 let grid_size = ak.session.puzzle.grid_size;
                 let hints_used = ak.session.hints_used;
                 let violations = ak.session.constraint_violations;
@@ -2405,11 +2405,7 @@ impl Game {
                 // Same payout rule as every activity: earned only by a clean
                 // solve. Violations = mistakes; hints stay reward-neutral
                 // (asking for help is a behavior we want, not a grind).
-                if let Some(reward) = rewards::determine_reward(was_correct, violations as u32) {
-                    self.award_dum_dums(reward.amount);
-                }
-
-                self.events.push(GameEvent::KenKenResolved {
+                self.finish_puzzle(was_correct, violations as u32, GameEvent::KenKenResolved {
                     correct: was_correct,
                     grid_size,
                     hints_used,
@@ -2417,10 +2413,24 @@ impl Game {
                     response_ms,
                 });
             }
-            self.set_state(GameState::Playing);
-
-            self.persist();
         }
+    }
+
+    /// Silent response time since `start_time`, in ms, capped at `cap_ms`.
+    /// The kid never sees it (Invariant 4) — it only feeds the adaptive system.
+    fn elapsed_ms(&self, start_time: f32, cap_ms: f64) -> f64 {
+        ((self.game_time - start_time) as f64 * 1000.0).min(cap_ms)
+    }
+
+    /// The shared tail of every resolved puzzle: pay out a clean solve,
+    /// log the resolution, return to the overworld, save.
+    fn finish_puzzle(&mut self, correct: bool, mistakes: u32, resolved: GameEvent) {
+        if let Some(reward) = rewards::determine_reward(correct, mistakes) {
+            self.award_dum_dums(reward.amount);
+        }
+        self.events.push(resolved);
+        self.set_state(GameState::Playing);
+        self.persist();
     }
 
     fn step_pattern(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
@@ -2455,7 +2465,7 @@ impl Game {
         if dismiss {
             if let Some(ap) = self.active_pattern.take() {
                 let was_correct = ap.session.phase == PatternPhase::Complete;
-                let response_ms = ((self.game_time - ap.start_time) as f64 * 1000.0).min(120000.0);
+                let response_ms = self.elapsed_ms(ap.start_time, 120000.0);
                 let level = self.profile.pattern_level;
                 let attempts = ap.session.attempts;
 
@@ -2469,20 +2479,13 @@ impl Game {
                 // `attempts` counts every guess including the right one, so
                 // mistakes = attempts - 1. Guess-grinding pays nothing.
                 let mistakes = attempts.saturating_sub(1) as u32;
-                if let Some(reward) = rewards::determine_reward(was_correct, mistakes) {
-                    self.award_dum_dums(reward.amount);
-                }
-
-                self.events.push(GameEvent::PatternResolved {
+                self.finish_puzzle(was_correct, mistakes, GameEvent::PatternResolved {
                     correct: was_correct,
                     level,
                     attempts,
                     response_ms,
                 });
             }
-            self.set_state(GameState::Playing);
-
-            self.persist();
         }
     }
 
@@ -2517,27 +2520,20 @@ impl Game {
         if dismiss {
             if let Some(ab) = self.active_balance.take() {
                 let was_correct = ab.session.phase == BalancePhase::Complete;
-                let response_ms = ((self.game_time - ab.start_time) as f64 * 1000.0).min(120000.0);
+                let response_ms = self.elapsed_ms(ab.start_time, 120000.0);
                 let level = balance::balance_level_for_band(self.profile.math_band);
                 let attempts = ab.session.attempts;
 
                 // The balance scale is the grindiest of all — tap every number
                 // until it levels. Only a first-guess balance pays.
                 let mistakes = attempts.saturating_sub(1) as u32;
-                if let Some(reward) = rewards::determine_reward(was_correct, mistakes) {
-                    self.award_dum_dums(reward.amount);
-                }
-
-                self.events.push(GameEvent::BalanceResolved {
+                self.finish_puzzle(was_correct, mistakes, GameEvent::BalanceResolved {
                     correct: was_correct,
                     level,
                     attempts,
                     response_ms,
                 });
             }
-            self.set_state(GameState::Playing);
-
-            self.persist();
         }
     }
 
@@ -2569,24 +2565,17 @@ impl Game {
         if dismiss {
             if let Some(asd) = self.active_sudoku.take() {
                 let was_correct = asd.session.phase == SudokuPhase::Complete;
-                let response_ms = ((self.game_time - asd.start_time) as f64 * 1000.0).min(120000.0);
+                let response_ms = self.elapsed_ms(asd.start_time, 120000.0);
                 let grid_size = asd.session.puzzle.grid_size;
                 let violations = asd.session.constraint_violations;
 
-                if let Some(reward) = rewards::determine_reward(was_correct, violations as u32) {
-                    self.award_dum_dums(reward.amount);
-                }
-
-                self.events.push(GameEvent::SudokuResolved {
+                self.finish_puzzle(was_correct, violations as u32, GameEvent::SudokuResolved {
                     correct: was_correct,
                     grid_size,
                     constraint_violations: violations,
                     response_ms,
                 });
             }
-            self.set_state(GameState::Playing);
-
-            self.persist();
         }
     }
 
@@ -2680,7 +2669,7 @@ impl Game {
                 let hits = a.session.hits;
                 let misses = a.session.misses;
                 let representation = a.session.representation;
-                let response_ms = ((self.game_time - a.start_time) as f64 * 1000.0).min(600000.0);
+                let response_ms = self.elapsed_ms(a.start_time, 600000.0);
 
                 // Stealth assessment: every pairing is a NumberBond data point.
                 // The child never sees a score or "attempt" — this only feeds the
@@ -2703,15 +2692,8 @@ impl Game {
 
                 // Finishing the run pays out. A number-bond hunt naturally
                 // involves trial-and-error, so misses don't void the reward.
-                if let Some(reward) = rewards::determine_reward(true, 0) {
-                    self.award_dum_dums(reward.amount);
-                }
-
-                self.events.push(GameEvent::ShooterResolved { waves, hits, misses, response_ms });
+                self.finish_puzzle(true, 0, GameEvent::ShooterResolved { waves, hits, misses, response_ms });
             }
-            self.set_state(GameState::Playing);
-
-            self.persist();
         }
     }
 
