@@ -36,6 +36,9 @@ pub struct FrameInput {
     /// Left button (or finger) came up this frame — where a drag drops.
     pub mouse_released: bool,
     pub chars_typed: Vec<char>,
+    /// Wall clock, Unix seconds. Only for stamping records (the attempt log);
+    /// nothing in play reads it. 0 in tests unless set.
+    pub now: f64,
 }
 
 #[allow(dead_code)] // builders are for the upcoming test harness
@@ -56,6 +59,7 @@ impl FrameInput {
         input.mouse_clicked = is_mouse_button_pressed(MouseButton::Left);
         input.mouse_down = is_mouse_button_down(MouseButton::Left);
         input.mouse_released = is_mouse_button_released(MouseButton::Left);
+        input.now = macroquad::miniquad::date::now();
         while let Some(c) = get_char_pressed() {
             input.chars_typed.push(c);
         }
@@ -105,6 +109,11 @@ impl FrameInput {
     pub fn with_mouse_release(mut self, x: f32, y: f32) -> Self {
         self.mouse_pos = (x, y);
         self.mouse_released = true;
+        self
+    }
+
+    pub fn with_now(mut self, unix_secs: f64) -> Self {
+        self.now = unix_secs;
         self
     }
 

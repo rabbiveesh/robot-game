@@ -30,6 +30,7 @@ use robot_buddy_domain::economy::give;
 use robot_buddy_domain::economy::rewards;
 use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
 use robot_buddy_domain::logic::manipulate_concrete::ConcreteKind;
+use robot_buddy_domain::learning::attempt_log::{AnswerAt, AttemptLog, AttemptRecord, Help};
 use robot_buddy_domain::logic::kenken::{
     self, KenKenAction, KenKenPhase, KenKenSession, cage_ops_for_band, generate_kenken,
 };
@@ -173,6 +174,14 @@ struct ActiveChallenge {
     workspace: Option<ui::concrete::Workspace>,
     complete_timer: f32,
     start_time: f32,
+    // For the attempt log:
+    /// Every answer given, and when.
+    answers: Vec<AnswerAt>,
+    /// When Show me was pressed (game time).
+    help_at: Option<f32>,
+    /// The learner's CRA stage for this operation when it was asked (Show me
+    /// lowers the one on `state`).
+    stage_asked: CraStage,
 }
 
 pub struct ActiveKenKen {
@@ -669,6 +678,9 @@ pub struct Game {
     rng: SmallRng,
     pub events: Vec<GameEvent>,
     pub session_log: session::SessionLog,
+    /// Every challenge, in detail, across sessions (saved; bounded). What the
+    /// parent export carries for `analyze`.
+    pub attempt_log: AttemptLog,
 }
 
 impl Game {
@@ -762,6 +774,7 @@ impl Game {
             rng: SmallRng::seed_from_u64(seed),
             events: Vec::new(),
             session_log: session::SessionLog::new(),
+            attempt_log: AttemptLog::new(),
         }
     }
 
@@ -1114,7 +1127,7 @@ impl Game {
             || (self.debug_overlay.visible && input.pressed(KeyCode::E))
         {
             let json = session::build_export(
-                &self.player_name, &self.session_log, &self.gifts_given,
+                &self.player_name, &self.session_log, self.attempt_log.records(), &self.gifts_given,
                 self.dum_dums, self.play_time, &self.profile, self.map.id,
             );
             let filename = format!("robot-buddy-session-{}.json", self.play_time as u64);
@@ -1209,6 +1222,7 @@ impl Game {
                         self.dum_dums = 20;
                         self.play_time = 0.0;
                         self.behavior_signals.clear();
+                        self.attempt_log = AttemptLog::new();
 
                         self.map = Map::by_id("dev");
                         self.npcs = npc::npcs_for_map(self.map.id);
@@ -1237,6 +1251,7 @@ impl Game {
                         self.play_time = 0.0;
                         self.active_slot = slot;
                         self.behavior_signals.clear();
+                        self.attempt_log = AttemptLog::new();
 
                         self.map = Map::overworld();
                         self.player = Entity::new(14, 12);
@@ -2029,6 +2044,7 @@ impl Game {
             }
 
             if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge, input) {
+                note_action(ac, &action, self.game_time);
                 ac.state = challenge_reducer(ac.state.clone(), action);
                 speak_challenge_feedback(&ac.state, &buddy);
             } else if ac.state.phase == Phase::Complete
@@ -2045,6 +2061,7 @@ impl Game {
                     &ui::challenge::layout(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen),
                 ) {
                     let show_me = matches!(action, ChallengeAction::ShowMe);
+                    note_action(ac, &action, self.game_time);
                     ac.state = challenge_reducer(ac.state.clone(), action);
                     if !(show_me && open_concrete_workspace(ac, &mut self.rng, &mut self.events, &buddy)) {
                         speak_challenge_feedback(&ac.state, &buddy);
@@ -2059,20 +2076,9 @@ impl Game {
                 let was_correct = ac.state.correct == Some(true);
                 let response_ms = ((self.game_time - ac.start_time) as f64 * 1000.0).min(30000.0);
 
-                self.session_log.record_challenge(session::ChallengeRecord {
-                    question: ac.challenge.display_text.clone(),
-                    correct_answer: ac.challenge.correct_answer,
-                    player_answer: None,
-                    correct: was_correct,
-                    operation: ac.challenge.numbers.op.clone(),
-                    band: ac.challenge.band,
-                    sampled_band: ac.challenge.sampled_band,
-                    hint_used: ac.state.hint_used,
-                    told_me: ac.state.told_me,
-                    attempts: ac.state.attempts,
-                    source: self.menu_target_id.clone(),
-                    play_time_at_event: self.play_time,
-                });
+                let record = attempt_record(&ac, was_correct, input.now, self.play_time, &self.menu_target_id);
+                self.session_log.record_challenge(record.clone());
+                self.attempt_log = std::mem::take(&mut self.attempt_log).record(record);
 
                 let event = LearnerEvent::PuzzleAttempted {
                     correct: was_correct,
@@ -2253,6 +2259,7 @@ impl Game {
                 }
                 let mut ac = active_challenge_for(challenge, &self.profile, self.game_time);
                 ac.state.render_hint.cra_stage = CraStage::Concrete;
+                note_action(&mut ac, &ChallengeAction::ShowMe, self.game_time);
                 ac.state = challenge_reducer(ac.state, ChallengeAction::ShowMe);
                 let buddy = self.current_buddy_name();
                 self.begin_challenge(ac);
@@ -2632,7 +2639,7 @@ impl Game {
                     }
                     SettingsResult::ExportSession => {
                         let json = session::build_export(
-                            &self.player_name, &self.session_log, &self.gifts_given,
+                            &self.player_name, &self.session_log, self.attempt_log.records(), &self.gifts_given,
                             self.dum_dums, self.play_time, &self.profile, self.map.id,
                         );
                         let filename = format!("robot-buddy-session-{}.json", self.play_time as u64);
@@ -3814,6 +3821,7 @@ impl Game {
             fuel: self.fuel,
             upgrades: self.upgrades.iter().cloned().collect(),
             game_pace: self.game_pace,
+            attempt_log: self.attempt_log.clone(),
         }
     }
 
@@ -3833,6 +3841,7 @@ impl Game {
         self.fuel = save_data.fuel;
         self.upgrades = save_data.upgrades.iter().cloned().collect();
         self.game_pace = save_data.game_pace;
+        self.attempt_log = save_data.attempt_log.clone();
 
         self.map = Map::by_id(&save_data.map_id);
         self.npcs_offstage.clear();
@@ -4016,6 +4025,9 @@ fn active_challenge_for(challenge: Challenge, profile: &LearnerProfile, game_tim
         workspace: None,
         complete_timer: 0.0,
         start_time: game_time,
+        answers: Vec::new(),
+        help_at: None,
+        stage_asked: cra,
     }
 }
 
@@ -4050,6 +4062,9 @@ fn start_intake_challenge(challenge: Challenge, _band: u8, game_time: f32) -> Ac
         workspace: None,
         complete_timer: 0.0,
         start_time: game_time,
+        answers: Vec::new(),
+        help_at: None,
+        stage_asked: CraStage::Abstract,
     }
 }
 
@@ -4248,6 +4263,47 @@ fn display_name_for_buddy_id(id: &str) -> String {
 /// hands-on workspace, and have the buddy say what to do (the only
 /// instructions a pre-reader gets). Returns false — leaving the static
 /// picture — when the problem doesn't fit the ten-frames.
+/// Note what the attempt log needs from an action before it's applied: an
+/// answer and when, or when Show me was first pressed.
+fn note_action(ac: &mut ActiveChallenge, action: &ChallengeAction, game_time: f32) {
+    let ms = ((game_time - ac.start_time).max(0.0) * 1000.0) as u32;
+    match action {
+        ChallengeAction::AnswerSubmitted { answer } => ac.answers.push(AnswerAt { value: *answer, ms }),
+        ChallengeAction::ShowMe if ac.help_at.is_none() => ac.help_at = Some(game_time),
+        _ => {}
+    }
+}
+
+/// The attempt log's record of a finished challenge.
+fn attempt_record(ac: &ActiveChallenge, correct: bool, now: f64, play_secs: f32, source: &str) -> AttemptRecord {
+    let c = &ac.challenge;
+    let help = match (&ac.workspace, ac.state.hint_used) {
+        (Some(_), _) => Help::Workspace,
+        (None, true) => Help::Picture,
+        (None, false) => Help::None,
+    };
+    AttemptRecord {
+        at: now,
+        play_secs,
+        source: source.to_string(),
+        operation: c.operation,
+        sub_skill: c.sub_skill,
+        a: c.numbers.a,
+        b: c.numbers.b,
+        format: c.numbers.format.clone(),
+        band: c.sampled_band,
+        center_band: c.center_band,
+        cra_stage: ac.stage_asked,
+        correct_answer: c.correct_answer,
+        answers: ac.answers.clone(),
+        correct,
+        help,
+        help_ms: ac.help_at.map(|t| ((t - ac.start_time).max(0.0) * 1000.0) as u32),
+        told_me: ac.state.told_me,
+        workspace: ac.workspace.as_ref().map(|w| w.usage().clone()),
+    }
+}
+
 fn open_concrete_workspace(
     ac: &mut ActiveChallenge,
     rng: &mut SmallRng,

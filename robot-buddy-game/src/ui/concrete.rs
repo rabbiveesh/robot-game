@@ -35,6 +35,7 @@
 
 use ::rand::Rng;
 use crate::prelude::*;
+use robot_buddy_domain::learning::attempt_log::{WorkspaceKind, WorkspaceUse};
 use robot_buddy_domain::learning::challenge_generator::Challenge;
 use robot_buddy_domain::logic::manipulate_concrete::{
     concrete_reducer, generate_concrete, ConcreteAction, ConcreteKind, ConcretePhase,
@@ -148,9 +149,9 @@ pub struct Workspace {
     /// Which frames the kid has snapped into a ten-rod. Only honored while the
     /// frame is full.
     rods: [bool; 2],
-    /// Singles moved while a whole row was available (the row-stick nudge
-    /// waits for a few of these).
-    singles_past_a_row: usize,
+    /// What the kid has done here, for the attempt log (and the row-stick
+    /// nudge, which waits for a few singles moved past a whole row).
+    usage: WorkspaceUse,
     slides: Vec<Slide>,
     glows: Vec<Glow>,
     clock: f32,
@@ -170,11 +171,15 @@ pub struct Landed {
 
 impl Workspace {
     pub fn new(session: ConcreteSession) -> Self {
+        let kind = match session.puzzle.kind {
+            ConcreteKind::TakeAway => WorkspaceKind::TakeAway,
+            _ => WorkspaceKind::PutTogether,
+        };
         Workspace {
             session,
             drag: None,
             rods: [false; 2],
-            singles_past_a_row: 0,
+            usage: WorkspaceUse { kind: Some(kind), ..Default::default() },
             slides: vec![],
             glows: vec![],
             clock: 0.0,
@@ -189,6 +194,11 @@ impl Workspace {
 
     pub fn is_built(&self) -> bool {
         self.session.phase == ConcretePhase::Complete
+    }
+
+    /// What the kid has done here so far (times are from when it opened).
+    pub fn usage(&self) -> &WorkspaceUse {
+        &self.usage
     }
 
     /// Anything still moving? (Tests wait on this; the game doesn't care.)
@@ -249,7 +259,7 @@ impl Workspace {
     /// counter), then slide everything whose space changed.
     fn land(&mut self, pos: (f32, f32), area: UiRect) -> Landed {
         let Some(drag) = self.drag.clone() else {
-            return Landed { built: self.is_built(), filled_ten: false, row: false, singles_past_a_row: self.singles_past_a_row };
+            return Landed { built: self.is_built(), filled_ten: false, row: false, singles_past_a_row: self.usage.singles_past_a_row as usize };
         };
         let before = self.snapshot(area);
         let had = layout(self, area).in_frames.len();
@@ -263,8 +273,13 @@ impl Workspace {
         for _ in &drag.slots {
             self.session = concrete_reducer(self.session.clone(), action);
         }
-        if drag.single_past_a_row {
-            self.singles_past_a_row += 1;
+        if drag.is_row() {
+            self.usage.rows += 1;
+        } else {
+            self.usage.singles += 1;
+            if drag.single_past_a_row {
+                self.usage.singles_past_a_row += 1;
+            }
         }
         // A rod only stands while its frame is full.
         let full = frames_full(&layout(self, area));
@@ -286,7 +301,10 @@ impl Workspace {
                 self.glows.push(Glow { kind: GlowKind::Row(k / 10, 0), age: 0.0 });
             }
         }
-        Landed { built: self.is_built(), filled_ten, row: drag.is_row(), singles_past_a_row: self.singles_past_a_row }
+        if self.is_built() && self.usage.built_ms.is_none() {
+            self.usage.built_ms = Some((self.clock * 1000.0) as u32);
+        }
+        Landed { built: self.is_built(), filled_ten, row: drag.is_row(), singles_past_a_row: self.usage.singles_past_a_row as usize }
     }
 
     /// What's carried missed: it glides back into the spaces it left.
@@ -294,6 +312,7 @@ impl Workspace {
         let Some(drag) = self.drag.clone() else { return };
         let cell = layout(self, area).cell;
         self.drag = None;
+        self.usage.misses += 1;
         // The returning counters are the ones whose spaces were gaps.
         let after = layout(self, area);
         let homes: Vec<(f32, f32)> = drag
@@ -318,6 +337,11 @@ impl Workspace {
     fn toggle_rod(&mut self, frame: usize, area: UiRect) -> bool {
         let before = self.snapshot(area);
         self.rods[frame] = !self.rods[frame];
+        if self.rods[frame] {
+            self.usage.rods_snapped += 1;
+        } else {
+            self.usage.rods_opened += 1;
+        }
         self.slide_from(&before, &[], area);
         if self.rods[frame] {
             self.glows.push(Glow { kind: GlowKind::Frame(frame), age: 0.0 });
@@ -1077,7 +1101,8 @@ mod tests {
             drag(&mut w, one, target);
         }
         // Only the first was taken with a full row still there.
-        assert_eq!(w.singles_past_a_row, 1);
+        assert_eq!(w.usage().singles_past_a_row, 1);
+        assert_eq!(w.usage().singles, 2);
     }
 
     #[test]

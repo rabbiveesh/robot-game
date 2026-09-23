@@ -3377,3 +3377,97 @@ fn the_dev_bench_cycles_through_each_manipulative() {
     }
     assert_eq!(kinds, vec![ConcreteKind::AddGroups, ConcreteKind::TakeAway]);
 }
+
+// ─── The attempt log: what a parent's export will show ─────
+
+fn press_a_wrong_answer(h: &mut Harness) {
+    use macroquad::prelude::KeyCode;
+    let right = h.game.correct_choice_index().expect("a challenge is up");
+    let key = [KeyCode::Key1, KeyCode::Key2, KeyCode::Key3][(right + 1) % 3];
+    h.press(key);
+}
+
+#[test]
+fn an_unaided_answer_is_logged_with_its_numbers_and_timing() {
+    use robot_buddy_domain::learning::attempt_log::Help;
+    use robot_buddy_domain::types::CraStage;
+    let mut h = Harness::new(0);
+    sparky_small_challenge(&mut h);
+    h.advance(90); // the kid thinks for a second and a half
+    h.answer_correctly();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    let log = h.game.attempt_log.records();
+    assert_eq!(log.len(), 1);
+    let r = &log[0];
+    use robot_buddy_domain::types::Operation;
+    let from_numbers = match r.operation {
+        Operation::Add => r.a + r.b,
+        Operation::Sub => r.a - r.b,
+        _ => r.correct_answer,
+    };
+    assert_eq!(from_numbers, r.correct_answer, "the logged numbers give the logged answer");
+    assert_eq!(r.answers.len(), 1);
+    assert_eq!(r.answers[0].value, r.correct_answer);
+    assert!(r.answers[0].ms >= 1400, "about a second and a half: {}ms", r.answers[0].ms);
+    assert_eq!(r.help, Help::None);
+    assert!(r.unaided() && r.first_try_correct() && r.correct);
+    assert_eq!(r.cra_stage, CraStage::Concrete, "a fresh profile starts every operation concrete");
+}
+
+#[test]
+fn the_parent_export_carries_the_log_in_the_shape_analyze_reads() {
+    use robot_buddy_domain::learning::attempt_analysis::analyze;
+    use robot_buddy_domain::learning::attempt_log::AttemptRecord;
+    let mut h = Harness::new(0);
+    sparky_small_challenge(&mut h);
+    h.answer_correctly();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    let g = &h.game;
+    let json = robot_buddy_game::session::build_export(
+        &g.player_name, &g.session_log, g.attempt_log.records(), &g.gifts_given,
+        g.dum_dums, g.play_time, &g.profile, g.map.id,
+    );
+    let export: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let history: Vec<AttemptRecord> = serde_json::from_value(export["attemptHistory"].clone())
+        .expect("analyze deserializes attemptHistory as AttemptRecords");
+    assert_eq!(history, g.attempt_log.records());
+    assert_eq!(analyze(&history).attempts, 1);
+}
+
+#[test]
+fn a_miss_then_a_hit_logs_both_answers() {
+    let mut h = Harness::new(0);
+    sparky_small_challenge(&mut h);
+    press_a_wrong_answer(&mut h);
+    h.advance(5);
+    h.answer_correctly();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    let r = &h.game.attempt_log.records()[0];
+    assert_eq!(r.answers.len(), 2);
+    assert_ne!(r.answers[0].value, r.correct_answer);
+    assert_eq!(r.answers[1].value, r.correct_answer);
+    assert!(!r.first_try_correct());
+}
+
+#[test]
+fn building_the_model_is_logged_as_workspace_help() {
+    use robot_buddy_domain::learning::attempt_log::Help;
+    let mut h = Harness::new(0);
+    sparky_small_challenge(&mut h);
+    h.advance(30);
+    h.press_show_me();
+    h.build_the_model();
+    h.answer_correctly();
+    h.wait_until(|g| g.state == GameState::Playing);
+
+    let r = &h.game.attempt_log.records()[0];
+    assert_eq!(r.help, Help::Workspace);
+    assert!(r.help_ms.is_some_and(|ms| ms >= 450), "Show me came after half a second");
+    let w = r.workspace.as_ref().expect("the workspace's use is logged");
+    assert!(w.built_ms.is_some(), "the model was finished");
+    assert!(w.singles + w.rows > 0, "counters were moved");
+    assert!(!r.unaided());
+}

@@ -50,7 +50,9 @@ robot-buddy-domain/              # Pure Rust domain (no browser deps)
     lib.rs                       # pub mod types/learning/challenge/economy/logic/world/text/quest
     types.rs                     # Shared enums (Operation, SubSkill, CraStage, Phase,
                                  #   GamePace — parent-set arcade speed)
-    learning/                    # Profile reducer, challenge gen, frustration, intake
+    learning/                    # Profile reducer, challenge gen, frustration, intake,
+                                 #   attempt_log (every challenge in detail, saved, bounded)
+                                 #   + attempt_analysis (the report `analyze` prints)
     challenge/                   # Lifecycle state machine
     economy/                     # Rewards, gifts, interaction options, shop, wardrobe
                                  #   (wardrobe = who wears which shop swag; swag given to a
@@ -67,6 +69,7 @@ robot-buddy-domain/              # Pure Rust domain (no browser deps)
     text/                        # voice_parser (spoken-number → integer)
     bin/
       simulate.rs                # CLI learning simulator
+      analyze.rs                 # "is it working?" report over exported attempt logs
 
 robot-buddy-game/                # Macroquad game (depends on domain)
   Cargo.toml
@@ -131,6 +134,10 @@ SHOT_W=960 SHOT_H=720 SHOT_DIR=/tmp/shots cargo run -p robot-buddy-game --exampl
 
 # Simulate adaptive learning
 cargo run -p robot-buddy-domain --bin simulate -- --profile gifted
+
+# Is it working? Report over parent exports (Settings → Parent options → Export session data;
+# each export carries the whole saved attempt log, overlaps are de-duplicated)
+cargo run -p robot-buddy-domain --bin analyze -- exports/*.json
 ```
 
 ## For Implementers
