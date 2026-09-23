@@ -1703,6 +1703,34 @@ fn goyish_shooter_click_aims_and_fires() {
     assert!(!s.shots.is_empty(), "the tap fired a bolt");
 }
 
+/// A tablet has no ESC: tapping Leave walks away from the shooter, with no
+/// reward and no penalty.
+#[test]
+fn goyish_shooter_can_be_left_with_a_tap() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    use robot_buddy_game::ui::shooter::{footer, FooterId};
+    use macroquad::prelude::KeyCode;
+
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = Map::goyish_map();
+    h.game.npcs = npc_mod::npcs_for_map("goyish_map");
+    h.game.npcs_offstage.clear();
+    h.game.sparky_parked = true;
+    h.warp_to(6, 4);
+    h.hold(KeyCode::Up);
+    h.interact();
+    assert_eq!(h.game.state, GameState::Shooter);
+
+    let dum_dums = h.game.dum_dums;
+    let (x, y) = footer(common::SCREEN).rect(FooterId::Leave).expect("Leave is on screen").center();
+    h.click(x, y);
+    assert_eq!(h.game.state, GameState::Playing, "the tap left the shooter");
+    assert!(h.game.active_shooter().is_none());
+    assert_eq!(h.game.dum_dums, dum_dums, "walking away pays nothing and costs nothing");
+}
+
 /// Slide the ship under alien `id` (by holding the correct arrow), fire, then
 /// wait for the bolt to travel up and land (the alien is tagged, or popped as
 /// part of a completed pair). Returns early if the alien is already gone.

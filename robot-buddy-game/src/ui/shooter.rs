@@ -8,6 +8,7 @@
 use crate::prelude::*;
 use robot_buddy_domain::logic::shooter::{ShooterSession, ShooterPhase, FIELD_W, FIELD_H, DOT_MAX};
 use robot_buddy_domain::types::CraStage;
+use crate::ui::layout::{self, button, row, text, Fit, Frame, Kind, UiRect};
 
 const VOID: Color = color_u8!(8, 10, 24, 255);
 const PIP: Color = color_u8!(255, 238, 170, 255);
@@ -19,6 +20,34 @@ fn play_rect(screen: (f32, f32)) -> (f32, f32, f32, f32) {
     let pad = 24.0;
     let top = 78.0;
     (pad, top, sw - 2.0 * pad, sh - top - 46.0)
+}
+
+/// The bottom bar's parts: a Leave button a tablet kid can tap, and the hint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FooterId {
+    Leave,
+    LeaveLabel,
+    Hint,
+}
+
+const HINT: &str = "TAP a target  \u{2022}  or \u{2190}\u{2192} + SPACE";
+
+/// The bottom strip under the play field, laid out so the button and the hint
+/// share it without overlapping at any width. Read by both `draw` and the
+/// game's click handling.
+pub fn footer(screen: (f32, f32)) -> Frame<FooterId> {
+    let (sw, sh) = screen;
+    let bar = row()
+        .pad_xy(16.0, 5.0)
+        .gap(12.0)
+        .child(button(FooterId::Leave, FooterId::LeaveLabel, "< Leave", 20, Fit::shrink(14)).size(100.0, 36.0).min_w(76.0).shrink(1.0))
+        .child(text(HINT, 20, Fit::shrink(10)).id(FooterId::Hint).center_text().grow(1.0));
+    layout::layout(&bar, UiRect { x: 0.0, y: sh - 46.0, w: sw, h: 46.0 })
+}
+
+/// True if a click at (mx, my) lands on the Leave button.
+pub fn leave_hit(screen: (f32, f32), mx: f32, my: f32) -> bool {
+    footer(screen).rect(FooterId::Leave).is_some_and(|r| r.contains(mx, my))
 }
 
 /// Map a screen-space click to a logical field column, or `None` if the click
@@ -88,8 +117,20 @@ pub fn draw(session: &ShooterSession, screen: (f32, f32), time: f32) {
     if session.phase == ShooterPhase::Complete {
         centered_banner(sw, sh, "ALL CLEAR!", color_u8!(140, 240, 160, 255));
     } else {
-        hint(sw, sh, "TAP a target  \u{2022}  or \u{2190}\u{2192} + SPACE  \u{2022}  ESC leave",
-             color_u8!(150, 165, 210, 220));
+        draw_footer(screen);
+    }
+}
+
+fn draw_footer(screen: (f32, f32)) {
+    let f = footer(screen);
+    for el in f.elements() {
+        match (el.id, &el.kind) {
+            (Some(FooterId::Leave), _) => layout::paint::boxed(
+                el.rect, color_u8!(84, 110, 122, 255), 2.0, color_u8!(255, 255, 255, 80)),
+            (Some(FooterId::LeaveLabel), Kind::Text(t)) => layout::paint::text(t, WHITE),
+            (Some(FooterId::Hint), Kind::Text(t)) => layout::paint::text(t, color_u8!(150, 165, 210, 220)),
+            _ => {}
+        }
     }
 }
 
@@ -249,11 +290,6 @@ fn draw_starfield(sw: f32, sh: f32, time: f32) {
     }
 }
 
-fn hint(sw: f32, sh: f32, msg: &str, color: Color) {
-    let size = 22.0;
-    let w = measure_text(msg, None, size as u16, 1.0).width;
-    draw_text(msg, sw / 2.0 - w / 2.0, sh - 18.0, size, color);
-}
 
 fn centered_banner(sw: f32, sh: f32, msg: &str, color: Color) {
     let size = 56.0;

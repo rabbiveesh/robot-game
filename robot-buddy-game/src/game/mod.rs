@@ -45,7 +45,7 @@ use robot_buddy_domain::logic::leap::{
     Clue, LeapAction, LeapPhase, LeapPuzzle, LeapSession, generate_leap, leap_reducer,
 };
 use robot_buddy_domain::logic::shooter::{
-    ShooterSession, ShooterAction, ShooterPhase, shooter_reducer,
+    ShooterSession, ShooterAction, ShooterPhase, ShotSource, shooter_reducer,
 };
 use robot_buddy_domain::logic::sudoku::{
     self, SudokuPhase, SudokuSession, generate_for_level as generate_sudoku_for_level,
@@ -207,7 +207,7 @@ pub struct ActiveSudoku {
 }
 
 /// The number-bond space shooter, live. The domain `ShooterSession` holds all
-/// the game state (ship, aliens, waves, shield); the rest is UI-only bookkeeping
+/// the game state (ship, aliens, waves, the ordered attempt log); the rest is UI-only bookkeeping
 /// mirroring the other `Active*` structs.
 pub struct ActiveShooter {
     pub session: ShooterSession,

@@ -30,8 +30,11 @@ impl Game {
         // nudged up at a relaxed pace so aiming keeps up with thinking.
         let ship_speed = 70.0 * self.game_pace.ship_multiplier();
 
-        // Bail out any time — no reward, no penalty. The kid can just walk away.
-        if input.pressed(KeyCode::Escape) {
+        // Bail out any time — no reward, no penalty. The kid can just walk away,
+        // by key or by tapping Leave (a tablet has no ESC).
+        let tapped_leave = input.mouse_clicked
+            && ui::shooter::leave_hit(screen, input.mouse_pos.0, input.mouse_pos.1);
+        if input.pressed(KeyCode::Escape) || tapped_leave {
             self.active_shooter = None;
             self.set_state(GameState::Playing);
             return;
@@ -63,7 +66,7 @@ impl Game {
                     s = shooter_reducer(s, ShooterAction::MoveShip { dx: ship_speed * dt });
                 }
                 if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) {
-                    s = shooter_reducer(s, ShooterAction::Fire);
+                    s = shooter_reducer(s, ShooterAction::FireFrom { source: ShotSource::Keys });
                 }
                 // Click/tap to shoot: snap the ship to the tapped column and fire
                 // from there. Lets a kid aim by pointing instead of nudging.
@@ -72,7 +75,7 @@ impl Game {
                     if let Some(fx) = ui::shooter::field_x_at(screen, mx, my) {
                         let dx = fx - s.ship_x;
                         s = shooter_reducer(s, ShooterAction::MoveShip { dx });
-                        s = shooter_reducer(s, ShooterAction::Fire);
+                        s = shooter_reducer(s, ShooterAction::FireFrom { source: ShotSource::Tap });
                     }
                 }
                 s = shooter_reducer(s, ShooterAction::Tick { dt });
@@ -95,18 +98,19 @@ impl Game {
                 let representation = a.session.representation;
                 let response_ms = self.elapsed_ms(a.start_time, 600000.0);
 
-                // Stealth assessment: every pairing is a NumberBond data point.
-                // The child never sees a score or "attempt" — this only feeds the
+                // Stealth assessment: every pairing is a NumberBond data point,
+                // fed in the order it happened so the frustration window sees
+                // the kid's real run, not all hits then all misses. The child
+                // never sees a score or "attempt" — this only feeds the
                 // adaptive system.
-                for i in 0..(hits + misses) {
-                    let correct = i < hits;
+                for att in &a.session.attempts {
                     self.profile = learner_reducer(self.profile.clone(), LearnerEvent::PuzzleAttempted {
-                        correct,
+                        correct: att.correct,
                         operation: Operation::NumberBond,
                         sub_skill: None,
                         band: self.profile.math_band,
                         center_band: None,
-                        response_time_ms: None,
+                        response_time_ms: Some((att.think_secs * 1000.0) as f64),
                         hint_used: false,
                         told_me: false,
                         cra_level_shown: Some(representation),
