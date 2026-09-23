@@ -67,7 +67,6 @@ use crate::npc::{self, NpcKind};
 use crate::number_track;
 use crate::ui;
 use crate::ui::dialogue::{DialogueBox, DialogueLine};
-use crate::ui::challenge::{ChoiceBound, ScaffoldBounds};
 use crate::ui::title_screen::{TitleAction, NewGameAction, NewGameForm};
 use crate::ui::hud::{DumDumHud, PearlHud, DebugOverlay};
 use crate::ui::interaction_menu::MenuOption;
@@ -163,8 +162,6 @@ impl IntakeState {
 struct ActiveChallenge {
     state: ChallengeState,
     challenge: Challenge,
-    choice_bounds: Vec<ChoiceBound>,
-    scaffold: ScaffoldBounds,
     complete_timer: f32,
     start_time: f32,
 }
@@ -1232,13 +1229,6 @@ impl Game {
             None => return,
         };
 
-        // Populate hit-test bounds from the pure layout fn so step doesn't depend on render.
-        if let Some(ref mut ac) = iq.challenge {
-            let (bounds, scaffold) = ui::challenge::layout(&ac.state, &ac.challenge, screen);
-            ac.choice_bounds = bounds;
-            ac.scaffold = scaffold;
-        }
-
         match iq.phase {
             IntakePhase::Intro => {
                 if input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) {
@@ -1282,7 +1272,8 @@ impl Game {
                         let (mx, my) = input.mouse_pos;
                         if let Some(action) = ui::challenge::handle_click(
                             mx, my, &ac.state, &ac.challenge,
-                            &ac.choice_bounds, &ac.scaffold,
+                            // Same pure layout render paints — hit rects can't drift.
+                            &ui::challenge::layout(&ac.state, &ac.challenge, screen),
                         ) {
                             ac.state = challenge_reducer(ac.state.clone(), action);
                             speak_challenge_feedback(&ac.state, "Sparky");
@@ -1933,12 +1924,6 @@ impl Game {
         // Whoever's tagging along narrates the challenge feedback. Bound up
         // front so it doesn't clash with the mutable borrow of active_challenge.
         let buddy = self.current_buddy_name();
-        // Populate hit-test bounds from the pure layout fn.
-        if let Some(ref mut ac) = self.active_challenge {
-            let (bounds, scaffold) = ui::challenge::layout(&ac.state, &ac.challenge, screen);
-            ac.choice_bounds = bounds;
-            ac.scaffold = scaffold;
-        }
 
         let mut dismiss = false;
         if let Some(ref mut ac) = self.active_challenge {
@@ -1960,7 +1945,8 @@ impl Game {
                 let (mx, my) = input.mouse_pos;
                 if let Some(action) = ui::challenge::handle_click(
                     mx, my, &ac.state, &ac.challenge,
-                    &ac.choice_bounds, &ac.scaffold,
+                    // Same pure layout render paints — hit rects can't drift.
+                    &ui::challenge::layout(&ac.state, &ac.challenge, screen),
                 ) {
                     ac.state = challenge_reducer(ac.state.clone(), action);
                     speak_challenge_feedback(&ac.state, &buddy);
@@ -4374,7 +4360,10 @@ impl Game {
 
             if let Some(ref iq) = self.intake {
                 if let Some(ref ac) = iq.challenge {
-                    ui::challenge::draw_challenge(&ac.state, &ac.challenge, self.game_time);
+                    {
+                        let layout = ui::challenge::layout(&ac.state, &ac.challenge, screen);
+                        ui::challenge::draw(&layout, &ac.state, &ac.challenge, self.game_time);
+                    }
                 }
             }
         } else {
@@ -4634,7 +4623,10 @@ impl Game {
 
         // Challenge overlay (separate from intake's in-render_world drawing).
         if let Some(ref ac) = self.active_challenge {
-            ui::challenge::draw_challenge(&ac.state, &ac.challenge, self.game_time);
+            {
+                        let layout = ui::challenge::layout(&ac.state, &ac.challenge, screen);
+                        ui::challenge::draw(&layout, &ac.state, &ac.challenge, self.game_time);
+                    }
         }
 
         // KenKen overlay
@@ -5022,8 +5014,6 @@ fn start_challenge(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32)
     ActiveChallenge {
         state: cs,
         challenge,
-        choice_bounds: vec![],
-        scaffold: ScaffoldBounds { show_me: None, tell_me: None },
         complete_timer: 0.0,
         start_time: game_time,
     }
@@ -5165,8 +5155,6 @@ fn start_intake_challenge(challenge: Challenge, _band: u8, game_time: f32) -> Ac
     ActiveChallenge {
         state: cs,
         challenge,
-        choice_bounds: vec![],
-        scaffold: ScaffoldBounds { show_me: None, tell_me: None },
         complete_timer: 0.0,
         start_time: game_time,
     }

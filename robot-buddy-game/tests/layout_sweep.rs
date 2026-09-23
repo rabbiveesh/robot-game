@@ -165,6 +165,135 @@ fn empty_swag_picker_is_sane() {
     }
 }
 
+// ─── Challenge ───────────────────────────────────────────
+
+mod challenge_sweep {
+    use super::*;
+    use rand::rngs::SmallRng;
+    use rand::SeedableRng;
+    use robot_buddy_domain::challenge::challenge_state::{
+        challenge_reducer, ChallengeAction, ChallengeState, DisplaySpeech, RenderHint, VoiceState,
+    };
+    use robot_buddy_domain::learning::challenge_generator::{generate_challenge, Challenge, ChallengeProfile};
+    use robot_buddy_domain::learning::operation_stats::OperationStats;
+    use robot_buddy_domain::types::{CraStage, Phase};
+    use robot_buddy_game::ui::challenge;
+
+    const WORD_PROBLEM: &str =
+        "A frog hops 7 times across the lily pads, then 3 more times to reach the far bank! How many hops is that?";
+
+    fn presented(c: &Challenge, display: &str) -> ChallengeState {
+        ChallengeState {
+            phase: Phase::Presented,
+            correct_answer: c.correct_answer,
+            attempts: 0,
+            max_attempts: 2,
+            correct: None,
+            question: DisplaySpeech { display: display.into(), speech: display.into() },
+            feedback: None,
+            reward: None,
+            render_hint: RenderHint {
+                cra_stage: CraStage::Abstract,
+                answer_mode: "choice".into(),
+                interaction_type: "quiz".into(),
+            },
+            hint_used: false,
+            hint_level: 0,
+            told_me: false,
+            voice: VoiceState::reset(),
+        }
+    }
+
+    fn wrong(c: &Challenge) -> i32 {
+        c.choices.iter().find(|ch| !ch.correct).and_then(|ch| ch.text.parse().ok()).unwrap_or(c.correct_answer + 1)
+    }
+
+    /// Every phase a challenge can show.
+    fn phases(c: &Challenge, display: &str) -> Vec<(&'static str, ChallengeState)> {
+        let p = presented(c, display);
+        let fed = challenge_reducer(p.clone(), ChallengeAction::AnswerSubmitted { answer: wrong(c) });
+        let hinted = challenge_reducer(p.clone(), ChallengeAction::ShowMe);
+        let hinted_fed = challenge_reducer(hinted.clone(), ChallengeAction::AnswerSubmitted { answer: wrong(c) });
+        let solved = challenge_reducer(p.clone(), ChallengeAction::AnswerSubmitted { answer: c.correct_answer });
+        let hinted_solved = challenge_reducer(hinted.clone(), ChallengeAction::AnswerSubmitted { answer: c.correct_answer });
+        let told = challenge_reducer(p.clone(), ChallengeAction::TellMe);
+        let taught = challenge_reducer(fed.clone(), ChallengeAction::AnswerSubmitted { answer: wrong(c) });
+        let after = challenge_reducer(taught.clone(), ChallengeAction::TeachingComplete);
+        vec![
+            ("presented", p),
+            ("feedback", fed),
+            ("show me", hinted),
+            ("show me + feedback", hinted_fed),
+            ("solved", solved),
+            ("show me + solved", hinted_solved),
+            ("tell me", told),
+            ("taught", taught),
+            ("after teaching", after),
+        ]
+    }
+
+    /// A spread of real generated challenges: every band, so every visual
+    /// family (dots, bonds, base-ten blocks, groups) shows up.
+    fn challenges() -> Vec<Challenge> {
+        let mut rng = SmallRng::seed_from_u64(42);
+        (1..=10u8)
+            .flat_map(|band| {
+                let profile = ChallengeProfile { math_band: band, spread_width: 0.0, operation_stats: OperationStats::new() };
+                (0..6).map(|_| generate_challenge(&profile, &mut rng)).collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_challenge_phase_is_sane_everywhere() {
+        let all = challenges();
+        for &screen in &SWEEP_SCREENS {
+            for c in &all {
+                for display in [c.display_text.as_str(), WORD_PROBLEM] {
+                    for (name, cs) in phases(c, display) {
+                        let l = challenge::layout(&cs, c, screen);
+                        if let Err(e) = check_sane(&l.frame, screen_rect(screen)) {
+                            let els: Vec<_> = l.frame.elements().iter().map(|e| (e.id, e.rect)).collect();
+                            panic!(
+                                "{name} ({} {} {} band {}, {display:?}) at {screen:?}:\n  - {}\n{els:?}",
+                                c.numbers.a, c.numbers.op, c.numbers.b, c.sampled_band,
+                                e.join("\n  - ")
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The drift bug: hit rects used to sit ~30px above the drawn buttons when
+    /// the question wrapped. Now the tap target IS the drawn button, and a tap
+    /// on its center answers.
+    #[test]
+    fn tapping_a_drawn_button_answers_it_even_under_a_wrapped_question() {
+        let c = &challenges()[0];
+        let cs = presented(c, WORD_PROBLEM);
+        let l = challenge::layout(&cs, c, (960.0, 720.0));
+        let q = l.frame.get(challenge::ChallengeId::Question).unwrap();
+        let wrapped = match &q.kind {
+            robot_buddy_game::ui::layout::Kind::Text(t) => t.lines.len(),
+            _ => 0,
+        };
+        assert_eq!(wrapped, 2, "the word problem wraps at the default window");
+        for (i, choice) in c.choices.iter().enumerate() {
+            let r = l.choice(i).expect("button laid out");
+            assert!(r.y >= q.rect.bottom(), "button {i} sits below the wrapped question");
+            let (x, y) = r.center();
+            match challenge::handle_click(x, y, &cs, c, &l) {
+                Some(ChallengeAction::AnswerSubmitted { answer }) => {
+                    assert_eq!(answer.to_string(), choice.text)
+                }
+                _ => panic!("tapping button {i} should answer it"),
+            }
+        }
+    }
+}
+
 // ─── Quest ───────────────────────────────────────────────
 
 #[test]

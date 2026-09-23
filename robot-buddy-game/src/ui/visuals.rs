@@ -8,9 +8,72 @@ const RED_FAINT: Color = Color::new(0.957, 0.263, 0.212, 0.4);
 const LABEL_GRAY: Color = Color::new(0.878, 0.878, 0.878, 1.0);   // #E0E0E0
 const HINT_GRAY: Color = Color::new(0.667, 0.667, 0.667, 1.0);    // #AAA
 
-/// Draw the appropriate CRA visual for a challenge.
-/// Uses dots for bands 1-4, base-10 blocks for bands 5+.
-pub fn draw_visual(challenge: &Challenge, cx: f32, cy: f32, _time: f32) {
+/// Space the visual needs, so a panel can reserve it (see [`extent`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VisualExtent {
+    pub w: f32,
+    /// How far labels reach above the anchor `cy` passed to [`draw_visual`].
+    pub above: f32,
+    /// How far the art reaches below `cy`.
+    pub below: f32,
+}
+
+impl VisualExtent {
+    pub fn h(&self) -> f32 {
+        self.above + self.below
+    }
+}
+
+/// Labels sit on a baseline 6-8px above `cy` at 14-18px: 22px covers them.
+const LABEL_ABOVE: f32 = 22.0;
+
+/// Pure: the box [`draw_visual`] paints into for `challenge`, when the widest
+/// (grouped) visuals are squeezed into `max_w`. Mirrors the geometry below —
+/// change one, change the other.
+pub fn extent(challenge: &Challenge, max_w: f32) -> VisualExtent {
+    use crate::ui::layout::{FontMetrics, TextMetrics};
+    let m = FontMetrics::bundled();
+    let a = challenge.numbers.a;
+    let b = challenge.numbers.b;
+    let op = challenge.numbers.op.as_str();
+    let fit = max_w.min(500.0);
+    let (w, below) = if challenge.numbers.format == "bond" {
+        let total = challenge.numbers.bond_total.unwrap_or(a).min(20);
+        let parts = bond_box_width(b.min(20)) + 32.0 + bond_box_width(challenge.correct_answer.min(20));
+        (bond_box_width(total).max(parts), BOND_BOX_H * 2.0 + 44.0 + 20.0 + 4.0)
+    } else if challenge.sampled_band >= 5 {
+        match op {
+            "+" | "-" | "\u{2212}" => {
+                (measure_num(a) + 40.0 + measure_num(b), content_height(a).max(content_height(b)) + 4.0)
+            }
+            "\u{00d7}" | "*" => {
+                let rows = a.min(b).min(12);
+                let cols = a.max(b).min(12);
+                let label = m.width(&format!("{} rows of {}", rows, cols), 14);
+                ((cols as f32 * 14.0).max(label), 5.0 + rows as f32 * 14.0)
+            }
+            "\u{00f7}" | "/" => (fit, 36.0),
+            _ => (0.0, 0.0),
+        }
+    } else {
+        let dots_rows = |n: i32| ((n.max(1) - 1) / 10 + 1) as f32 * 18.0 + 12.0 + 4.0;
+        match op {
+            "+" => ((((a + b).min(10)) as f32 * 14.0).max(130.0), dots_rows(a + b)),
+            "-" | "\u{2212}" => {
+                let label = m.width(&format!("{} - {} = count the blue ones!", a, b), 16);
+                ((a.min(10) as f32 * 14.0).max(label), dots_rows(a))
+            }
+            "\u{00d7}" | "*" | "\u{00f7}" | "/" => (fit, 36.0),
+            _ => (0.0, 0.0),
+        }
+    };
+    VisualExtent { w: w.min(max_w), above: LABEL_ABOVE, below }
+}
+
+/// Draw the appropriate CRA visual for a challenge, labels hanging above `cy`
+/// and art below it. Uses dots for bands 1-4, base-10 blocks for bands 5+.
+/// Grouped visuals squeeze into `max_w`.
+pub fn draw_visual(challenge: &Challenge, cx: f32, cy: f32, max_w: f32, _time: f32) {
     let a = challenge.numbers.a;
     let b = challenge.numbers.b;
     let op = challenge.numbers.op.as_str();
@@ -25,9 +88,9 @@ pub fn draw_visual(challenge: &Challenge, cx: f32, cy: f32, _time: f32) {
     }
 
     if band >= 5 {
-        draw_base10_blocks(a, b, op, answer, cx, cy);
+        draw_base10_blocks(a, b, op, answer, cx, cy, max_w);
     } else {
-        draw_dots(a, b, op, cx, cy);
+        draw_dots(a, b, op, cx, cy, max_w);
     }
 }
 
@@ -147,7 +210,7 @@ fn draw_bond(total: i32, known: i32, missing: i32, cx: f32, cy: f32) {
 
 // ─── DOT VISUAL (bands 1-4) ────────────────────────────
 
-fn draw_dots(a: i32, b: i32, op: &str, cx: f32, cy: f32) {
+fn draw_dots(a: i32, b: i32, op: &str, cx: f32, cy: f32, max_w: f32) {
     let dot_r = 5.0;
     let gap = 4.0;
     let step = dot_r * 2.0 + gap;
@@ -217,7 +280,7 @@ fn draw_dots(a: i32, b: i32, op: &str, cx: f32, cy: f32) {
         }
         "\u{00d7}" | "*" => {
             // a groups of b dots
-            let max_w = 500.0;
+            let max_w = max_w.min(500.0);
             let groups = a.min(8);
             let per_group = b.min(10);
             let group_gap = 30.0;
@@ -246,7 +309,7 @@ fn draw_dots(a: i32, b: i32, op: &str, cx: f32, cy: f32) {
         }
         "\u{00f7}" | "/" => {
             // a split into b groups of answer
-            let max_w = 500.0;
+            let max_w = max_w.min(500.0);
             let groups = b.min(8);
             let per_group = (a / b.max(1)).min(12);
             // Scale down dot size if content would overflow
@@ -376,7 +439,7 @@ fn draw_num_blocks(x: f32, y: f32, num: i32, colors: &BlockColors) {
     }
 }
 
-fn draw_base10_blocks(a: i32, b: i32, op: &str, answer: i32, cx: f32, cy: f32) {
+fn draw_base10_blocks(a: i32, b: i32, op: &str, answer: i32, cx: f32, cy: f32, max_w: f32) {
     match op {
         "+" => {
             let wa = measure_num(a);
@@ -424,7 +487,7 @@ fn draw_base10_blocks(a: i32, b: i32, op: &str, answer: i32, cx: f32, cy: f32) {
             }
         }
         "\u{00f7}" | "/" => {
-            let max_w = 500.0;
+            let max_w = max_w.min(500.0);
             let groups = b.min(8);
             let per_group = answer.min(12);
             let dot_r = 5.0;
