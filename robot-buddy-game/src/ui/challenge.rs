@@ -76,7 +76,8 @@ fn visual(challenge: &Challenge, max_w: f32) -> Node<ChallengeId> {
 
 /// A labelled scaffold button ("Show me" / "Tell me").
 fn scaffold(id: ChallengeId, label_id: ChallengeId, label: &str) -> Node<ChallengeId> {
-    layout::button(id, label_id, label, 22, Fit::shrink(14)).size(150.0, 46.0).fixed()
+    // Preferred 150 wide; squeezes (never clips) on a narrow phone.
+    layout::button(id, label_id, label, 22, Fit::shrink(14)).size(150.0, 46.0).min_w(96.0).shrink(1.0)
 }
 
 fn answer_button(i: usize, label: &str) -> Node<ChallengeId> {
@@ -109,7 +110,7 @@ pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) ->
             .min_h(460.0_f32.min(sh - 2.0 * MARGIN))
             .gap(gap.min(10.0))
             .child(text(header, 28, Fit::shrink(18)).id(ChallengeId::Header).center_text().fixed())
-            .child(text(q_text, 34, Fit::shrink_then_wrap(20, 4)).id(ChallengeId::Question).center_text())
+            .child(text(q_text, 34, Fit::shrink_then_wrap(20, 6)).id(ChallengeId::Question).center_text())
             .child(visual(challenge, visual_max_w))
             .child(text(format!("= {}", challenge.correct_answer), 54, Fit::shrink(28)).id(ChallengeId::Answer).center_text())
             .maybe(cs.feedback.as_ref().map(|fb| {
@@ -141,7 +142,7 @@ pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) ->
         col()
             .min_h((if cs.hint_used { 560.0_f32 } else { 420.0 }).min(sh - 2.0 * MARGIN))
             .gap(gap)
-            .child(text(q_text, 42, Fit::shrink_then_wrap(22, 4)).id(ChallengeId::Question).center_text())
+            .child(text(q_text, 42, Fit::shrink_then_wrap(22, 6)).id(ChallengeId::Question).center_text())
             .maybe(cs.hint_used.then(|| visual(challenge, visual_max_w)))
             .maybe(feedback.map(|fb| text(fb.display.clone(), 28, Fit::wrap_lines(16, 2)).id(ChallengeId::Feedback).center_text()))
             .child(

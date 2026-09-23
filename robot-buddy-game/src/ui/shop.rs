@@ -95,8 +95,9 @@ pub struct ShopLayout {
 }
 
 impl ShopLayout {
-    pub fn panel(&self) -> UiRect {
-        self.frame.rect(ShopId::Panel).expect("shop panel always laid out")
+    /// `None` only on a window too small to fit anything; callers skip, never panic.
+    pub fn panel(&self) -> Option<UiRect> {
+        self.frame.rect(ShopId::Panel)
     }
     /// Catalog row for item `index`, if it's on the current page.
     pub fn item(&self, index: usize) -> Option<UiRect> {
@@ -110,8 +111,9 @@ impl ShopLayout {
     pub fn swatch(&self, index: usize) -> Option<UiRect> {
         self.frame.rect(ShopId::Swatch(index))
     }
-    pub fn done(&self) -> UiRect {
-        self.frame.rect(ShopId::Done).expect("Done is always laid out")
+    /// `None` if a tiny window clipped it (Esc still closes).
+    pub fn done(&self) -> Option<UiRect> {
+        self.frame.rect(ShopId::Done)
     }
     pub fn preview(&self) -> Option<UiRect> {
         self.frame.rect(ShopId::Preview)
@@ -150,19 +152,20 @@ fn prompts(view: &ShopView) -> Vec<String> {
 fn catalog_row(i: usize, item: &ShopItem, owned: bool) -> Node<ShopId> {
     let top = row()
         .gap(12.0)
-        .child(text(item_label(item, owned), 24, Fit::shrink(14)).id(ShopId::ItemName(i)).grow(1.0))
+        .child(text(item_label(item, owned), 24, Fit::shrink_then_wrap(14, 2)).id(ShopId::ItemName(i)).grow(1.0))
         .child(text(format!("{} {}", item.cost, item.currency.tag()), 24, Fit::shrink(14)).id(ShopId::ItemPrice(i)));
-    col()
-        .id(ShopId::Item(i))
-        .hit()
-        .h(62.0)
-        .min_h(44.0)
+    let has_blurb = !item.blurb.is_empty();
+    let row = col().id(ShopId::Item(i)).hit();
+    // A blurb may need a second line on a narrow phone, so its row sizes to
+    // its content; plain rows keep the fixed height the list can squeeze.
+    let row = if has_blurb { row.min_h(62.0) } else { row.h(62.0).min_h(44.0) };
+    row
         .pad_xy(16.0, 6.0)
         .gap(4.0)
         .justify(Justify::Center)
         .child(top)
         // What it actually does, for anything whose name doesn't say.
-        .maybe((!item.blurb.is_empty()).then(|| text(item.blurb.clone(), 18, Fit::shrink(12)).id(ShopId::ItemBlurb(i))))
+        .maybe(has_blurb.then(|| text(item.blurb.clone(), 18, Fit::shrink_then_wrap(12, 2)).id(ShopId::ItemBlurb(i))))
 }
 
 fn answer_tiles(choices: &[u32]) -> Node<ShopId> {
@@ -246,7 +249,10 @@ fn build(m: &ShopModel, page: Page) -> Node<ShopId> {
         }
     };
 
-    let small_btn = |id, label_id, label: &str| button(id, label_id, label, 22, Fit::shrink(14)).size(100.0, 38.0).fixed();
+    let small_btn = |id, label_id, label: &str| button(id, label_id, label, 22, Fit::shrink(14))
+        // Preferred 100 wide, but a narrow phone squeezes Back / More / Done
+        // side by side rather than clipping one off.
+        .size(100.0, 38.0).min_w(72.0).shrink(1.0);
     let footer = col()
         .fixed()
         .gap(4.0)

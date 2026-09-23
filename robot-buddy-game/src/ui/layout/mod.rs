@@ -94,7 +94,8 @@ pub fn centered_on_screen<Id>(panel: Node<Id>, margin: f32) -> Node<Id> {
 }
 
 /// Screens every sweep test covers (portrait phone, small, default, wide).
-pub const SWEEP_SCREENS: [(f32, f32); 4] = [(480.0, 800.0), (640.0, 480.0), (960.0, 720.0), (1600.0, 900.0)];
+/// 360×640 is a small phone in portrait — the smallest real device a kid will hold.
+pub const SWEEP_SCREENS: [(f32, f32); 5] = [(360.0, 640.0), (480.0, 800.0), (640.0, 480.0), (960.0, 720.0), (1600.0, 900.0)];
 
 #[cfg(test)]
 mod tests {

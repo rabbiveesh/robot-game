@@ -57,13 +57,15 @@ impl SwagLayout {
     pub fn item(&self, index: usize) -> Option<UiRect> {
         self.frame.rect(SwagId::Item(index))
     }
-    pub fn done(&self) -> UiRect {
-        self.frame.rect(SwagId::Done).expect("Done is always laid out")
+    /// `None` if a tiny window clipped it (Esc still closes).
+    pub fn done(&self) -> Option<UiRect> {
+        self.frame.rect(SwagId::Done)
     }
     /// Top-left to draw the recipient sprite at.
-    pub fn preview(&self) -> (f32, f32) {
-        let r = self.frame.rect(SwagId::Preview).expect("preview always laid out");
-        (r.x + 6.0, r.y + 10.0)
+    /// `None` if a tiny window clipped it — skip the sprite, don't panic.
+    pub fn preview(&self) -> Option<(f32, f32)> {
+        let r = self.frame.rect(SwagId::Preview)?;
+        Some((r.x + 6.0, r.y + 10.0))
     }
 }
 
@@ -74,8 +76,9 @@ const PREVIEW: (f32, f32) = (60.0, 64.0);
 fn build(m: &SwagModel, page: Page) -> Node<SwagId> {
     let header = row()
         .fixed()
-        // Balances the preview so the title stays centered.
-        .child(gap_box(PREVIEW.0, 0.0))
+        // Balances the preview so the title stays centered — the first thing
+        // to give up width on a narrow phone.
+        .child(region(PREVIEW.0, 0.0).min_w(0.0).shrink(1.0))
         .child(text(format!("Dress up {}!", m.recipient), 30, Fit::shrink(16)).id(SwagId::Title).center_text().grow(1.0))
         .child(region(PREVIEW.0, PREVIEW.1).id(SwagId::Preview).fixed());
 
@@ -88,13 +91,16 @@ fn build(m: &SwagModel, page: Page) -> Node<SwagId> {
             .min_h(40.0)
             .pad_xy(16.0, 4.0)
             .gap(12.0)
-            .child(text(format!("[{}] {}", i + 1, item.name), 24, Fit::shrink(14)).id(SwagId::ItemLabel(i)).grow(1.0))
+            .child(text(format!("[{}] {}", i + 1, item.name), 24, Fit::shrink_then_wrap(14, 2)).id(SwagId::ItemLabel(i)).grow(1.0))
             .maybe(m.taken.contains(&item.id).then(|| {
                 text(format!("{} has one", m.recipient), 20, Fit::shrink(12)).id(SwagId::ItemNote(i))
             }))
     }));
 
-    let small_btn = |id, label_id, label: &str| button(id, label_id, label, 22, Fit::shrink(14)).size(100.0, 38.0).fixed();
+    let small_btn = |id, label_id, label: &str| button(id, label_id, label, 22, Fit::shrink(14))
+        // Preferred 100 wide, but a narrow phone squeezes Back / More / Done
+        // side by side rather than clipping one off.
+        .size(100.0, 38.0).min_w(72.0).shrink(1.0);
     let footer = col()
         .fixed()
         .gap(4.0)

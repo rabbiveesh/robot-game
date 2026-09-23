@@ -555,7 +555,7 @@ impl Harness {
 
     /// Click the shop's "Done" button to leave and return to Playing.
     pub fn close_shop(&mut self) {
-        let (x, y) = self.game.shop_layout(SCREEN).expect("close_shop: shop not open").done().center();
+        let (x, y) = self.game.shop_layout(SCREEN).expect("close_shop: shop not open").done().expect("Done laid out").center();
         self.click(x, y);
         self.wait_until(|g| g.state == GameState::Playing);
     }
@@ -667,7 +667,7 @@ impl Harness {
 
     /// Click the swag picker's "Done" button and return to Playing.
     pub fn close_swag(&mut self) {
-        let (x, y) = self.game.swag_layout(SCREEN).expect("close_swag: picker not open").done().center();
+        let (x, y) = self.game.swag_layout(SCREEN).expect("close_swag: picker not open").done().expect("Done laid out").center();
         self.click(x, y);
         self.wait_until(|g| g.state == GameState::Playing);
     }

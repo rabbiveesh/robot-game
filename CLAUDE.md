@@ -126,6 +126,9 @@ cargo build --target wasm32-unknown-unknown --release
 # Serve locally
 cd robot-buddy-game/www && npx serve .
 
+# Screenshot every migrated UI panel natively (real draw code, real game state)
+SHOT_W=960 SHOT_H=720 SHOT_DIR=/tmp/shots cargo run -p robot-buddy-game --example screenshots
+
 # Simulate adaptive learning
 cargo run -p robot-buddy-domain --bin simulate -- --profile gifted
 ```

@@ -4704,17 +4704,18 @@ impl Game {
             ui::swag::draw(&model, &layout);
             // Live preview of the buddy in their current outfit, so handing
             // something over visibly lands on them.
-            let (px, py) = layout.preview();
-            match asw.recipient_sprite {
-                Some(sprite) => {
-                    sprite.draw_sprite(px, py, Dir::Down, self.game_time, false);
-                    sprites::swag::draw_swag(px, py, Dir::Down, 0.0, taken,
-                        &self.color_choice, sprite.swag_fit());
-                }
-                None => {
-                    sprites::robot::draw_robot(px, py, Dir::Down, 0, self.game_time);
-                    sprites::swag::draw_swag(px, py, Dir::Down, 0.0, taken,
-                        &self.color_choice, sprites::swag::SwagFit::ROBOT);
+            if let Some((px, py)) = layout.preview() {
+                match asw.recipient_sprite {
+                    Some(sprite) => {
+                        sprite.draw_sprite(px, py, Dir::Down, self.game_time, false);
+                        sprites::swag::draw_swag(px, py, Dir::Down, 0.0, taken,
+                            &self.color_choice, sprite.swag_fit());
+                    }
+                    None => {
+                        sprites::robot::draw_robot(px, py, Dir::Down, 0, self.game_time);
+                        sprites::swag::draw_swag(px, py, Dir::Down, 0.0, taken,
+                            &self.color_choice, sprites::swag::SwagFit::ROBOT);
+                    }
                 }
             }
         }
@@ -5952,7 +5953,7 @@ mod tests {
         assert_eq!(g.color_choice, sprites::player::OUTFIT_COLORS[1].0);
 
         // Done dismisses the picker but keeps the shop open.
-        let close = shop_layout(&g).done();
+        let close = shop_layout(&g).done().unwrap();
         click_shop(&mut g, close);
         let ash = g.active_shop.as_ref().unwrap();
         assert!(!ash.picking_color, "Done should close the picker first");
