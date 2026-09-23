@@ -73,33 +73,7 @@ pub type DefaultEngine = flow::FlowEngine;
 /// Lay `root` out inside `bounds` with the default engine and the bundled
 /// font's metrics. Pure: safe to call from `Game::step` and headless tests.
 pub fn layout<Id: Copy + PartialEq + Debug>(root: &Node<Id>, bounds: UiRect) -> Frame<Id> {
-    #[cfg(debug_assertions)]
-    if let Some(engine) = ENGINE_OVERRIDE.with(|e| e.borrow().clone()) {
-        return layout_with(&*engine, FontMetrics::bundled(), root, bounds);
-    }
     layout_with(&DefaultEngine::default(), FontMetrics::bundled(), root, bounds)
-}
-
-#[cfg(debug_assertions)]
-thread_local! {
-    static ENGINE_OVERRIDE: std::cell::RefCell<Option<std::rc::Rc<dyn LayoutEngine>>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// Debug builds only: run `f` with every [`layout`] call on this thread
-/// (every panel, paging included) going through `engine` instead of
-/// [`DefaultEngine`]. The engine differential test (`tests/layout_taffy.rs`)
-/// uses it to run the whole sweep against taffy.
-#[cfg(debug_assertions)]
-pub fn with_engine<R>(engine: std::rc::Rc<dyn LayoutEngine>, f: impl FnOnce() -> R) -> R {
-    struct Restore(Option<std::rc::Rc<dyn LayoutEngine>>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            ENGINE_OVERRIDE.with(|e| *e.borrow_mut() = self.0.take());
-        }
-    }
-    let _restore = Restore(ENGINE_OVERRIDE.with(|e| e.borrow_mut().replace(engine)));
-    f()
 }
 
 /// [`layout`] with an explicit engine and metrics (for tests / engine swaps).

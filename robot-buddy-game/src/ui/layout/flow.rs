@@ -502,7 +502,7 @@ mod tests {
         assert!(price.right() <= 250.5);
     }
 
-    // ─── CSS semantics (pinned; the taffy differential test agrees) ───
+    // ─── CSS semantics (pinned; matched taffy to 0.01px when last diffed) ───
 
     /// CSS doesn't cap a child's cross size to its container: a 300px-wide
     /// box in a 200px column is 300px wide and overflows (then clips).

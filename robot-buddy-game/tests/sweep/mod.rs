@@ -3,9 +3,8 @@
 //! nothing outside its panel, nothing clipped, no text overflowing its fit
 //! policy). Plus reachability: every list row lands on some page.
 //!
-//! Engine-agnostic: it only reads `Frame`s. `tests/layout_sweep.rs` runs it on
-//! the default engine; `tests/layout_taffy.rs` runs it again with every layout
-//! cross-checked against taffy.
+//! Engine-agnostic: it only reads `Frame`s, so it checks whichever engine
+//! `DefaultEngine` names. `tests/layout_sweep.rs` runs it.
 
 #![allow(dead_code)]
 

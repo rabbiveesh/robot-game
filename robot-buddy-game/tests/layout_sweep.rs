@@ -1,6 +1,5 @@
 //! The generic layout sweep on the default engine. The bodies live in
-//! `tests/sweep/` so `tests/layout_taffy.rs` can run the same sweep with
-//! every layout cross-checked against taffy.
+//! `tests/sweep/`.
 
 mod sweep;
 

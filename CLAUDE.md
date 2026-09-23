@@ -90,7 +90,6 @@ robot-buddy-game/                # Macroquad game (depends on domain)
     common/mod.rs                # Harness + story helpers (walk_to_npc, interact, answer_correctly)
     headless.rs, story.rs        # 7 player-flow tests; assertions read GameEvent log
     layout_sweep.rs, sweep/      # assert_sane over migrated panels × 5 screens (360×640 phone up) × awkward data
-    layout_taffy.rs              # same sweep, every layout cross-checked against taffy (FlowEngine == taffy to 0.01px)
     layout_discipline.rs         # migrated panels may not call raw draw/measure fns or hand-make rects
   www/                           # build output (gitignored except index.html)
 ```

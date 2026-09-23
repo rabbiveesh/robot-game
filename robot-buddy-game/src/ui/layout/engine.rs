@@ -67,8 +67,9 @@ impl<'a> LayoutTree<'a> {
 pub trait LayoutEngine {
     /// Lay the tree out with the root filling `bounds` (node 0 is the root;
     /// its own size style is ignored). Returns one absolute, **unrounded**
-    /// rect per node, in pre-order. The contract every engine keeps — and
-    /// what the taffy differential test holds `FlowEngine` to, to 0.01px:
+    /// rect per node, in pre-order. The contract every engine keeps (a
+    /// differential test held `FlowEngine` to taffy within 0.01px before it
+    /// was retired; see ADR-004):
     ///
     /// * **CSS flexbox semantics** for the vocabulary in `node.rs`, including
     ///   overflow: a child that doesn't fit is *not* capped or dropped here;

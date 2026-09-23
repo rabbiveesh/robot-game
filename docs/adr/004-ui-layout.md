@@ -1,7 +1,7 @@
 # ADR-004: Declarative UI Layout with a Swappable Engine
 
 **Status:** Accepted and implemented (shop, swag, quest, challenge + CRA visuals, dialogue, settings)
-**Date:** 2026-09-23 (revised the same day: flexbox semantics, taffy differential test, hardened checks)
+**Date:** 2026-09-23 (revised the same day: flexbox semantics, hardened checks, a taffy differential test run and retired)
 **Deciders:** Veesh, Claude
 
 ## Context
@@ -96,8 +96,8 @@ What that means when writing a panel:
   `Center` spills both ways; `SpaceBetween` with no room acts as `Start`.
 
 Pinned by `flow.rs` unit tests (cross overflow, percent + max, justify on overflow,
-rounding, fit-content) and by `tests/layout_taffy.rs`, which checks the same fixtures
-plus the nested min-height rule and inner-basis shrinking against taffy directly.
+rounding, fit-content). A differential test against taffy also checked these fixtures,
+plus the nested min-height rule and inner-basis shrinking, before it was retired (below).
 
 ## What the checks catch — and what they don't
 
@@ -124,17 +124,18 @@ than the visuals straying outside its region (only the debug-build `Canvas` warn
 drift between headless metrics and the renderer (see metrics below); whether text
 at a `Fit` floor is still big enough for a four-year-old.
 
-**`tests/layout_taffy.rs`** runs the same sweep bodies with every `layout()` call also
-computed by taffy 0.14 (via the debug-only `layout::with_engine` hook) and requires
-FlowEngine and taffy to agree on every node's **unrounded** rect to 0.01px — about
-8,600 layouts — plus a set of CSS fixtures. It found three real divergences, all
-fixed: container min-content counted `min_h` instead of preferred sizes; shrink was
-weighted by the outer instead of the inner basis; and taffy's own rounding (of
-relative offsets) can push a snug child a pixel out of its parent, which is why
-rounding is now a shared pass and taffy runs with `disable_rounding()`. Re-adding
-the cross-axis cap fails it on the first fixture. It does **not** cover vocabulary
-combinations that neither the panels nor the fixtures use, and it can't see text
-measurement bugs: both engines measure text through the same `text.rs`.
+**A differential test against taffy (retired).** `tests/layout_taffy.rs` ran the same
+sweep bodies with every `layout()` call also computed by taffy 0.14 and required
+FlowEngine and taffy to agree on every node's **unrounded** rect to 0.01px (about
+8,600 layouts, plus CSS fixtures). It found three real divergences, all fixed:
+container min-content counted `min_h` instead of preferred sizes; shrink was weighted
+by the outer instead of the inner basis; and taffy's own rounding of relative offsets
+can push a snug child a pixel out of its parent, which is why rounding is a shared
+pass. It was then **removed**: it doubled `cargo test` time (~20s) to re-prove an
+agreement that only changes when `flow.rs` does. To bring it back, restore
+`tests/layout_taffy.rs`, the `taffy` dev-dependency and the debug-only
+`layout::with_engine` hook from commit b58cb74 (`git show b58cb74`), and re-run it
+whenever `flow.rs` or the node vocabulary changes.
 
 **`tests/layout_discipline.rs`** parses each migrated file (`MIGRATED`, now including
 `visuals.rs`) with syn and fails on:
@@ -172,14 +173,14 @@ menu, kenken, sudoku, patterns, balance, shooter, HUD.
 
 ## Swapping in taffy
 
-Verified end to end: with the steps below the whole suite (unit, sweep, differential,
-64 story tests) passes, and the WASM grows by **~37KB** (1,677,336 → 1,714,783 bytes,
+Verified end to end (before the differential test was retired): with the steps below
+the whole suite (unit, sweep, differential, 64 story tests) passed, and the WASM grows by **~37KB** (1,677,336 → 1,714,783 bytes,
 opt-level s + LTO, FlowEngine dropped by the linker).
 
 1. `robot-buddy-game/Cargo.toml`: move the dev-dependency
    `taffy = { version = "0.14", default-features = false, features = ["std", "flexbox", "taffy_tree"] }`
    to `[dependencies]`.
-2. Move `TaffyEngine` out of `tests/layout_taffy.rs` into a new
+2. Recover `TaffyEngine` from `tests/layout_taffy.rs` at commit b58cb74 into a new
    `src/ui/layout/taffy.rs` (~110 lines; derive `Default`; import from `super::`).
    What it does:
    - builds the `TaffyTree<usize>` bottom-up from the `LayoutTree` arena, each node
@@ -193,13 +194,13 @@ opt-level s + LTO, FlowEngine dropped by the linker).
    - sums relative `location`s into absolute rects. No clip pass of its own: the
      shared `clip` runs after it.
 3. `src/ui/layout/mod.rs`: `pub mod taffy;` and `pub type DefaultEngine = taffy::TaffyEngine;`.
-4. Keep `flow.rs` for the differential test, or delete it (and the test).
+4. Delete `flow.rs`, or keep it and revive the differential test to diff the two.
 
 Nothing in any panel, the painter, `Frame`, paging, text fitting, the sweep, or the
-harness changes. Differences to expect today: none on the swept panels (the
-differential test says so to 0.01px). Taffy alignment also has `safe` variants
-(`AlignItems::SAFE_CENTER` …) our vocabulary doesn't expose; adding one to `node.rs`
-means adding it to `FlowEngine` too, or the differential test will say so.
+harness changes. Differences to expect: none on the swept panels as of b58cb74 (the
+differential test said so to 0.01px); if `flow.rs` changed since, revive the test
+first. Taffy alignment also has `safe` variants (`AlignItems::SAFE_CENTER` …) our
+vocabulary doesn't expose; adding one to `node.rs` means adding it to `FlowEngine` too.
 
 ## Alternatives Considered
 
@@ -262,8 +263,6 @@ that (−8.5KB) and matches taffy's tree-building API.
   `.min_h(0.0)`, and the sweep only finds a missing one on a screen short enough.
 - The challenge panel lays out twice when a visual shows (once to learn the slot's
   width, once to reserve the visual's height at that width).
-- `cargo test` takes ~20s longer: the differential test lays everything out twice,
-  with taffy in debug mode.
 
 ### Risks
 - The sweep only knows the states it enumerates. A new panel view, or a new piece of
