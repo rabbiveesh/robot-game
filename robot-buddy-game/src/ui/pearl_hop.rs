@@ -22,7 +22,7 @@
 use crate::prelude::*;
 
 use crate::input::FrameInput;
-use crate::ui::layout::{self, col, paint, region, row, spacer, text, Fit, Frame, Justify, Kind, Node, UiRect};
+use crate::ui::layout::{self, col, paint, region, row, spacer, text, Align, Fit, Frame, Justify, Kind, Node, UiRect};
 use robot_buddy_domain::logic::pearl_hop::{HopPhase, HopRound, HopSession, HopStage, SPLASH_SECS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +100,10 @@ pub fn layout(view: &HopView, screen: (f32, f32)) -> PearlHopLayout {
             text(view.caption, 22, Fit::shrink_then_wrap(12, 2))
                 .id(HopId::Caption)
                 .center_text()
+                .pad_xy(14.0, 4.0)
+                .w_pct(1.0)
+                .max_w(680.0)
+                .align_self(Align::Center)
                 .h(56.0)
                 .fixed(),
         )
@@ -141,7 +145,7 @@ pub struct SceneGeom {
 
 impl SceneGeom {
     pub fn new(rect: UiRect, bounds: UiRect, round: &HopRound) -> Self {
-        let r = (rect.h * 0.085).min(rect.w * 0.07).clamp(12.0, 28.0);
+        let r = (rect.h * 0.1).min(rect.w * 0.075).clamp(12.0, 34.0);
         let surface_y = rect.y + rect.h * 0.62;
         let x0 = rect.x + r + 16.0;
         let x_end = rect.right() - r - 10.0;
@@ -378,7 +382,10 @@ pub fn draw(view: &HopView, l: &PearlHopLayout, art: &HopArt, time: f32) {
     for el in f.elements() {
         let Some(id) = el.id else { continue };
         match (&el.kind, id) {
-            (Kind::Text(t), HopId::Caption) => paint::text(t, INK),
+            (Kind::Text(t), HopId::Caption) => {
+                paint::round_rect(el.rect, 14.0, Color::new(0.93, 0.97, 0.98, 1.0));
+                paint::text(t, INK)
+            }
             (Kind::Text(t), HopId::Count) => paint::text(t, INK),
             (Kind::Text(t), _) => paint::text(t, WHITE),
             (_, HopId::Leave) => {
@@ -450,9 +457,17 @@ fn draw_path(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, time: f32) {
     let round = &s.round;
     // Start rock: a taller boulder so Shelly stands above the path.
     let (x0, rock_top) = (g.x0, g.rock_top());
-    c.ellipse(x0, g.surface_y + g.r * 0.2, g.r * 1.45, g.r * 1.3, 0.0, ROCK);
-    c.ellipse(x0 - g.r * 0.3, rock_top + g.r * 0.35, g.r * 0.9, g.r * 0.45, 0.0, ROCK_LIGHT);
-    let label = (g.step_px() * 0.5).clamp(12.0, 22.0) as u16;
+    // Narrow enough on a crowded path that stone 1 stays in the clear.
+    let rock_w = match round.stage {
+        HopStage::Estimate => g.r * 1.45,
+        _ => (g.step_px() - g.stone_r - 4.0).clamp(g.r * 1.05, g.r * 1.45),
+    };
+    c.ellipse(x0, g.surface_y + g.r * 0.2, rock_w, g.r * 1.3, 0.0, ROCK);
+    c.ellipse(x0 - rock_w * 0.2, rock_top + g.r * 0.35, rock_w * 0.62, g.r * 0.45, 0.0, ROCK_LIGHT);
+    let label = match round.stage {
+        HopStage::Estimate => 20,
+        _ => (g.step_px() * 0.5).clamp(12.0, 22.0) as u16,
+    };
     c.text_centered("0", x0, g.surface_y + g.r * 1.2 + label as f32, label, WHITE);
 
     let lit_up_to = lit_position(s);
@@ -464,10 +479,10 @@ fn draw_path(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, time: f32) {
             let xe = g.x_of(round.span_pos());
             c.ellipse(xe, g.surface_y + g.r * 0.35, g.r * 1.2, g.r * 1.0, 0.0, ROCK);
             c.text_centered(&round.span.to_string(), xe, g.surface_y + g.r * 1.3 + label as f32, label, WHITE);
-            c.line(x0, g.surface_y + 3.0, xe, g.surface_y + 3.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.35));
+            c.line(x0, g.surface_y + 3.0, xe, g.surface_y + 3.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.5));
             for q in 1..4 {
                 let x = lerp(x0, xe, q as f32 / 4.0);
-                c.line(x, g.surface_y - 2.0, x, g.surface_y + 8.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.35));
+                c.line(x, g.surface_y - 4.0, x, g.surface_y + 10.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.5));
             }
         }
         _ => {
@@ -523,7 +538,8 @@ fn draw_ghost(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, art: &HopArt, ti
     if s.round.stage == HopStage::Estimate {
         if let Some(t) = s.toss.as_ref() {
             let x = g.x_of(t.end());
-            c.circle_lines(x, g.surface_y, g.r * 0.7, 2.0, Color::new(1.0, 1.0, 1.0, 0.45));
+            c.circle_lines(x, g.surface_y, g.r * 0.6, 3.0, Color::new(1.0, 1.0, 1.0, 0.8));
+            c.line(x, g.surface_y - g.r * 1.2, x, g.surface_y - g.r * 0.6, 2.0, Color::new(1.0, 1.0, 1.0, 0.8));
         }
     }
     let pulling = art.pull_to.is_some_and(|p| g.aim_for_pointer(p).is_some());
@@ -596,7 +612,7 @@ fn draw_hop_bubbles(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, time: f32)
         HopPhase::Aiming => 0,
     };
     let (hx, hy) = g.home();
-    let br = (g.r * 0.42).max(7.0);
+    let br = (g.r * 0.5).max(10.0);
     let gap = br * 2.5;
     let y = hy - g.r * 2.4;
     let x_start = (hx - (k as f32 - 1.0) * gap / 2.0).max(g.rect.x + br + 2.0);
@@ -607,8 +623,8 @@ fn draw_hop_bubbles(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, time: f32)
             // Popped: a little ring of spray.
             c.circle_lines(x, y + bob, br * 0.5, 1.5, Color::new(1.0, 1.0, 1.0, 0.35));
         } else {
-            c.circle(x, y + bob, br, Color::new(0.75, 0.93, 1.0, 0.85));
-            c.circle_lines(x, y + bob, br, 2.0, Color::new(1.0, 1.0, 1.0, 0.95));
+            c.circle(x, y + bob, br, Color::new(0.75, 0.93, 1.0, 0.95));
+            c.circle_lines(x, y + bob, br, 2.5, Color::new(0.10, 0.35, 0.55, 0.9));
             c.circle(x - br * 0.35, y + bob - br * 0.35, br * 0.25, WHITE);
         }
     }
@@ -921,17 +937,19 @@ fn draw_hand(c: &paint::Canvas, x: f32, y: f32, pressed: bool, alpha: f32) {
     let skin = Color::new(1.0, 0.86, 0.72, alpha);
     let edge = Color::new(0.45, 0.30, 0.22, alpha);
     // The fingertip is at (x, y); the palm trails below-right.
-    let (px, py) = (x + 12.0, y + 22.0);
-    c.circle(px, py, 13.0, skin);
-    c.circle_lines(px, py, 13.0, 2.0, edge);
-    c.line(x, y, px - 3.0, py - 8.0, 9.0, skin);
-    c.circle(x, y, 4.5, skin);
-    c.circle_lines(x, y, 4.5, 1.5, edge);
+    let (px, py) = (x + 18.0, y + 32.0);
+    c.circle(px, py, 19.0, edge);
+    c.circle(px, py, 17.0, skin);
+    c.line(x, y, px - 4.0, py - 12.0, 14.0, edge);
+    c.line(x, y, px - 4.0, py - 12.0, 11.0, skin);
+    c.circle(x, y, 6.5, skin);
+    c.circle_lines(x, y, 6.5, 2.0, edge);
     for i in 0..3 {
-        c.circle(px + 4.0 + i as f32 * 3.5, py - 10.0 + i as f32 * 2.0, 4.0, skin);
+        c.circle(px + 6.0 + i as f32 * 5.0, py - 14.0 + i as f32 * 3.0, 5.5, skin);
+        c.circle_lines(px + 6.0 + i as f32 * 5.0, py - 14.0 + i as f32 * 3.0, 5.5, 1.5, edge);
     }
     if pressed {
-        c.circle_lines(x, y, 11.0, 2.5, Color::new(1.0, 1.0, 1.0, 0.8 * alpha));
+        c.circle_lines(x, y, 15.0, 3.0, Color::new(1.0, 1.0, 1.0, 0.85 * alpha));
     }
 }
 
