@@ -89,7 +89,7 @@ robot-buddy-game/                # Macroquad game (depends on domain)
   tests/                         # headless integration tests — plain `cargo test`, no window
     common/mod.rs                # Harness + story helpers (walk_to_npc, interact, answer_correctly)
     headless.rs, story.rs        # 7 player-flow tests; assertions read GameEvent log
-    layout_sweep.rs              # assert_sane over migrated panels × 4 screens × awkward data
+    layout_sweep.rs              # assert_sane over migrated panels × 5 screens (360×640 phone up) × awkward data
     layout_discipline.rs         # migrated panels may not call raw macroquad draw/measure fns
   www/                           # build output (gitignored except index.html)
 ```
