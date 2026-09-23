@@ -100,24 +100,88 @@ pub fn handle_click(mx: f32, my: f32, layout: &DescentLayout) -> Option<DescentI
     })
 }
 
-/// Number keys sink; holding Shift (or the up-arrow modifier keys) rises, so a
-/// keyboard player can climb back out without hunting for the mouse.
+/// The number key for a kick of `n` marks: the key with that number on it, so
+/// pressing "5" always kicks 5 — the same number the button shows. The 10-kick
+/// takes "0" (its last digit), and its button says so.
+pub fn key_for_kick(n: u8) -> Option<KeyCode> {
+    Some(match n {
+        1 => KeyCode::Key1,
+        2 => KeyCode::Key2,
+        3 => KeyCode::Key3,
+        4 => KeyCode::Key4,
+        5 => KeyCode::Key5,
+        6 => KeyCode::Key6,
+        7 => KeyCode::Key7,
+        8 => KeyCode::Key8,
+        9 => KeyCode::Key9,
+        10 => KeyCode::Key0,
+        _ => return None,
+    })
+}
+
+/// Number keys sink by the number on the key; holding Shift (or the up arrow)
+/// rises, so a keyboard player can climb back out without hunting for the
+/// mouse. A number the shaft doesn't offer does nothing.
 pub fn handle_key(input: &FrameInput, session: &DiveSession) -> Option<DescentInput> {
     if input.pressed(KeyCode::Escape) {
         return Some(DescentInput::Leave);
     }
-    let keys = [
-        KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4, KeyCode::Key5,
-    ];
     let rising = input.down(KeyCode::LeftShift) || input.down(KeyCode::RightShift)
         || input.down(KeyCode::Up);
-    for (i, key) in keys.iter().take(session.puzzle.kicks.len()).enumerate() {
-        if input.pressed(*key) {
-            let n = session.puzzle.kicks[i];
+    for &n in &session.puzzle.kicks {
+        if key_for_kick(n).is_some_and(|k| input.pressed(k)) {
             return Some(if rising { DescentInput::Rise(n) } else { DescentInput::Sink(n) });
         }
     }
     None
+}
+
+/// The key label for a kick whose number doesn't fit on one key ("key 0" for
+/// the 10). `None` when the button's own number is the key.
+fn key_hint(n: u8) -> Option<String> {
+    (n == 10).then(|| "key 0".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use robot_buddy_domain::logic::descent::DivePuzzle;
+
+    fn band4() -> DiveSession {
+        DiveSession::new(DivePuzzle { door: 17, floor: 24, kicks: vec![1, 2, 3, 5, 10], shelves: vec![] })
+    }
+
+    fn sink_for(k: KeyCode) -> Option<u8> {
+        match handle_key(&FrameInput::empty().with_key_pressed(k), &band4()) {
+            Some(DescentInput::Sink(n)) => Some(n),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn the_number_key_kicks_the_number_on_the_button() {
+        assert_eq!(sink_for(KeyCode::Key5), Some(5), "pressing 5 sinks 5, not the fifth button");
+        assert_eq!(sink_for(KeyCode::Key3), Some(3));
+        assert_eq!(sink_for(KeyCode::Key1), Some(1));
+        assert_eq!(sink_for(KeyCode::Key0), Some(10), "0 is the 10-kick");
+        assert_eq!(sink_for(KeyCode::Key4), None, "no 4-kick in this shaft");
+    }
+
+    #[test]
+    fn shift_plus_a_number_rises_by_it() {
+        let input = FrameInput::empty()
+            .with_key_down(KeyCode::LeftShift)
+            .with_key_pressed(KeyCode::Key2);
+        assert!(matches!(handle_key(&input, &band4()), Some(DescentInput::Rise(2))));
+    }
+
+    #[test]
+    fn only_the_ten_needs_a_key_hint() {
+        assert_eq!(key_hint(10).as_deref(), Some("key 0"));
+        for n in 1..=9 {
+            assert_eq!(key_hint(n), None);
+        }
+    }
 }
 
 // ─── Drawing ────────────────────────────────────────────
@@ -210,6 +274,11 @@ pub fn draw(session: &DiveSession, layout: &DescentLayout, message: Option<&str>
         let label = if b.down { format!("v {}", b.n) } else { format!("^ {}", b.n) };
         let m = measure_text(&label, None, 26, 1.0);
         draw_text(&label, r.x + r.w / 2.0 - m.width / 2.0, r.y + r.h / 2.0 + 9.0, 26.0, WHITE);
+        // Every other kick's key is the number on the button. The 10 isn't a
+        // key, so its button names the one that is.
+        if let Some(hint) = key_hint(b.n).filter(|_| b.down) {
+            draw_text(&hint, r.x + 5.0, r.y + 15.0, 15.0, Color::new(1.0, 1.0, 1.0, 0.55));
+        }
     }
 
     let msg = message.unwrap_or(match session.phase {

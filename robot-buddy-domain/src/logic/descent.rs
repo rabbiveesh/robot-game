@@ -179,6 +179,19 @@ pub fn dive_reducer(state: DiveSession, action: DiveAction) -> DiveSession {
     };
     let landed_on = raw.min(next.puzzle.floor);
 
+    // A kick that can't move you — rising at the surface, sinking while
+    // already on the floor — isn't a kick. It doesn't count against a clean
+    // dive and moves nothing. (The nudge still reads where you are, so a
+    // stale "Bonk" from an earlier kick isn't replayed.)
+    if landed_on == next.depth {
+        next.nudge = if landed_on == next.puzzle.floor {
+            DiveNudge::Bottomed
+        } else {
+            DiveNudge::None
+        };
+        return next;
+    }
+
     next.kicks_used = next.kicks_used.saturating_add(1);
 
     if next.puzzle.is_shelf(landed_on) {
@@ -321,6 +334,30 @@ mod tests {
         let mut s = DiveSession::new(shaft());
         s = dive_reducer(s, DiveAction::Rise { n: 5 });
         assert_eq!(s.depth, 0);
+    }
+
+    #[test]
+    fn a_kick_that_goes_nowhere_does_not_cost_the_clean_dive() {
+        let mut s = DiveSession::new(shaft());
+        // Rising at the surface: nowhere to go, so it isn't a kick.
+        s = dive_reducer(s, DiveAction::Rise { n: 2 });
+        assert_eq!(s.kicks_used, 0);
+        for n in [5, 2, 5] {
+            s = dive_reducer(s, DiveAction::Sink { n });
+        }
+        assert_eq!(s.phase, DivePhase::Landed);
+        assert!(s.was_clean(), "a bump against the surface shouldn't cost the pearl");
+
+        // Same on the floor: sinking while already on the bottom is a no-op.
+        let mut s = DiveSession::new(open_shaft());
+        for _ in 0..4 {
+            s = dive_reducer(s, DiveAction::Sink { n: 5 });
+        }
+        assert_eq!(s.depth, 16);
+        let used = s.kicks_used;
+        s = dive_reducer(s, DiveAction::Sink { n: 1 });
+        assert_eq!(s.kicks_used, used);
+        assert_eq!(s.nudge, DiveNudge::Bottomed, "still on the bottom");
     }
 
     #[test]
