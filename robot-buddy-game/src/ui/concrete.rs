@@ -43,7 +43,8 @@ use robot_buddy_domain::logic::manipulate_concrete::{
 use robot_buddy_domain::types::Operation;
 
 use crate::input::FrameInput;
-use crate::ui::layout::UiRect;
+use crate::ui::layout::paint::{self, Canvas};
+use crate::ui::layout::{FontMetrics, TextMetrics, UiRect};
 
 /// The workspace's natural size: two blocks of five spaces, the gap between
 /// them, and room either side (the row sticks' handles on the left of the
@@ -766,35 +767,41 @@ pub fn handle_pointer(ws: &mut Workspace, input: &FrameInput, area: UiRect) -> P
 }
 
 // ─── DRAWING ────────────────────────────────────────────
+//
+// Everything paints through `paint::Canvas` (ADR-004): the workspace's own art
+// on a canvas bound to its layout region, and what moves across the panel —
+// counters sliding in from a drop, the one in hand — on a canvas bound to the
+// whole frame.
 
 fn group_color(group: u8) -> Color {
     if group == 0 { BLUE } else { YELLOW }
 }
 
-fn draw_counter(x: f32, y: f32, r: f32, color: Color) {
-    draw_circle(x, y, r, color);
-    draw_circle_lines(x, y, r, 2.0, OUTLINE);
+fn paint_counter(c: &Canvas, x: f32, y: f32, r: f32, color: Color) {
+    c.circle(x, y, r, color);
+    c.circle_lines(x, y, r, 2.0, OUTLINE);
 }
 
 /// One segment of a ten-rod, centered on (x, y).
-fn draw_segment(x: f32, y: f32, w: f32, h: f32, color: Color) {
-    draw_rectangle(x - w / 2.0, y - h / 2.0, w, h, color);
-    draw_rectangle_lines(x - w / 2.0, y - h / 2.0, w, h, 1.5, OUTLINE);
+fn paint_segment(c: &Canvas, x: f32, y: f32, w: f32, h: f32, color: Color) {
+    let seg = UiRect::new(x - w / 2.0, y - h / 2.0, w, h);
+    c.rect(seg, color);
+    c.rect_lines(seg, 1.5, OUTLINE);
 }
 
 /// A stick running behind a row, with a knob to grab at one end.
-fn draw_stick(handle: UiRect, row: UiRect, cell: f32, lift: f32) {
+fn paint_stick(c: &Canvas, handle: UiRect, row: UiRect, cell: f32, lift: f32) {
     let bar_h = cell * 0.3;
     let y = row.y + row.h / 2.0 - bar_h / 2.0 - lift;
     let knob_x = handle.x + handle.w / 2.0;
     let (x0, x1) = (knob_x.min(row.x), knob_x.max(row.x + row.w));
-    draw_rectangle(x0, y, x1 - x0, bar_h, STICK);
-    let knob = UiRect { x: handle.x, y: handle.y + handle.h * 0.15 - lift, w: handle.w, h: handle.h * 0.7 };
-    draw_rectangle(knob.x, knob.y, knob.w, knob.h, STICK);
-    draw_rectangle_lines(knob.x, knob.y, knob.w, knob.h, 2.0, OUTLINE);
+    c.rect(UiRect::new(x0, y, x1 - x0, bar_h), STICK);
+    let knob = UiRect::new(handle.x, handle.y + handle.h * 0.15 - lift, handle.w, handle.h * 0.7);
+    c.rect(knob, STICK);
+    c.rect_lines(knob, 2.0, OUTLINE);
     for k in 1..4 {
         let gy = knob.y + knob.h * k as f32 / 4.0;
-        draw_line(knob.x + 4.0, gy, knob.x + knob.w - 4.0, gy, 1.5, STICK_GRIP);
+        c.line(knob.x + 4.0, gy, knob.x + knob.w - 4.0, gy, 1.5, STICK_GRIP);
     }
 }
 
@@ -804,24 +811,25 @@ fn glow_strength(age: f32) -> f32 {
     if t < 0.15 { t / 0.15 } else { 1.0 - (t - 0.15) / 0.85 }
 }
 
-pub fn draw(ws: &Workspace, area: UiRect) {
+/// Paint the workspace into `area` (its layout region). `bounds` is the whole
+/// frame, for counters partway through a slide.
+pub fn draw(ws: &Workspace, area: UiRect, bounds: UiRect) {
     let l = layout(ws, area);
+    let c = paint::canvas(area);
     let seg_w = l.cell * 0.95;
     let seg_h = l.cell * 0.8;
 
     for (i, f) in l.frames.iter().enumerate() {
-        draw_rectangle(f.x, f.y, f.w, f.h, FRAME_BG);
+        c.rect(*f, FRAME_BG);
 
         for g in &ws.glows {
             let a = glow_strength(g.age);
             match g.kind {
                 GlowKind::Row(fi, row) if fi == i => {
-                    let y = f.y + row as f32 * l.cell;
-                    draw_rectangle(f.x, y, f.w, l.cell, Color { a: 0.35 * a, ..GLOW });
+                    let band = UiRect::new(f.x, f.y + row as f32 * l.cell, f.w, l.cell);
+                    c.rect(band, Color { a: 0.35 * a, ..GLOW });
                 }
-                GlowKind::Frame(fi) if fi == i => {
-                    draw_rectangle(f.x, f.y, f.w, f.h, Color { a: 0.3 * a, ..GLOW });
-                }
+                GlowKind::Frame(fi) if fi == i => c.rect(*f, Color { a: 0.3 * a, ..GLOW }),
                 _ => {}
             }
         }
@@ -830,59 +838,61 @@ pub fn draw(ws: &Workspace, area: UiRect) {
         let grid = if l.rods[i] { FRAME_LINE_FAINT } else { FRAME_LINE };
         for col in 1..COLS {
             let x = f.x + col as f32 * l.cell;
-            draw_line(x, f.y, x, f.y + f.h, 1.5, grid);
+            c.line(x, f.y, x, f.y + f.h, 1.5, grid);
         }
-        draw_line(f.x, f.y + l.cell, f.x + f.w, f.y + l.cell, 1.5, grid);
+        c.line(f.x, f.y + l.cell, f.x + f.w, f.y + l.cell, 1.5, grid);
 
         // A full frame is a ten: thicker border, and it wears the numeral on
         // its outer side (away from the tray/basket). Tap it to make a rod.
         let pulse = ws.glows.iter().find(|g| g.kind == GlowKind::Frame(i)).map_or(0.0, |g| glow_strength(g.age));
         let full = l.badges[i].is_some();
         let border = if full { 4.0 + 3.0 * pulse } else { 3.0 };
-        draw_rectangle_lines(f.x, f.y, f.w, f.h, border, if full { TEN_BADGE } else { FRAME_LINE });
+        c.rect_lines(*f, border, if full { TEN_BADGE } else { FRAME_LINE });
         if let Some(b) = l.badges[i] {
-            let size = (30.0 + 14.0 * pulse) * l.cell / CELL;
-            let tw = measure_text("10", None, size as u16, 1.0).width;
-            draw_text("10", b.x + (b.w - tw) / 2.0, b.y + b.h / 2.0 + size * 0.35, size, TEN_BADGE);
+            let size = (((30.0 + 14.0 * pulse) * l.cell / CELL) as u16).max(10);
+            let tw = FontMetrics::bundled().width("10", size);
+            c.text("10", b.x + (b.w - tw) / 2.0, b.y + b.h / 2.0 + size as f32 * 0.35, size, TEN_BADGE);
         }
     }
 
-    // Sticks behind the tray's full rows.
+    // Sticks behind the source's full rows.
     for stick in &l.sticks {
-        draw_stick(stick.handle, stick.row, l.cell, 0.0);
+        paint_stick(&c, stick.handle, stick.row, l.cell, 0.0);
     }
 
     // Basket outline (take away) — its empty spaces say how many to take.
     if !l.side_is_source {
         let b = l.side;
-        draw_rectangle_lines(b.x - 4.0, b.y - 4.0, b.w + 8.0, b.h + 8.0, 3.0, FRAME_LINE);
+        c.rect_lines(UiRect::new(b.x - 4.0, b.y - 4.0, b.w + 8.0, b.h + 8.0), 3.0, FRAME_LINE);
     }
     for &((x, y), fill) in &l.side_slots {
         if fill.is_none() {
-            draw_circle_lines(x, y, l.counter_r, 1.5, SLOT_GHOST);
+            c.circle_lines(x, y, l.counter_r, 1.5, SLOT_GHOST);
         }
     }
     for &(x, y) in &l.held_gaps {
-        draw_circle_lines(x, y, l.counter_r, 2.0, HELD_GAP);
+        c.circle_lines(x, y, l.counter_r, 2.0, HELD_GAP);
     }
 
     // A quiet chevron: counters travel left to right (stepped clear of the
     // take-away knobs).
     let mid_y = area.y + l.cell;
     let cx = l.drop_line + if l.side_is_source { 0.0 } else { 8.0 };
-    draw_line(cx - 8.0, mid_y - 10.0, cx + 6.0, mid_y, 3.0, ARROW);
-    draw_line(cx - 8.0, mid_y + 10.0, cx + 6.0, mid_y, 3.0, ARROW);
+    c.line(cx - 8.0, mid_y - 10.0, cx + 6.0, mid_y, 3.0, ARROW);
+    c.line(cx - 8.0, mid_y + 10.0, cx + 6.0, mid_y, 3.0, ARROW);
 
-    for c in l.counters() {
-        let (x, y) = ws.shown_at(c);
-        let color = match (c.id.zone, l.side_is_source) {
+    // Counters, some mid-slide from wherever they were let go.
+    let moving = paint::canvas(bounds);
+    for counter in l.counters() {
+        let (x, y) = ws.shown_at(counter);
+        let color = match (counter.id.zone, l.side_is_source) {
             (Zone::Side, false) => BLUE_TAKEN, // in the basket: taken away
-            _ => group_color(c.group),
+            _ => group_color(counter.group),
         };
-        if c.in_rod {
-            draw_segment(x, y, seg_w / 2.0, seg_h, color);
+        if counter.in_rod {
+            paint_segment(&moving, x, y, seg_w / 2.0, seg_h, color);
         } else {
-            draw_counter(x, y, l.counter_r, color);
+            paint_counter(&moving, x, y, l.counter_r, color);
         }
     }
 }
@@ -890,8 +900,10 @@ pub fn draw(ws: &Workspace, area: UiRect) {
 /// What's carried, drawn last so it rides above the whole panel. Lifted —
 /// bigger, shadowed, ringed — so it's obvious it's in hand even when the
 /// platform can't report the finger moving. A row travels on its stick.
-pub fn draw_drag(ws: &Workspace, area: UiRect) {
+/// `area` is the workspace (for scale); `bounds` the whole frame.
+pub fn draw_drag(ws: &Workspace, area: UiRect, bounds: UiRect) {
     let Some(d) = &ws.drag else { return };
+    let c = paint::canvas(bounds);
     let scale = scale_in(area);
     let cell = CELL * scale;
     let r = COUNTER_R * scale * if d.is_row() { 1.1 } else { 1.3 };
@@ -899,25 +911,25 @@ pub fn draw_drag(ws: &Workspace, area: UiRect) {
     let spots = carried_positions(d.pos, d.slots.len(), cell);
     if d.is_row() {
         let first = spots[0];
-        let row = UiRect { x: first.0 - cell / 2.0, y: first.1 - cell / 2.0, w: cell * COLS as f32, h: cell };
+        let row = UiRect::new(first.0 - cell / 2.0, first.1 - cell / 2.0, cell * COLS as f32, cell);
         let handle = if ws.session.puzzle.kind == ConcreteKind::TakeAway {
             let handle_w = (MID_GAP * scale * 0.4 - 4.0).max(12.0);
-            UiRect { x: row.x + row.w + 4.0, y: row.y, w: handle_w, h: cell }
+            UiRect::new(row.x + row.w + 4.0, row.y, handle_w, cell)
         } else {
             let handle_w = (BADGE_ROOM * scale - 8.0).max(12.0);
-            UiRect { x: row.x - handle_w - 4.0, y: row.y, w: handle_w, h: cell }
+            UiRect::new(row.x - handle_w - 4.0, row.y, handle_w, cell)
         };
-        draw_stick(handle, row, cell, 4.0);
+        paint_stick(&c, handle, row, cell, 4.0);
     }
     for &(x, y) in &spots {
-        draw_circle(x + 4.0, y + 7.0, r, SHADOW);
+        c.circle(x + 4.0, y + 7.0, r, SHADOW);
     }
     if !d.is_row() {
         let ring = r + 6.0 + 3.0 * (ws.clock * 6.0).sin();
-        draw_circle_lines(d.pos.0, d.pos.1, ring, 3.0, Color { a: 0.8, ..color });
+        c.circle_lines(d.pos.0, d.pos.1, ring, 3.0, Color { a: 0.8, ..color });
     }
     for &(x, y) in &spots {
-        draw_counter(x, y - 4.0, r, color);
+        paint_counter(&c, x, y - 4.0, r, color);
     }
 }
 

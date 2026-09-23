@@ -33,6 +33,7 @@ const MIGRATED: &[&str] = &[
     "dialogue.rs",
     "settings_overlay.rs",
     "visuals.rs",
+    "concrete.rs",
 ];
 
 /// Raw macroquad calls a migrated panel must not make (besides every
@@ -67,6 +68,14 @@ const COORD_ALLOW: &[(&str, &str, &str)] = &[
     // Display-list prims in the visual's local coordinates; painted through a
     // paint::Canvas bound to the layout region, which checks they stay inside.
     ("visuals.rs", "*", "UiRect::new"),
+    // The hands-on workspace places its frames, tray, counters and sticks
+    // inside its own layout region (scaled to it), and paints through a
+    // paint::Canvas bound to that region — or to the frame, for counters
+    // mid-slide and the one in hand.
+    ("concrete.rs", "*", "UiRect::new"),
+    ("concrete.rs", "*", "UiRect { .. }"),
+    // A stick's knob answers a press a little outside itself: fingers are fat.
+    ("concrete.rs", "handle_pointer", ".expand"),
 ];
 
 #[derive(Default)]

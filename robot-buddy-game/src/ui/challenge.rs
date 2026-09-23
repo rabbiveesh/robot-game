@@ -282,7 +282,7 @@ pub fn draw(
             }
             ChallengeId::Workspace => {
                 if let Some(ws) = workspace {
-                    concrete::draw(ws, r);
+                    concrete::draw(ws, r, f.bounds);
                 }
             }
             ChallengeId::Visual => visuals::draw(challenge, r),
@@ -303,7 +303,7 @@ pub fn draw(
     }
     // The carried counter rides above everything, wherever the finger is.
     if let (Some(ws), Some(area)) = (workspace, layout.workspace()) {
-        concrete::draw_drag(ws, area);
+        concrete::draw_drag(ws, area, f.bounds);
     }
 }
 
