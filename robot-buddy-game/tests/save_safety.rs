@@ -316,3 +316,22 @@ fn the_rollback_mirror_never_overrides_a_real_wardrobe() {
     assert!(!back.wardrobe.is_wearing(wardrobe::PLAYER, "hat"), "Echo still has the hat");
     assert!(back.wardrobe.is_wearing("dolphin", "hat"));
 }
+
+/// Hiding the tab saves once, not on every frame the tab stays hidden.
+#[test]
+fn a_hidden_tab_saves_once_not_every_frame() {
+    let backend = InMemoryBackend::default();
+    let mut h = common::Harness::with_backend(3, backend.clone());
+    h.start_dev_game();
+    h.game.map = robot_buddy_game::tilemap::Map::home(); // the dev map never saves
+    h.idle();
+    let before = backend.writes();
+    backend.set_page_hidden(true);
+    h.advance(120);
+    assert_eq!(backend.writes() - before, 1, "one save when the tab hid");
+    backend.set_page_hidden(false);
+    h.advance(10);
+    backend.set_page_hidden(true);
+    h.advance(10);
+    assert_eq!(backend.writes() - before, 2, "and one more the next time it hides");
+}

@@ -456,6 +456,10 @@ impl SaveBackend for LocalStorageBackend {
 #[derive(Default, Clone)]
 pub struct InMemoryBackend {
     store: Rc<RefCell<BTreeMap<String, String>>>,
+    /// Stands in for the browser tab's visibility.
+    hidden: Rc<std::cell::Cell<bool>>,
+    /// Every storage write, so tests can catch a save loop.
+    writes: Rc<std::cell::Cell<u32>>,
 }
 
 impl InMemoryBackend {
@@ -475,11 +479,22 @@ impl InMemoryBackend {
     pub fn keys(&self) -> Vec<String> {
         self.store.borrow().keys().cloned().collect()
     }
+
+    /// Pretend the browser tab was hidden (or shown again).
+    pub fn set_page_hidden(&self, hidden: bool) {
+        self.hidden.set(hidden);
+    }
+
+    /// How many times anything has been written to storage.
+    pub fn writes(&self) -> u32 {
+        self.writes.get()
+    }
 }
 
 impl RawStorage for InMemoryBackend {
     fn get(&self, key: &str) -> Option<String> { self.raw(key) }
     fn set(&self, key: &str, value: &str) {
+        self.writes.set(self.writes.get() + 1);
         self.store.borrow_mut().insert(key.to_string(), value.to_string());
     }
 }
@@ -488,6 +503,7 @@ impl SaveBackend for InMemoryBackend {
     fn load_slots(&self) -> [StoredSlot; 3] { read_slots(self).0 }
     fn save_to(&self, slot: usize, data: &SaveData) { save_slot(self, slot, data) }
     fn delete(&self, slot: usize) { write_slot(self, slot, StoredSlot::Empty) }
+    fn is_page_hidden(&self) -> bool { self.hidden.get() }
 }
 
 // ─── PLATFORM STORAGE ───────────────────────────────────

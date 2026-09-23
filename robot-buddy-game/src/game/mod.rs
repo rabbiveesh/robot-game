@@ -607,6 +607,9 @@ pub struct Game {
     resting_slots: ui::title_screen::RestingSlots,
     active_slot: usize,
     auto_save_timer: f32,
+    /// Whether the tab was hidden last frame, so hiding saves once (on the
+    /// edge) instead of every frame the tab stays hidden.
+    page_was_hidden: bool,
     save_backend: Box<dyn SaveBackend>,
 
     // Profile / learning
@@ -709,6 +712,7 @@ impl Game {
             resting_slots: ui::title_screen::NO_RESTING_SLOTS,
             active_slot: 0,
             auto_save_timer: 0.0,
+            page_was_hidden: false,
             save_backend,
             profile: LearnerProfile::new(),
             behavior_signals: Vec::new(),
@@ -958,7 +962,10 @@ impl Game {
         if !self.settings_open && self.state != GameState::Title && self.state != GameState::NewGame {
             self.play_time += dt;
             self.auto_save_timer += dt;
-            if self.auto_save_timer >= 30.0 || self.save_backend.is_page_hidden() {
+            let hidden = self.save_backend.is_page_hidden();
+            let just_hid = hidden && !self.page_was_hidden;
+            self.page_was_hidden = hidden;
+            if self.auto_save_timer >= 30.0 || just_hid {
                 self.persist();
             }
         }
@@ -2485,9 +2492,7 @@ impl Game {
                         // previous companion returns home.
                         let swap = self.maybe_swap_companion_from_gift();
 
-                        let save_data = self.gather_save_data();
-                        self.save_backend.save_to(self.active_slot, &save_data);
-                        self.auto_save_timer = 0.0;
+                        self.persist();
 
                         let reaction = give_reaction_dialogue(
                             &self.menu_target_id, &self.menu_target_name,
