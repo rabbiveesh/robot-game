@@ -180,6 +180,26 @@ async fn main() {
         snap_game("08_swag_after_give_message", &mut h).await;
     }
 
+    // ── Gift picker: hand Tali Color Change, pick her colour ──
+    {
+        let mut h = Harness::new(11);
+        h.start_dev_game();
+        h.game.dum_dums = 99;
+        open_bolt(&mut h);
+        h.buy_shop_item("color_change");
+        h.pick_shop_color("red");
+        h.close_shop();
+        to_home(&mut h);
+        h.walk_to_npc(NpcKind::Kid1);
+        h.interact();
+        h.select_option("swag");
+        h.wait_until(|g| g.state == GameState::Swag);
+        h.give_swag("color_change");
+        snap_game("08b_swag_colour_for_tali", &mut h).await;
+        h.pick_swag_color("teal");
+        snap_game("08c_swag_tali_picked_teal", &mut h).await;
+    }
+
     // ── Settings with the parent section open ──
     {
         let mut h = Harness::new(3);
