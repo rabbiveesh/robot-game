@@ -5,6 +5,9 @@ use crate::follower::Pathing;
 use crate::game::Entity;
 use crate::sprites::{self, Dir};
 
+mod dialogue;
+pub(crate) use dialogue::npc_dialogue_lines;
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum NpcKind {
     Sage,
