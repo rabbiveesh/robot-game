@@ -87,7 +87,12 @@ fn open_bolt(h: &mut Harness) {
 
 #[macroquad::main(conf)]
 async fn main() {
-    robot_buddy_game::text::init();
+    // high_dpi is on, so a fractional display scale (1.25x, 1.5x) makes
+    // macroquad round glyph sizes up and text drifts from the headless layout.
+    // Say so loudly, but still take the shots.
+    if let Err(e) = robot_buddy_game::text::init() {
+        eprintln!("\n!!! {e}\n!!! These screenshots won't match the layout the tests check.\n");
+    }
 
     // ── Hermie: browse, the original overlap (message after a buy), trade ──
     {

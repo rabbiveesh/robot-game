@@ -29,14 +29,35 @@ thread_local! {
     static FONT: RefCell<Option<Font>> = const { RefCell::new(None) };
 }
 
-/// Load the bundled font into the GL texture atlas. Call once after the
-/// macroquad context exists (i.e. inside the game loop / first frame), since
-/// building the atlas needs the graphics context. If loading fails we log and
-/// leave the default font in place rather than panic.
-pub fn init() {
-    match load_ttf_font_from_bytes(FONT_BYTES) {
-        Ok(font) => FONT.with(|cell| *cell.borrow_mut() = Some(font)),
-        Err(err) => macroquad::logging::error!("bundled font failed to load: {err}"),
+/// Load the bundled font into the GL texture atlas, then check that what
+/// macroquad renders measures the same as what UI layout measured headlessly
+/// ([`crate::ui::layout::metrics::renderer_drift`]). Call once after the
+/// macroquad context exists, since building the atlas needs the graphics
+/// context.
+///
+/// `Err` means layout and rendering disagree — the font didn't load (so
+/// macroquad draws its default font into boxes sized for Unifont), or a
+/// fractional `high_dpi` scale makes macroquad round glyph sizes up — and
+/// text will overflow the boxes laid out for it. The caller decides how loud
+/// to be; [`init_or_die`] is the game's choice.
+pub fn init() -> Result<(), String> {
+    let font = load_ttf_font_from_bytes(FONT_BYTES).map_err(|err| format!("bundled font failed to load: {err}"))?;
+    FONT.with(|cell| *cell.borrow_mut() = Some(font));
+    match crate::ui::layout::metrics::renderer_drift() {
+        None => Ok(()),
+        Some(drift) => Err(format!("UI layout metrics disagree with the renderer: {drift}")),
+    }
+}
+
+/// [`init`], failing loudly: a debug build panics (layout would be wrong and
+/// every screenshot would lie); a release build logs an error and carries on
+/// with slightly mis-sized text rather than showing a kid a dead screen.
+pub fn init_or_die() {
+    if let Err(e) = init() {
+        if cfg!(debug_assertions) {
+            panic!("{e}");
+        }
+        macroquad::logging::error!("{e}");
     }
 }
 

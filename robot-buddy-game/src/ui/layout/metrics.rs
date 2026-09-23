@@ -83,6 +83,36 @@ impl TextMetrics for MacroquadMetrics {
     }
 }
 
+/// Strings and sizes [`renderer_drift`] probes: every glyph class we draw
+/// (ASCII, digits, math operators, the star) across the sizes panels use.
+const PROBE: &str = "Sparky has 12 Dum Dums! 7 + 5 = ? 3\u{00d7}4 8\u{00f7}2 9\u{2212}1 \u{2605}";
+const PROBE_SIZES: [u16; 8] = [11, 14, 16, 18, 22, 28, 42, 54];
+
+/// Compare [`FontMetrics`] (what layout measured, headless) with
+/// [`MacroquadMetrics`] (what macroquad will render) on a probe string.
+/// `None` if they agree to within half a pixel at every probed size; else a
+/// description of the worst disagreement. Needs a live GL context.
+///
+/// They disagree when the bundled font didn't load (macroquad measures its
+/// default font) or when a fractional DPI scale makes macroquad rasterize at
+/// `ceil(size × dpi)` and divide back — advances then no longer match the
+/// integer-size advances layout summed.
+pub fn renderer_drift() -> Option<String> {
+    let ours = FontMetrics::bundled();
+    PROBE_SIZES
+        .iter()
+        .map(|&size| (size, ours.width(PROBE, size), MacroquadMetrics.width(PROBE, size)))
+        .filter(|(_, a, b)| (a - b).abs() > 0.5)
+        .max_by(|x, y| (x.1 - x.2).abs().total_cmp(&(y.1 - y.2).abs()))
+        .map(|(size, a, b)| {
+            format!(
+                "a {}-char probe at {size}px is {a}px wide to layout but {b}px rendered (dpi scale {})",
+                PROBE.chars().count(),
+                macroquad::miniquad::window::dpi_scale()
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
