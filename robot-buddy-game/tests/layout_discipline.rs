@@ -12,7 +12,7 @@
 use std::path::Path;
 
 /// Panels that lay out through `ui::layout`.
-const MIGRATED: &[&str] = &["shop.rs", "swag.rs", "quest.rs", "challenge.rs", "dialogue.rs"];
+const MIGRATED: &[&str] = &["shop.rs", "swag.rs", "quest.rs", "challenge.rs", "dialogue.rs", "settings_overlay.rs"];
 
 /// Raw macroquad calls a migrated panel must not make.
 const FORBIDDEN: &[&str] = &[

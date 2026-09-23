@@ -322,6 +322,26 @@ fn dialogue_lines_are_sane_everywhere() {
     }
 }
 
+// ─── Settings ────────────────────────────────────────────
+
+#[test]
+fn settings_overlay_is_sane_everywhere() {
+    use robot_buddy_domain::types::GamePace;
+    use robot_buddy_game::game::FeatureFlags;
+    use robot_buddy_game::ui::settings_overlay::{self, SettingsId, SettingsModel};
+    for &screen in &SWEEP_SCREENS {
+        for parent_open in [false, true] {
+            let m = SettingsModel { features: FeatureFlags::default(), parent_open, pace: GamePace::ALL[1] };
+            let f = settings_overlay::layout(screen, m);
+            assert_sane(&f, screen_rect(screen));
+            // The section labels are laid out too — not hand-placed.
+            assert_eq!(f.rect(SettingsId::SpeedLabel).is_some(), !parent_open);
+            assert_eq!(f.rect(SettingsId::Note).is_some(), parent_open);
+            assert!(f.rect(SettingsId::Done).is_some(), "Done reachable at {screen:?}");
+        }
+    }
+}
+
 // ─── Quest ───────────────────────────────────────────────
 
 #[test]

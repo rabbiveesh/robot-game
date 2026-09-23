@@ -2935,6 +2935,15 @@ impl Game {
         shop::swag_items().into_iter().filter(|i| worn.contains(&i.id)).collect()
     }
 
+    /// What the settings overlay shows.
+    fn settings_model(&self) -> ui::settings_overlay::SettingsModel {
+        ui::settings_overlay::SettingsModel {
+            features: self.features,
+            parent_open: self.parent_panel_open,
+            pace: self.game_pace,
+        }
+    }
+
     /// Everything the shop panel shows, borrowed from the live session.
     pub fn shop_model(&self) -> Option<ui::shop::ShopModel<'_>> {
         let ash = self.active_shop.as_ref()?;
@@ -3342,7 +3351,7 @@ impl Game {
     fn handle_settings_input(&mut self, input: &FrameInput, screen: (f32, f32)) {
         if self.settings_open {
             use ui::settings_overlay::{Feature, SettingsResult};
-            if let Some(result) = ui::settings_overlay::handle_input(input, screen, self.parent_panel_open) {
+            if let Some(result) = ui::settings_overlay::handle_input(input, screen, self.settings_model()) {
                 match result {
                     // These stay in the overlay — just mutate state, don't close.
                     SettingsResult::ToggleParentPanel => {
@@ -4719,7 +4728,7 @@ impl Game {
         }
 
         if self.settings_open {
-            ui::settings_overlay::draw(screen, self.features, self.parent_panel_open, self.game_pace);
+            ui::settings_overlay::draw(screen, self.settings_model());
         }
     }
 
