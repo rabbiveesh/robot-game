@@ -50,6 +50,19 @@ pub enum NpcKind {
     /// Blaster Bubbe — runs the arcade cabinet on the Goyish Map. Interacting
     /// launches the number-bond space shooter (`GameState::Shooter`).
     ArcadeAlien,
+    // Robot Land — every robot is broken in exactly one funny way.
+    /// Toasty, a toaster who launches toast whenever he gets excited (always).
+    Toaster,
+    /// Clank, whose head is on a spring and will not stay on.
+    SpringBot,
+    /// Sir Vacuums-a-Lot, a crowned robot vacuum with a magnificent moustache.
+    Roomba,
+    /// Beep, who can only say "beep" and somehow gets the point across.
+    TinyBot,
+    /// Grandpa Gearbox, rusty, squeaky, full of stories about the old days.
+    RustyBot,
+    /// Sockbot, who sorts socks into pairs and is always one sock short.
+    SockBot,
     CtrlBand,
     CtrlKenkenLevel,
     CtrlCraReset,
@@ -98,6 +111,12 @@ impl NpcKind {
             NpcKind::StarKeeper => "star_keeper",
             NpcKind::StationAlien => "station_alien",
             NpcKind::ArcadeAlien => "arcade_alien",
+            NpcKind::Toaster => "toaster",
+            NpcKind::SpringBot => "spring_bot",
+            NpcKind::Roomba => "roomba",
+            NpcKind::TinyBot => "tiny_bot",
+            NpcKind::RustyBot => "rusty_bot",
+            NpcKind::SockBot => "sock_bot",
             NpcKind::CtrlBand => "ctrl_band",
             NpcKind::CtrlKenkenLevel => "ctrl_kenken_level",
             NpcKind::CtrlCraReset => "ctrl_cra_reset",
@@ -155,6 +174,12 @@ impl NpcKind {
             NpcKind::StarKeeper => "Cassi",
             NpcKind::StationAlien => "Bleep",
             NpcKind::ArcadeAlien => "Blaster Bubbe",
+            NpcKind::Toaster => "Toasty",
+            NpcKind::SpringBot => "Clank",
+            NpcKind::Roomba => "Sir Vacuums-a-Lot",
+            NpcKind::TinyBot => "Beep",
+            NpcKind::RustyBot => "Grandpa Gearbox",
+            NpcKind::SockBot => "Sockbot",
             NpcKind::CtrlBand => "Band Knob",
             NpcKind::CtrlKenkenLevel => "KenKen Knob",
             NpcKind::CtrlCraReset => "CRA Reset",
@@ -183,6 +208,8 @@ impl NpcKind {
         NpcKind::HermitCrab,
         NpcKind::MoonAlien, NpcKind::FuelBot, NpcKind::MarsGuardian, NpcKind::StarKeeper, NpcKind::StationAlien,
         NpcKind::ArcadeAlien,
+        NpcKind::Toaster, NpcKind::SpringBot, NpcKind::Roomba, NpcKind::TinyBot,
+        NpcKind::RustyBot, NpcKind::SockBot,
         NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
         NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerBalance, NpcKind::CtrlTriggerSudoku,
@@ -232,6 +259,12 @@ pub enum SpriteType {
     FuelDepot,
     StarTerminal,
     Signpost,
+    Toaster,
+    SpringBot,
+    Roomba,
+    TinyBot,
+    RustyBot,
+    SockBot,
 }
 
 impl SpriteType {
@@ -246,6 +279,8 @@ impl SpriteType {
         SpriteType::Anglerfish, SpriteType::Eel,
         SpriteType::AlienGreen, SpriteType::AlienRed, SpriteType::FuelDepot,
         SpriteType::StarTerminal, SpriteType::Signpost,
+        SpriteType::Toaster, SpriteType::SpringBot, SpriteType::Roomba,
+        SpriteType::TinyBot, SpriteType::RustyBot, SpriteType::SockBot,
     ];
 
     /// Where this body's head, collar and ground line sit, so a piece of swag
@@ -262,6 +297,9 @@ impl SpriteType {
             SpriteType::Crab => SwagFit::CRAB,
             SpriteType::Clam => SwagFit::CLAM,
             SpriteType::HermitShell => SwagFit::HERMIT,
+            // A robot vacuum is all floor and no head.
+            SpriteType::Roomba => SwagFit::ROOMBA,
+            SpriteType::TinyBot => SwagFit::CRAB,
             // Everyone else stands upright in the tile like the kid does.
             _ => SwagFit::KID,
         }
@@ -602,6 +640,12 @@ impl SpriteType {
             SpriteType::FuelDepot => sprites::npcs::draw_fuel_depot(x, y, time),
             SpriteType::StarTerminal => sprites::npcs::draw_star_terminal(x, y, time),
             SpriteType::Signpost => sprites::npcs::draw_signpost(x, y, time),
+            SpriteType::Toaster => sprites::robots::draw_toaster(x, y, time),
+            SpriteType::SpringBot => sprites::robots::draw_spring_bot(x, y, time),
+            SpriteType::Roomba => sprites::robots::draw_roomba(x, y, dir, time),
+            SpriteType::TinyBot => sprites::robots::draw_tiny_bot(x, y, time),
+            SpriteType::RustyBot => sprites::robots::draw_rusty_bot(x, y, time),
+            SpriteType::SockBot => sprites::robots::draw_sock_bot(x, y, time),
         }
     }
 }
@@ -736,6 +780,17 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
         // IS the cabinet), so she's never giftable and never challenges.
         "goyish_map" => vec![
             n(ArcadeAlien, 6, 3, S::AlienRed, false, true, false).launching_shooter(),
+        ],
+        // Robot Land — every robot is a giftable buddy. Toasty and Grandpa
+        // Gearbox stay put (one is plugged in, one is having a sit); the rest
+        // potter about the factory floor.
+        "robot_land" => vec![
+            n(Toaster,   9, 6,   S::Toaster,   true, false, false),
+            n(SpringBot, 17, 11, S::SpringBot, true, false, false).wandering(),
+            n(Roomba,    15, 14, S::Roomba,    true, true,  false).wandering(),
+            n(TinyBot,   23, 7,  S::TinyBot,   true, false, false).wandering(),
+            n(RustyBot,  7, 16,  S::RustyBot,  true, false, false),
+            n(SockBot,   21, 16, S::SockBot,   true, false, false).wandering(),
         ],
         "control" => vec![
             // Dev knob bay -- each NPC is one control. game.rs intercepts dev-control

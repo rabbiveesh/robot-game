@@ -55,6 +55,8 @@ impl SwagFit {
     /// Shelly, who is mostly shell.
     pub const CLAM: SwagFit = SwagFit { head: 26.0, chest: 32.0, ground: 45.0, scale: 0.7 };
     /// Hermie, wearing a shop on his back.
+    /// Sir Vacuums-a-Lot: a disc on the floor, crown on top.
+    pub const ROOMBA: SwagFit = SwagFit { head: 26.0, chest: 34.0, ground: 45.0, scale: 0.7 };
     pub const HERMIT: SwagFit = SwagFit { head: 14.0, chest: 31.0, ground: 45.0, scale: 0.75 };
 }
 

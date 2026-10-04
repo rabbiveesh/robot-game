@@ -3294,3 +3294,70 @@ fn rocket_jumps_burn_fuel_and_the_depot_refills() {
     assert_eq!(h.game.map.id, "mars");
     assert_eq!(h.game.fuel(), 7, "the Mars jump burns 3 fuel");
 }
+
+// ─── Robot Land ─────────────────────────────────────────
+
+#[test]
+fn the_bot_pad_in_gizmos_lab_beams_you_to_robot_land_and_back() {
+    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(5);
+    h.start_dev_game();
+    h.game.map = Map::lab();
+    h.game.npcs = npc_mod::npcs_for_map("lab");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+    h.game.sparky.entity.tile_x = 3;
+    h.game.sparky.entity.x = 3.0 * 48.0;
+    h.game.sparky.entity.target_x = 3.0 * 48.0;
+
+    // The pad sits in the lab's west corner at (1,2); step up onto it.
+    snap_player(&mut h, 1, 3);
+    h.step_through_portal(KeyCode::Up, "robot_land");
+    assert_eq!(h.game.map.id, "robot_land");
+    assert!(h.game.npcs.iter().any(|n| n.kind == NpcKind::Toaster),
+        "Toasty is home to greet arrivals");
+
+    // The return pad is right above the arrival tile.
+    h.finish_dialogue();
+    h.step_through_portal(KeyCode::Up, "lab");
+    assert_eq!(h.game.map.id, "lab");
+}
+
+#[test]
+fn every_robot_in_robot_land_can_be_walked_to_and_befriended() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let map = Map::robot_land();
+    assert!(map.tiles.iter().all(|r| r.len() == map.width), "Robot Land rows are all the same width");
+
+    let roster = npc_mod::npcs_for_map("robot_land");
+    assert_eq!(roster.len(), 6);
+    for npc in &roster {
+        assert!(npc.can_receive_gifts, "{} should be giftable — every themed critter is a potential buddy", npc.name());
+        assert!(!map.is_solid(npc.entity.tile_x, npc.entity.tile_y), "{} is standing inside a wall", npc.name());
+    }
+
+    // Walk to each robot in turn from the arrival tile.
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = map;
+    h.game.npcs = roster;
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+    h.warp_to(5, 6);
+    for kind in [NpcKind::Toaster, NpcKind::TinyBot, NpcKind::SpringBot, NpcKind::Roomba, NpcKind::SockBot, NpcKind::RustyBot] {
+        // Freeze the wanderers so the target doesn't step away mid-walk.
+        for n in h.game.npcs.iter_mut() { n.wanders = false; }
+        h.walk_to_npc(kind);
+        h.interact();
+        assert_eq!(h.game.state, GameState::InteractionMenu, "talking to {kind:?} opens the menu");
+        h.press(macroquad::prelude::KeyCode::Escape);
+        h.wait_until(|g| g.state == GameState::Playing);
+    }
+}

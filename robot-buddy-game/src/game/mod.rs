@@ -886,6 +886,17 @@ impl Game {
         }
     }
 
+    /// Open a scripted conversation — `(speaker, text)` pairs, shown in order.
+    /// For cutscenes and demo recordings; normal NPC talk goes through the
+    /// interaction menu.
+    pub fn say(&mut self, lines: &[(&str, &str)]) {
+        let lines = lines.iter()
+            .map(|(speaker, text)| DialogueLine { speaker: (*speaker).into(), text: (*text).into() })
+            .collect();
+        self.start_dialogue(lines);
+        self.set_state(GameState::Dialogue);
+    }
+
     fn start_dialogue(&mut self, lines: Vec<DialogueLine>) {
         if let Some(first) = lines.first() {
             self.events.push(GameEvent::DialogueStarted {

@@ -51,6 +51,14 @@ pub enum Tile {
     /// swim across it, which is what forces the stones to be *leapt* rather
     /// than strolled along. See `number_track` and `logic::leap`.
     Current = 36,
+    // Robot Land tiles — a toy factory where everything beeps.
+    MetalFloor = 37, // walkable riveted plates
+    Conveyor = 38,   // walkable belt, chevrons scrolling east (decor only)
+    GearWall = 39,   // solid wall of slowly turning brass gears
+    OilSlick = 40,   // walkable rainbow puddle (robots love a good slip)
+    ScrapHeap = 41,  // solid junk pile; there is always a sock in it
+    Circuit = 42,    // walkable glowing circuit-board path
+    BotPad = 43,     // marker: Gizmo's lab ⇄ Robot Land teleporter
     // Glitch-only tiles (doghouse)
     Glitch95 = 95,
     Glitch96 = 96,
@@ -161,6 +169,9 @@ pub fn all_portals() -> &'static [Portal] {
         Portal { from_map: "moon",          from_x: 6, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         Portal { from_map: "mars",          from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
         Portal { from_map: "asteroid_base", from_x: 3, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        // ROBOT LAND: the gear-shaped teleporter in the corner of Gizmo's lab.
+        Portal { from_map: "lab", from_x: 1, from_y: 2, to_map: "robot_land", to_x: 5, to_y: 6, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "robot_land", from_x: 5, from_y: 5, to_map: "lab", to_x: 1, to_y: 3, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Hub → the Goyish Map arcade deck (free, so the kid can replay it), and back.
         Portal { from_map: "space_hub", from_x: 4, from_y: 5, to_map: "goyish_map", to_x: 6, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         Portal { from_map: "goyish_map", from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
@@ -213,6 +224,9 @@ pub enum RenderMode {
     /// is washed teal, and both overlays run (scanlines + tears over drifting
     /// bubbles). The glitch is the joke; the water says where you are.
     SunkenGlitch,
+    /// Robot Land — a bright toy-factory palette with puffing steam, sparks,
+    /// and the occasional slice of toast flying past (Toasty's doing).
+    Robotic,
 }
 
 impl RenderMode {
@@ -244,7 +258,7 @@ impl Map {
         if col >= self.width || row >= self.height { return true; }
         if is_secret_walkable(self.id, col, row) { return false; }
         let tile = self.tiles[row][col];
-        matches!(tile, Tile::Water | Tile::Wall | Tile::Tree | Tile::HouseWall | Tile::Roof | Tile::Window | Tile::Fence | Tile::Sign | Tile::Chest | Tile::Table | Tile::Bookshelf | Tile::GlitchWall | Tile::Coral | Tile::Kelp | Tile::SpaceRock | Tile::Current)
+        matches!(tile, Tile::Water | Tile::Wall | Tile::Tree | Tile::HouseWall | Tile::Roof | Tile::Window | Tile::Fence | Tile::Sign | Tile::Chest | Tile::Table | Tile::Bookshelf | Tile::GlitchWall | Tile::Coral | Tile::Kelp | Tile::SpaceRock | Tile::Current | Tile::GearWall | Tile::ScrapHeap)
     }
 
     #[allow(non_snake_case)]
@@ -308,13 +322,13 @@ impl Map {
     pub fn lab() -> Self {
         use Tile::*;
         let (Wl, WF, Rg, Tb, Bs, Dr, Ch) = (Wall, WoodFloor, Rug, Table, Bookshelf, Door, Chest);
-        let Lp = Launchpad;
+        let (Lp, Bp) = (Launchpad, BotPad);
         Map {
             id: "lab", width: 12, height: 9, render_mode: RenderMode::Normal,
             tiles: vec![
                 vec![Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl,Wl],
                 vec![Wl,WF,WF,Bs,Bs,WF,WF,Bs,Bs,WF,WF,Wl],
-                vec![Wl,WF,WF,WF,WF,WF,WF,WF,WF,WF,Lp,Wl],
+                vec![Wl,Bp,WF,WF,WF,WF,WF,WF,WF,WF,Lp,Wl],
                 vec![Wl,WF,Tb,WF,WF,WF,WF,WF,WF,Tb,WF,Wl],
                 vec![Wl,WF,WF,WF,Rg,Rg,Rg,Rg,WF,WF,WF,Wl],
                 vec![Wl,WF,WF,WF,Rg,Ch,Ch,Rg,WF,WF,WF,Wl],
@@ -763,6 +777,56 @@ impl Map {
         }
     }
 
+    /// Robot Land — a toy factory full of robots who are each broken in
+    /// exactly one funny way. Reached by the BotPad in Gizmo's lab. A conveyor
+    /// runs the width of the floor, circuit paths link the plazas, and oil
+    /// slicks shine in the corners.
+    pub fn robot_land() -> Self {
+        // # gear wall · . floor · S scrap · i circuit · > conveyor · o oil
+        // B bot pad · $ chest
+        const ROWS: [&str; 19] = [
+            "########################",
+            "#....S.............S...#",
+            "#.B......iiiiii........#",
+            "#........i....i....$...#",
+            "#..S.....i....i........#",
+            "#........iiiiii...S....#",
+            "#.>>>>>>>>>>>>>>>>>>>..#",
+            "#...........i..........#",
+            "#..oo.......i.....oo...#",
+            "#..oo...S...i.....oo...#",
+            "#####.......i......#####",
+            "#...........i..........#",
+            "#..S...iiiiiiiiiii..S..#",
+            "#......i.........i.....#",
+            "#..........o...........#",
+            "#......................#",
+            "#..S..o....S.....o..S..#",
+            "#......................#",
+            "########################",
+        ];
+        // Wrapped in a thick band of turning gears so the camera, which stops
+        // at the map edge, can still centre on robots near the walls.
+        const PAD: usize = 3;
+        let wide = ROWS[0].len() + PAD * 2;
+        let wall_row = "#".repeat(wide);
+        let rows: Vec<String> = std::iter::repeat(wall_row.clone()).take(PAD)
+            .chain(ROWS.iter().map(|r| format!("{0}{r}{0}", "#".repeat(PAD))))
+            .chain(std::iter::repeat(wall_row).take(PAD))
+            .collect();
+        let tiles: Vec<Vec<Tile>> = rows.iter().map(|row| row.chars().map(|c| match c {
+            '#' => Tile::GearWall,
+            'S' => Tile::ScrapHeap,
+            'i' => Tile::Circuit,
+            '>' => Tile::Conveyor,
+            'o' => Tile::OilSlick,
+            'B' => Tile::BotPad,
+            '$' => Tile::Chest,
+            _ => Tile::MetalFloor,
+        }).collect()).collect();
+        Map { id: "robot_land", width: tiles[0].len(), height: tiles.len(), render_mode: RenderMode::Robotic, tiles }
+    }
+
     pub fn by_id(id: &str) -> Self {
         match id {
             "overworld" => Self::overworld(),
@@ -784,6 +848,7 @@ impl Map {
             "mars" => Self::mars(),
             "asteroid_base" => Self::asteroid_base(),
             "goyish_map" => Self::goyish_map(),
+            "robot_land" => Self::robot_land(),
             _ => Self::overworld(),
         }
     }
@@ -843,6 +908,9 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
             Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98
                             => dream_dark,
             Tile::GlitchWall => dream_dark,
+            Tile::MetalFloor | Tile::Conveyor | Tile::Circuit | Tile::OilSlick => dream_grass,
+            Tile::GearWall | Tile::ScrapHeap => dream_dark,
+            Tile::BotPad => dream_cream,
         };
     }
 
@@ -852,6 +920,10 @@ pub fn tile_color(tile: Tile, mode: RenderMode, time: f32) -> Color {
 
     if mode == RenderMode::Cosmic {
         return tile_color_cosmic(tile);
+    }
+
+    if mode == RenderMode::Robotic {
+        return tile_color_robotic(tile);
     }
 
     tile_color_normal(tile)
@@ -915,6 +987,22 @@ fn tile_color_cosmic(tile: Tile) -> Color {
         Tile::StationFloor => Color::from_rgba(70, 78, 96, 255),    // metal deck
         // Land tiles a future cosmic map might reuse fade into the void.
         _                  => void,
+    }
+}
+
+/// Robot Land palette: a bright toy factory, not a grim one. Land tiles a
+/// future robot map reuses keep their normal look.
+fn tile_color_robotic(tile: Tile) -> Color {
+    match tile {
+        Tile::MetalFloor => Color::from_rgba(150, 166, 182, 255), // polished steel
+        Tile::Conveyor   => Color::from_rgba(58, 60, 72, 255),    // rubber belt
+        Tile::GearWall   => Color::from_rgba(92, 70, 52, 255),    // shadowed gearbox
+        Tile::OilSlick   => Color::from_rgba(150, 166, 182, 255), // floor under the puddle
+        Tile::ScrapHeap  => Color::from_rgba(150, 166, 182, 255), // floor under the junk
+        Tile::Circuit    => Color::from_rgba(34, 104, 74, 255),   // circuit-board green
+        Tile::BotPad     => Color::from_rgba(70, 52, 110, 255),   // teleporter purple
+        Tile::Chest      => Color::from_rgba(150, 166, 182, 255),
+        _                => tile_color_normal(tile),
     }
 }
 
@@ -992,6 +1080,13 @@ fn tile_color_normal(tile: Tile) -> Color {
         Tile::Glitch95 | Tile::Glitch96 | Tile::Glitch97 | Tile::Glitch98
                         => Color::from_rgba(50, 50, 50, 255),      // glitch tiles
         Tile::GlitchWall => Color::from_rgba(50, 50, 50, 255),     // glitch wall
+        Tile::MetalFloor | Tile::OilSlick | Tile::ScrapHeap
+                        => Color::from_rgba(150, 166, 182, 255),
+        Tile::Conveyor  => Color::from_rgba(58, 60, 72, 255),
+        Tile::GearWall  => Color::from_rgba(92, 70, 52, 255),
+        Tile::Circuit   => Color::from_rgba(34, 104, 74, 255),
+        // In the lab the pad sits on wood, so its base is the floor's.
+        Tile::BotPad    => Color::from_rgba(161, 136, 127, 255),
     }
 }
 
@@ -1038,6 +1133,11 @@ pub fn draw_map(map: &Map, cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, tim
     // Twinkling starfield drifting over space
     if map.render_mode == RenderMode::Cosmic {
         draw_cosmic_overlay(cam_x, cam_y, view_w, view_h, time);
+    }
+
+    // Steam, sparks, and airborne toast
+    if map.render_mode == RenderMode::Robotic {
+        draw_robotic_overlay(cam_x, cam_y, view_w, view_h, time);
     }
 }
 
@@ -1188,6 +1288,13 @@ fn draw_tile_detail(tile: Tile, x: f32, y: f32, time: f32, mode: RenderMode) {
         Tile::MoonGround => draw_moon_ground_detail(x, y),
         Tile::MarsGround => draw_mars_ground_detail(x, y),
         Tile::StationFloor => draw_station_floor_detail(x, y),
+        Tile::MetalFloor => draw_metal_floor_detail(x, y),
+        Tile::Conveyor  => draw_conveyor_detail(x, y, time),
+        Tile::GearWall  => draw_gear_wall_detail(x, y, time),
+        Tile::OilSlick  => { draw_metal_floor_detail(x, y); draw_oil_slick_detail(x, y, time) }
+        Tile::ScrapHeap => { draw_metal_floor_detail(x, y); draw_scrap_heap_detail(x, y, time) }
+        Tile::Circuit   => draw_circuit_detail(x, y, time),
+        Tile::BotPad    => draw_bot_pad_detail(x, y, time),
         _               => {}
     }
 }
@@ -1714,4 +1821,166 @@ fn draw_current_detail(x: f32, y: f32, time: f32) {
         let w = 16.0 + i as f32 * 3.0;
         draw_line(x + drift, lane, x + drift + w, lane, 2.5, streak);
     }
+}
+
+// ─── ROBOT LAND ─────────────────────────────────────────
+
+fn draw_metal_floor_detail(x: f32, y: f32) {
+    // Riveted plate with a little highlight edge, so the floor reads as metal.
+    let seam = Color::from_rgba(118, 132, 148, 255);
+    draw_rectangle_lines(x + 1.0, y + 1.0, TILE_SIZE - 2.0, TILE_SIZE - 2.0, 1.0, seam);
+    draw_line(x + 3.0, y + 3.0, x + TILE_SIZE - 6.0, y + 3.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.25));
+    let rivet = Color::from_rgba(196, 206, 218, 255);
+    for (rx, ry) in [(6.0, 6.0), (TILE_SIZE - 6.0, 6.0), (6.0, TILE_SIZE - 6.0), (TILE_SIZE - 6.0, TILE_SIZE - 6.0)] {
+        draw_circle(x + rx, y + ry, 1.6, rivet);
+    }
+}
+
+/// Belt with yellow chevrons scrolling east. Purely decorative — nobody gets
+/// carried off, they just look like they might.
+fn draw_conveyor_detail(x: f32, y: f32, time: f32) {
+    let rail = Color::from_rgba(120, 124, 136, 255);
+    draw_rectangle(x, y + 4.0, TILE_SIZE, 4.0, rail);
+    draw_rectangle(x, y + TILE_SIZE - 8.0, TILE_SIZE, 4.0, rail);
+    let chev = Color::from_rgba(255, 202, 40, 255);
+    let shift = (time * 30.0) % 16.0;
+    for i in -1..3 {
+        let cx = x + i as f32 * 16.0 + shift + 4.0;
+        if cx < x - 2.0 || cx > x + TILE_SIZE - 8.0 { continue; }
+        draw_line(cx, y + 16.0, cx + 6.0, y + 24.0, 2.5, chev);
+        draw_line(cx + 6.0, y + 24.0, cx, y + 32.0, 2.5, chev);
+    }
+}
+
+/// Brass gear wall. Neighbouring gears turn opposite ways, like real ones.
+fn draw_gear_wall_detail(x: f32, y: f32, time: f32) {
+    let cx = x + TILE_SIZE / 2.0;
+    let cy = y + TILE_SIZE / 2.0;
+    let parity = if (((x / TILE_SIZE) as i32 + (y / TILE_SIZE) as i32) & 1) == 0 { 1.0 } else { -1.0 };
+    let spin = time * 0.8 * parity;
+    let brass = Color::from_rgba(214, 160, 64, 255);
+    let dark = Color::from_rgba(150, 104, 36, 255);
+    for k in 0..8 {
+        let a = spin + k as f32 * std::f32::consts::TAU / 8.0;
+        let (s, c) = a.sin_cos();
+        draw_line(cx + c * 12.0, cy + s * 12.0, cx + c * 21.0, cy + s * 21.0, 6.0, brass);
+    }
+    draw_circle(cx, cy, 15.0, brass);
+    draw_circle_lines(cx, cy, 15.0, 2.0, dark);
+    draw_circle(cx, cy, 5.0, dark);
+}
+
+/// A puddle of oil with a rainbow sheen that shimmers.
+fn draw_oil_slick_detail(x: f32, y: f32, time: f32) {
+    let cx = x + TILE_SIZE / 2.0;
+    let cy = y + TILE_SIZE / 2.0 + 2.0;
+    draw_ellipse(cx, cy, 19.0, 12.0, 0.0, Color::from_rgba(30, 28, 40, 255));
+    let hues = [(255, 80, 120), (255, 200, 60), (80, 220, 140), (80, 160, 255), (190, 90, 255)];
+    for (i, &(r, g, b)) in hues.iter().enumerate() {
+        let w = ((time * 1.5 + i as f32 * 1.3 + x * 0.05).sin() * 0.5 + 0.5) * 0.45;
+        draw_ellipse_lines(cx - 2.0 + i as f32, cy - 1.0, 14.0 - i as f32 * 2.0, 8.0 - i as f32 * 1.2, 0.0, 1.5,
+            Color::from_rgba(r, g, b, (w * 255.0) as u8));
+    }
+}
+
+/// A heap of junk: a tyre, a spring, a bent pipe — and a sock. Always a sock.
+fn draw_scrap_heap_detail(x: f32, y: f32, time: f32) {
+    let base = y + TILE_SIZE - 6.0;
+    draw_triangle(vec2(x + 4.0, base), vec2(x + 24.0, y + 12.0), vec2(x + 44.0, base), Color::from_rgba(110, 100, 96, 255));
+    draw_circle(x + 15.0, base - 8.0, 7.0, Color::from_rgba(40, 40, 46, 255));   // tyre
+    draw_circle(x + 15.0, base - 8.0, 3.0, Color::from_rgba(110, 100, 96, 255));
+    draw_line(x + 26.0, y + 18.0, x + 38.0, base - 10.0, 3.0, Color::from_rgba(170, 176, 186, 255)); // pipe
+    for i in 0..4 { // spring
+        let sy = y + 20.0 + i as f32 * 4.0;
+        draw_line(x + 18.0, sy, x + 24.0, sy + 2.0, 1.5, Color::from_rgba(220, 220, 230, 255));
+    }
+    // The sock, waving gently from the top of the pile.
+    let wave = (time * 2.0 + x).sin() * 2.0;
+    let sock = Color::from_rgba(240, 90, 160, 255);
+    draw_rectangle(x + 24.0 + wave, y + 6.0, 6.0, 10.0, sock);
+    draw_rectangle(x + 24.0 + wave, y + 14.0, 10.0, 5.0, sock);
+    draw_rectangle(x + 24.0 + wave, y + 6.0, 6.0, 2.0, WHITE);
+}
+
+/// Circuit-board path with gold traces and a pulse of light running along.
+fn draw_circuit_detail(x: f32, y: f32, time: f32) {
+    let trace = Color::from_rgba(214, 180, 70, 255);
+    draw_line(x, y + 16.0, x + TILE_SIZE, y + 16.0, 1.5, trace);
+    draw_line(x, y + 32.0, x + TILE_SIZE, y + 32.0, 1.5, trace);
+    draw_line(x + 24.0, y, x + 24.0, y + TILE_SIZE, 1.5, trace);
+    for (px, py) in [(24.0, 16.0), (24.0, 32.0)] {
+        draw_circle(x + px, y + py, 2.5, trace);
+    }
+    let t = ((time * 0.7 + x * 0.013 + y * 0.007) % 1.0).abs();
+    draw_circle(x + t * TILE_SIZE, y + 16.0, 2.5, Color::new(0.6, 1.0, 0.8, 0.9));
+}
+
+/// Gear-shaped teleporter pad with a spinning ring and a pulsing glow.
+fn draw_bot_pad_detail(x: f32, y: f32, time: f32) {
+    let cx = x + TILE_SIZE / 2.0;
+    let cy = y + TILE_SIZE / 2.0;
+    let pulse = (time * 3.0).sin() * 0.5 + 0.5;
+    draw_circle(cx, cy, 20.0, Color::new(0.6, 0.35, 1.0, 0.25 + pulse * 0.3));
+    for k in 0..6 {
+        let a = time * 2.0 + k as f32 * std::f32::consts::TAU / 6.0;
+        let (s, c) = a.sin_cos();
+        draw_circle(cx + c * 16.0, cy + s * 16.0, 3.0, Color::from_rgba(200, 160, 255, 255));
+    }
+    draw_circle(cx, cy, 10.0, Color::from_rgba(120, 80, 200, 255));
+    draw_circle(cx, cy, 5.0, Color::new(1.0, 1.0, 1.0, 0.5 + pulse * 0.5));
+}
+
+/// Robot Land's air: steam puffs rising, sparks, and every few seconds a
+/// slice of toast with a very surprised face sails across the sky.
+fn draw_robotic_overlay(cam_x: f32, cam_y: f32, view_w: f32, view_h: f32, time: f32) {
+    for i in 0..10 {
+        let seed = i as f32 * 71.3 + 3.0;
+        let px = cam_x + ((seed * 4.7).sin() * 0.5 + 0.5) * view_w;
+        let rise = ((time * 0.15 + seed * 0.11) % 1.0).abs();
+        let py = cam_y + view_h - rise * view_h;
+        let r = 8.0 + rise * 18.0;
+        draw_circle(px + (time + seed).sin() * 6.0, py, r, Color::new(1.0, 1.0, 1.0, 0.10 * (1.0 - rise)));
+    }
+    for i in 0..6 {
+        let seed = i as f32 * 53.9 + 9.0;
+        let blink = ((time * 5.0 + seed).sin() * 0.5 + 0.5).powf(8.0);
+        if blink < 0.2 { continue; }
+        let sx = cam_x + ((seed * 2.3).sin() * 0.5 + 0.5) * view_w;
+        let sy = cam_y + ((seed * 3.1).cos() * 0.5 + 0.5) * view_h;
+        let spark = Color::new(1.0, 0.9, 0.4, blink);
+        draw_line(sx - 4.0, sy, sx + 4.0, sy, 1.5, spark);
+        draw_line(sx, sy - 4.0, sx, sy + 4.0, 1.5, spark);
+    }
+    // Flying toast: a 6-second cycle, airborne for the first 2.5 seconds.
+    let cycle = 6.0;
+    let t = time % cycle;
+    if t < 2.5 {
+        let k = t / 2.5;
+        let lap = (time / cycle).floor();
+        let lane = ((lap * 1.7).sin() * 0.5 + 0.5) * 0.35;
+        let tx = cam_x - 40.0 + k * (view_w + 80.0);
+        let ty = cam_y + view_h * (0.15 + lane) - (k * std::f32::consts::PI).sin() * view_h * 0.12;
+        draw_flying_toast(tx, ty, time * 6.0);
+    }
+}
+
+fn draw_flying_toast(x: f32, y: f32, spin: f32) {
+    let wob = spin.sin() * 3.0;
+    let crust = Color::from_rgba(170, 100, 40, 255);
+    let bread = Color::from_rgba(240, 200, 120, 255);
+    draw_rectangle(x - 13.0, y - 10.0 + wob, 26.0, 22.0, crust);
+    draw_circle(x - 7.0, y - 10.0 + wob, 7.0, crust);
+    draw_circle(x + 7.0, y - 10.0 + wob, 7.0, crust);
+    draw_rectangle(x - 10.0, y - 8.0 + wob, 20.0, 17.0, bread);
+    draw_circle(x - 6.0, y - 9.0 + wob, 5.0, bread);
+    draw_circle(x + 6.0, y - 9.0 + wob, 5.0, bread);
+    // Very surprised face.
+    let ink = Color::from_rgba(60, 30, 10, 255);
+    draw_circle(x - 4.0, y - 3.0 + wob, 1.8, ink);
+    draw_circle(x + 4.0, y - 3.0 + wob, 1.8, ink);
+    draw_circle(x, y + 4.0 + wob, 2.5, ink);
+    // Motion lines.
+    let ml = Color::new(1.0, 1.0, 1.0, 0.6);
+    draw_line(x - 26.0, y - 4.0, x - 16.0, y - 4.0, 1.5, ml);
+    draw_line(x - 30.0, y + 3.0, x - 17.0, y + 3.0, 1.5, ml);
 }
