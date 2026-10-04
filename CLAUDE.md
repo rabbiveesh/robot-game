@@ -86,7 +86,8 @@ robot-buddy-game/                # Bevy game (depends on domain)
     web.rs                       # browser APIs via web-sys: localStorage, speech, download, clock
     save.rs                      # SaveBackend trait + LocalStorageBackend (prod) + InMemoryBackend (tests)
     tilemap.rs, npc.rs, session.rs, settings.rs
-    sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit),
+    sprites/                     # player, robot, npcs, robots (Robot Land's broken residents),
+                                 #   swag (cosmetics, per-body fit),
                                  #   attract (the "game here!" beacon over minigame hosts),
                                  #   dressed (THE way a character is drawn: body + swag, posed)
     ui/                          # challenge, concrete (hands-on "Show me" workspace), descent, dialogue, hud, interaction_menu, pearl_hop, shop, swag, swatches, title_screen, settings_overlay, visuals

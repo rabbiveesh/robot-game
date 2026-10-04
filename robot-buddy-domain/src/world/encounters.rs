@@ -101,6 +101,12 @@ fn flavor_pool(area: &str) -> &'static [(&'static str, &'static str)] {
             ("dum_dum", "A Dum Dum, floating in zero-g! I grabbed it before it drifted off!"),
             ("flavor", "Space is SO quiet out here. ...except for us!"),
         ],
+        "robot_land" => &[
+            ("flavor", "A slice of toast just flew past my head! It looked SO surprised!"),
+            ("flavor", "Everybody here beeps! Beep! ...did I do it right?"),
+            ("dum_dum", "A Dum Dum rolled off the conveyor belt! Caught it!"),
+            ("flavor", "That robot's head just went BOING! It came back down. Phew!"),
+        ],
         "lab" => &[
             ("flavor", "Ooh, a blinky light! I love blinky lights!"),
             ("dum_dum", "A Dum Dum rolled under the workbench. Score!"),
@@ -180,6 +186,12 @@ fn scene_pool(area: &str) -> &'static [Scene] {
             Scene { op: Operation::Sub,      prompt: "{a} comets zoom by, {b} fly off. How many comets?" },
             Scene { op: Operation::Multiply, prompt: "{a} planets, {b} moons each. How many moons?" },
             Scene { op: Operation::Divide,   prompt: "{a} rocks, {b} aliens, shared fair. How many each?" },
+        ],
+        "robot_land" => &[
+            Scene { op: Operation::Add,      prompt: "{a} toasts pop up, then {b} more! How many toasts?" },
+            Scene { op: Operation::Sub,      prompt: "{a} bolts on the belt, {b} roll off. How many left?" },
+            Scene { op: Operation::Multiply, prompt: "{a} robots, {b} socks each. How many socks?" },
+            Scene { op: Operation::Divide,   prompt: "{a} socks, {b} robots, shared fair. How many each?" },
         ],
         "lab" => &[
             Scene { op: Operation::Add,      prompt: "{a} lights blink, then {b} more! How many lights?" },

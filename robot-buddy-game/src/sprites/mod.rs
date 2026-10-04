@@ -1,6 +1,7 @@
 pub mod player;
 pub mod robot;
 pub mod npcs;
+pub mod robots;
 pub mod swag;
 pub mod attract;
 pub mod dressed;

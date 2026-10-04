@@ -48,6 +48,7 @@ pub fn get_area_name(map_id: &str, tx: usize, ty: usize) -> &'static str {
         "moon" => "The Moon",
         "mars" => "Red Planet",
         "asteroid_base" => "Asteroid Base",
+        "robot_land" => "Robot Land",
         _ => "???",
     }
 }
