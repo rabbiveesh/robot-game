@@ -581,15 +581,10 @@ impl Npc {
         }
     }
 
-    pub fn draw(&self, time: f32) {
-        self.draw_at(self.entity.x, self.entity.y, self.entity.dir, time);
-    }
-
-    /// Draw this NPC's sprite at an arbitrary position and facing. Used for
-    /// mounts, which render pinned under their rider rather than at their own
-    /// entity coordinates.
-    pub fn draw_at(&self, x: f32, y: f32, dir: Dir, time: f32) {
-        self.sprite.draw_sprite(x, y, dir, time, self.gate);
+    /// This NPC's body for `sprites::dressed` — the gate shark naps until
+    /// his puzzle is solved.
+    pub fn body(&self) -> crate::sprites::dressed::Body {
+        crate::sprites::dressed::Body::Npc { sprite: self.sprite, asleep: self.gate }
     }
 }
 

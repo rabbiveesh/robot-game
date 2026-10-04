@@ -1,27 +1,34 @@
 //! Pearl Hop — Shelly's slingshot minigame. Layout, scene geometry, input
-//! mapping and the cartoon; the rules live in
+//! mapping, the scene model and the cartoon; the rules live in
 //! `robot_buddy_domain::logic::pearl_hop`.
 //!
 //! ```text
 //!  ┌──────────────────────────────────────────────┐
 //!  │ (o) 12                               [Leave] │  top row (layout)
-//!  │                                              │
-//!  │   Shelly        stepping stones        pearl │  Scene region: custom art,
-//!  │   [rock] ~~ o ~~ o ~~ o ~~ o ~~ [rock]  ~~~~ │  painted through a Canvas
+//!  │   (• • •)                                    │
+//!  │   Shelly        stepping stones              │  Scene region: custom art,
+//!  │   [rock] ~ o ~ o ~ o ~ o ~ o ~ o ~ o ~ o ~~~ │  painted through a Canvas
 //!  │ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ │  bound to the region
-//!  │           "My pearl is on stone 5!"          │  caption (for grown-ups)
-//!  │                  [ Again! ]                  │  only once she has it
+//!  │               "Find my pearl!"               │  caption (for grown-ups)
+//!  │                  [ Again! ]                  │  once the win has played
 //!  └──────────────────────────────────────────────┘
 //! ```
 //!
-//! The kid can't read, so nothing important is only words: the pearl, the
-//! stones' numbers, Shelly's count-aloud and her antics carry the game.
-//! [`SceneGeom`] is pure (no macroquad) so `Game::step` and the headless
-//! tests map a drag to an aim with the exact numbers the drawing uses.
+//! The kid can't read, so nothing important is only words: dots, stones,
+//! Shelly's count-aloud and her antics carry the game. [`scene_model`] says
+//! what the scene shows (and, at the counting stage, what it must NOT show:
+//! where the pearl is) without drawing; [`SceneGeom`] maps a drag or a tap to
+//! an aim with the exact numbers the drawing uses. Both are pure, so
+//! `Game::step` and the headless tests use them too.
 
 use crate::prelude::*;
+use std::collections::BTreeSet;
 
 use crate::input::FrameInput;
+use crate::sprites::dressed::{self, Body, Outfit, Posture};
+use crate::sprites::npcs::ClamFace;
+use crate::sprites::swag::SwagFit;
+use crate::sprites::Dir;
 use crate::ui::layout::{self, col, paint, region, row, spacer, text, Align, Fit, Frame, Justify, Kind, Node, UiRect};
 use robot_buddy_domain::logic::pearl_hop::{HopPhase, HopRound, HopSession, HopStage, SPLASH_SECS};
 
@@ -39,13 +46,21 @@ pub enum HopId {
     AgainLabel,
 }
 
+/// What Shelly is wearing (from the wardrobe, same as in the world).
+pub struct ShellyOutfit<'a> {
+    pub worn: &'a BTreeSet<String>,
+    pub color: &'a str,
+}
+
 /// What the panel shows this frame.
 pub struct HopView<'a> {
     pub session: &'a HopSession,
-    /// The kid's pearl purse, shown top-left so a win visibly lands somewhere.
+    /// The kid's pearl purse as shown — the won pearl only lands in it when
+    /// it arrives from the stone.
     pub pearls: u32,
-    /// Shelly's line, for a grown-up reading along (the kid hears it).
+    /// A few words for a grown-up reading along. The kid hears Shelly.
     pub caption: &'a str,
+    pub outfit: ShellyOutfit<'a>,
 }
 
 pub struct PearlHopLayout {
@@ -73,7 +88,7 @@ fn icon_button(id: HopId, icon: HopId, label_id: HopId, label: &str, size: u16) 
 }
 
 pub fn layout(view: &HopView, screen: (f32, f32)) -> PearlHopLayout {
-    let won = view.session.phase == HopPhase::Won;
+    let again = view.session.win_done();
     let top = row()
         .h(46.0)
         .fixed()
@@ -82,13 +97,14 @@ pub fn layout(view: &HopView, screen: (f32, f32)) -> PearlHopLayout {
         .child(text(view.pearls.to_string(), 24, Fit::shrink(14)).id(HopId::Count))
         .child(spacer())
         .child(icon_button(HopId::Leave, HopId::LeaveIcon, HopId::LeaveLabel, "Leave", 22).size(124.0, 44.0).fixed());
-    // Reserved even before the win, so the scene never jumps when the Again
-    // button turns up.
+    // Reserved even before the win, so the scene never jumps when Again!
+    // turns up; padded so it never sits against the caption.
     let bottom = row()
-        .h(58.0)
+        .h(68.0)
         .fixed()
+        .pad_edges(0.0, 10.0, 0.0, 4.0)
         .justify(Justify::Center)
-        .maybe(won.then(|| {
+        .maybe(again.then(|| {
             icon_button(HopId::Again, HopId::AgainIcon, HopId::AgainLabel, "Again!", 26).size(180.0, 54.0).fixed()
         }));
     let root = col()
@@ -102,9 +118,9 @@ pub fn layout(view: &HopView, screen: (f32, f32)) -> PearlHopLayout {
                 .center_text()
                 .pad_xy(14.0, 4.0)
                 .w_pct(1.0)
-                .max_w(680.0)
+                .max_w(520.0)
                 .align_self(Align::Center)
-                .h(56.0)
+                .h(50.0)
                 .fixed(),
         )
         .child(bottom);
@@ -128,7 +144,7 @@ pub struct SceneGeom {
     pub surface_y: f32,
     /// Centre x of the start rock (position 0).
     pub x0: f32,
-    /// Screen pixels per sub-unit of the round.
+    /// Screen pixels per stone.
     pub unit: f32,
     /// Shelly's radius.
     pub r: f32,
@@ -140,7 +156,6 @@ pub struct SceneGeom {
     drag_dir: (f32, f32),
     min_aim: u16,
     max_aim: u16,
-    scale: u16,
 }
 
 impl SceneGeom {
@@ -149,23 +164,19 @@ impl SceneGeom {
         let surface_y = rect.y + rect.h * 0.62;
         let x0 = rect.x + r + 16.0;
         let x_end = rect.right() - r - 10.0;
-        let unit = ((x_end - x0) / round.span_pos().max(1) as f32).max(0.01);
-        let step = unit * round.scale as f32;
-        let stone_r = (step * 0.40).min(r * 0.95).max(3.0);
+        let unit = ((x_end - x0) / round.span.max(1) as f32).max(0.01);
+        let stone_r = (unit * 0.40).min(r * 0.95).max(2.5);
         let home_y = surface_y - r * 1.65; // == home().1
         // A pull has to fit on screen: Shelly sits at the left edge, so the
         // drag goes down and back, and the room below her caps it.
         let max_pull = ((bounds.bottom() - home_y) * 0.8).min(rect.w * 0.34).clamp(60.0, 200.0);
         let dx = ((x0 - bounds.x - 8.0) / max_pull).clamp(0.0, 0.28);
         let drag_dir = (-dx, (1.0 - dx * dx).sqrt());
-        SceneGeom {
-            rect, surface_y, x0, unit, r, stone_r, max_pull, drag_dir,
-            min_aim: round.min_aim, max_aim: round.max_aim, scale: round.scale,
-        }
+        SceneGeom { rect, surface_y, x0, unit, r, stone_r, max_pull, drag_dir, min_aim: round.min_aim, max_aim: round.max_aim }
     }
 
-    /// Screen x of a position (sub-units). Past the right edge it pins to the
-    /// edge, so a huge overshoot still splashes on screen.
+    /// Screen x of a position. Past the right edge it pins to the edge, so a
+    /// huge overshoot still splashes on screen.
     pub fn x_of(&self, pos: u16) -> f32 {
         (self.x0 + pos as f32 * self.unit).min(self.rect.right() - self.r - 2.0)
     }
@@ -197,11 +208,15 @@ impl SceneGeom {
         }
     }
 
-    /// Does a press at (x, y) grab Shelly? Generous: small fingers.
+    /// How far from Shelly a press still grabs her: finger-sized.
+    fn reach(&self) -> f32 {
+        (self.r * 2.2).max(44.0)
+    }
+
+    /// Does a press at (x, y) grab Shelly?
     pub fn grabs(&self, x: f32, y: f32) -> bool {
         let (hx, hy) = self.home();
-        let reach = (self.r * 2.2).max(44.0);
-        (x - hx).powi(2) + (y - hy).powi(2) <= reach * reach
+        (x - hx).powi(2) + (y - hy).powi(2) <= self.reach().powi(2)
     }
 
     /// Pull pixels per aim step: the pull range split evenly among the aims.
@@ -220,9 +235,20 @@ impl SceneGeom {
         Some((self.min_aim as u32 + i).min(self.max_aim as u32) as u16)
     }
 
-    /// The aim for the pointer at `p` while Shelly is being pulled.
+    /// The aim for the pointer at `p` while Shelly is held. Two gestures:
+    ///
+    /// * **Slingshot** — pointer behind her (back and down): the pull's
+    ///   length sets the aim.
+    /// * **Point at it** — pointer out over the path: the first hop lands on
+    ///   the stone under it. This is also how a native Linux touchscreen
+    ///   plays, where a held finger reports no motion: press Shelly, then tap
+    ///   where she should land.
     pub fn aim_for_pointer(&self, p: (f32, f32)) -> Option<u16> {
         let (hx, hy) = self.home();
+        if p.0 > hx + self.reach() {
+            let stone = ((p.0 - self.x0) / self.unit).round().max(0.0) as u32;
+            return Some(stone.clamp(self.min_aim as u32, self.max_aim as u32) as u16);
+        }
         self.aim_for_pull(((p.0 - hx).powi(2) + (p.1 - hy).powi(2)).sqrt())
     }
 
@@ -241,18 +267,149 @@ impl SceneGeom {
         (hx + self.drag_dir.0 * pull, hy + self.drag_dir.1 * pull)
     }
 
-    /// Pixels per number on the path.
-    pub fn step_px(&self) -> f32 {
-        self.unit * self.scale as f32
+    /// Where to tap to point the first hop at stone `aim`. (Only meaningful
+    /// for stones out past Shelly's reach.)
+    pub fn tap_point_for(&self, aim: u16) -> (f32, f32) {
+        (self.x0 + aim as f32 * self.unit, self.stone_top())
     }
 }
+
+// ─── Scene model (pure) ─────────────────────────────────
+
+/// How a stone is lit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lit {
+    Dark,
+    /// Counted out after a landing, within the target (a dot ticked off).
+    Counted,
+    /// Counted out past the last dot: she went further than the target.
+    PastTarget,
+    /// Touched down on mid-toss (the skip-counting stages).
+    Touched,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoneView {
+    pub pos: u16,
+    /// The number painted under it, if this stage numbers its stones.
+    pub label: Option<u16>,
+    pub lit: Lit,
+}
+
+/// What Shelly's bubble over the start rock shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetView {
+    None,
+    /// The counting stage: N dots (no numeral), `ticked` of them counted off.
+    Dots { n: u16, ticked: u16 },
+    /// "In K hops": K bubbles, `used` of them popped.
+    Hops { k: u8, used: u8 },
+}
+
+/// Everything in the scene that carries information, decided without
+/// drawing anything — so a test can check that the counting stage never
+/// shows where the pearl is before Shelly lands on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SceneModel {
+    pub stones: Vec<StoneView>,
+    /// A distinct pearl rock at this position (stages that name the target).
+    pub pearl_rock: Option<u16>,
+    /// A pearl drawn at this position.
+    pub pearl_shown: Option<u16>,
+    /// Whether positions have numbers at all (the "0" on the start rock).
+    pub numbered: bool,
+    /// Whether the aim ghost carries the hop size as a number.
+    pub ghost_label: bool,
+    pub target: TargetView,
+    /// Numbers popped over touch-downs (skip counting out loud).
+    pub hop_counts: Vec<(u16, u16)>,
+    /// What Shelly has on.
+    pub shelly_wears: Vec<String>,
+}
+
+pub fn scene_model(view: &HopView) -> SceneModel {
+    let s = view.session;
+    let r = &s.round;
+    let toss = s.toss.as_ref();
+    let shelly_wears: Vec<String> = view.outfit.worn.iter().cloned().collect();
+    let pearl_leaving = s.win_clock().is_some_and(|c| c >= WIN_PEARL_LEAVES);
+    match r.stage {
+        HopStage::Count => {
+            // A row of identical, unnumbered stones; the pearl is under one
+            // of them and nothing says which. After a landing the stones she
+            // covered are counted out one by one against the dots.
+            let tallied = s.tallied();
+            let stones = (1..=r.span)
+                .map(|n| {
+                    let lit = match n <= tallied {
+                        true if n <= r.pearl => Lit::Counted,
+                        true => Lit::PastTarget,
+                        false => Lit::Dark,
+                    };
+                    StoneView { pos: n, label: None, lit }
+                })
+                .collect();
+            let revealed = s.win_clock().is_some() && !pearl_leaving;
+            SceneModel {
+                stones,
+                pearl_rock: None,
+                pearl_shown: revealed.then_some(r.pearl),
+                numbered: false,
+                ghost_label: false,
+                target: TargetView::Dots { n: r.pearl, ticked: tallied.min(r.pearl) },
+                hop_counts: Vec::new(),
+                shelly_wears,
+            }
+        }
+        HopStage::SkipCount | HopStage::Hops => {
+            let touched = match (s.phase, toss) {
+                (HopPhase::Flying, Some(t)) => s.flight().map_or(0, |(hop, _)| hop).min(t.landings.len()),
+                (HopPhase::Landed | HopPhase::Won, Some(t)) => t.landings.len(),
+                _ => 0,
+            };
+            let hits: Vec<u16> = toss.map_or(Vec::new(), |t| t.landings[..touched].to_vec());
+            let stones = (1..r.pearl)
+                .map(|n| StoneView { pos: n, label: Some(n), lit: if hits.contains(&n) { Lit::Touched } else { Lit::Dark } })
+                .collect();
+            let target = match r.stage {
+                HopStage::Hops => {
+                    let used = match s.phase {
+                        HopPhase::Flying => s.flight().map_or(0, |(hop, _)| hop + 1),
+                        HopPhase::Landed | HopPhase::Won => r.hops as usize,
+                        HopPhase::Aiming => 0,
+                    };
+                    TargetView::Hops { k: r.hops, used: used as u8 }
+                }
+                _ => TargetView::None,
+            };
+            SceneModel {
+                stones,
+                pearl_rock: Some(r.pearl),
+                pearl_shown: (!pearl_leaving).then_some(r.pearl),
+                numbered: true,
+                ghost_label: true,
+                target,
+                // (position, number) — they're the same on the stones.
+                hop_counts: hits.iter().map(|&p| (p, p)).collect(),
+                shelly_wears,
+            }
+        }
+    }
+}
+
+// ─── The win's timeline (seconds into `HopSession::win_clock`) ──────
+
+/// The pearl leaves its stone and starts flying to the purse.
+pub const WIN_PEARL_LEAVES: f32 = 0.45;
+/// ...and lands in the purse; the count ticks up.
+pub const WIN_PEARL_ARRIVES: f32 = 1.2;
 
 // ─── Input ──────────────────────────────────────────────
 
 pub enum HopInput {
     Leave,
     Again,
-    /// Move the aim one step (−1 back, +1 further).
+    /// Move the aim one stone (−1 back, +1 further).
     Nudge(i32),
     Toss,
 }
@@ -267,14 +424,14 @@ pub fn handle_click(mx: f32, my: f32, l: &PearlHopLayout) -> Option<HopInput> {
 }
 
 /// Keys: ESC leaves; arrows move the aim a stone at a time; Space tosses (or,
-/// once she has the pearl, goes again).
+/// once the win has played, goes again).
 pub fn handle_key(input: &FrameInput, session: &HopSession) -> Option<HopInput> {
     if input.pressed(KeyCode::Escape) {
         return Some(HopInput::Leave);
     }
     let go = input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter);
     if session.phase == HopPhase::Won {
-        return go.then_some(HopInput::Again);
+        return (go && session.win_done()).then_some(HopInput::Again);
     }
     if input.pressed(KeyCode::Right) || input.pressed(KeyCode::D) {
         return Some(HopInput::Nudge(1));
@@ -291,7 +448,7 @@ pub fn handle_key(input: &FrameInput, session: &HopSession) -> Option<HopInput> 
 /// demo's teaching hand.
 #[derive(Default, Clone, Copy)]
 pub struct HopArt {
-    /// Pointer position while Shelly is being pulled back.
+    /// Pointer position while Shelly is held.
     pub pull_to: Option<(f32, f32)>,
     /// The demo's hand: position, and whether it's pressing.
     pub hand: Option<(f32, f32, bool)>,
@@ -305,14 +462,15 @@ const WATER_TOP: Color = Color::new(0.10, 0.55, 0.70, 1.0);
 const WATER_DEEP: Color = Color::new(0.04, 0.22, 0.38, 1.0);
 const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0);
 const INK: Color = Color::new(0.10, 0.13, 0.20, 1.0);
-const SHELL: Color = Color::new(0.94, 0.67, 0.71, 1.0);
-const SHELL_DARK: Color = Color::new(0.78, 0.47, 0.53, 1.0);
-const MOUTH: Color = Color::new(0.24, 0.12, 0.18, 1.0);
 const PEARL: Color = Color::new(0.95, 0.97, 1.0, 1.0);
 const ROCK: Color = Color::new(0.47, 0.42, 0.38, 1.0);
 const ROCK_LIGHT: Color = Color::new(0.62, 0.57, 0.50, 1.0);
 const STONE: Color = Color::new(0.56, 0.60, 0.58, 1.0);
 const STONE_LIT: Color = Color::new(1.0, 0.93, 0.70, 1.0);
+/// Counted out past the target: a different glow, so "too far" is visible.
+const STONE_PAST: Color = Color::new(1.0, 0.62, 0.55, 1.0);
+/// An uncounted target dot.
+const DOT: Color = Color::new(0.20, 0.45, 0.70, 1.0);
 const BTN: Color = Color::new(0.10, 0.36, 0.55, 1.0);
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
@@ -335,21 +493,18 @@ struct Pose {
     y: f32,
     /// Squash: >1 wide/flat, <1 tall/thin.
     squash: f32,
-    /// Degrees.
+    /// Degrees, clockwise.
     spin: f32,
-    /// 0 shut … 1 wide open (a yell, a cheer).
-    mouth: f32,
-    /// Eyes: 0 normal, 1 wide (mid-air panic), -1 squeezed shut (effort).
-    eyes: f32,
-    /// Little flailing feet.
-    flail: bool,
+    /// Extra size on top of her radius: 1.3 while she's held ("in hand").
+    lift: f32,
+    face: ClamFace,
     /// Half under water.
     wet: bool,
 }
 
 impl Pose {
     fn at(x: f32, y: f32) -> Pose {
-        Pose { x, y, squash: 1.0, spin: 0.0, mouth: 0.15, eyes: 0.0, flail: false, wet: false }
+        Pose { x, y, squash: 1.0, spin: 0.0, lift: 1.0, face: ClamFace { mouth: 0.15, eyes: 0.0, flail: false }, wet: false }
     }
 }
 
@@ -360,23 +515,26 @@ pub fn draw(view: &HopView, l: &PearlHopLayout, art: &HopArt, time: f32) {
 
     // The whole screen is the lagoon: sky over water, so the buttons sit on
     // the scene rather than on a dark modal.
-    let sky = f.bounds;
-    paint::vgradient(sky, SKY_TOP, SKY_BOTTOM, 12);
+    paint::vgradient(f.bounds, SKY_TOP, SKY_BOTTOM, 12);
     draw_water(g, f.bounds, time);
 
+    let m = scene_model(view);
     let c = paint::canvas(g.rect);
-    draw_path(&c, g, s, time);
-    draw_ghost(&c, g, s, art, time);
-    draw_counts(&c, g, s);
-    draw_hop_bubbles(&c, g, s, time);
-    draw_target_bubble(&c, g, s, time);
+    draw_path(&c, g, s, &m, time);
+    draw_ghost(&c, g, s, &m, art, time);
+    draw_counts(&c, g, &m);
+    draw_target(&c, g, &m, time);
     let pose = shelly_pose(g, s, art, time);
     draw_splash(&c, g, s);
-    draw_band(&c, g, s, art, pose);
-    draw_shelly(&c, g, pose, time);
-    draw_win(&c, g, s, time);
+    // Shelly, the band and her "in hand" ring can leave the scene while she's
+    // pulled, so they paint on the whole screen (ADR-004).
+    let screen = paint::canvas(f.bounds);
+    draw_band(&screen, g, s, art, pose);
+    draw_win_burst(&c, g, s, time);
+    draw_shelly(&screen, g, pose, &view.outfit, art, time);
+    draw_won_pearl(&screen, g, s, &m, time);
     if let Some((hx, hy, pressed)) = art.hand {
-        draw_hand(&c, hx, hy, pressed, art.hand_alpha);
+        draw_hand(&screen, hx, hy, pressed, art.hand_alpha);
     }
 
     for el in f.elements() {
@@ -388,25 +546,31 @@ pub fn draw(view: &HopView, l: &PearlHopLayout, art: &HopArt, time: f32) {
             }
             (Kind::Text(t), HopId::Count) => paint::text(t, INK),
             (Kind::Text(t), _) => paint::text(t, WHITE),
-            (_, HopId::Leave) => {
-                paint::round_rect(el.rect, 10.0, Color::new(0.26, 0.35, 0.42, 0.92));
-            }
+            (_, HopId::Leave) => paint::round_rect(el.rect, 10.0, Color::new(0.26, 0.35, 0.42, 0.92)),
             (_, HopId::Again) => {
+                // A breathing gold rim round a rounded button.
                 let pulse = (time * 3.0).sin() * 0.5 + 0.5;
+                paint::round_rect(el.rect.expand(2.0 + pulse * 2.0), 16.0, GOLD);
                 paint::round_rect(el.rect, 14.0, BTN);
-                paint::outline(el.rect, 2.0 + pulse * 2.0, GOLD);
             }
-            (_, HopId::PearlIcon) => draw_pearl(&paint::canvas(el.rect), el.rect.center(), el.rect.w * 0.42, time),
+            (_, HopId::PearlIcon) => {
+                // The purse swells as the won pearl drops in.
+                let pop = s.win_clock().map_or(0.0, |c| {
+                    let u = (c - WIN_PEARL_ARRIVES) / 0.35;
+                    if (0.0..1.0).contains(&u) { (u * std::f32::consts::PI).sin() } else { 0.0 }
+                });
+                draw_pearl(&paint::canvas(el.rect.expand(8.0)), el.rect.center(), el.rect.w * (0.42 + 0.2 * pop), time)
+            }
             (_, HopId::AgainIcon) => draw_pearl(&paint::canvas(el.rect), el.rect.center(), el.rect.w * 0.42, time),
             (_, HopId::LeaveIcon) => draw_back_arrow(&paint::canvas(el.rect), el.rect),
             _ => {}
         }
     }
+    draw_pearl_flight(f, g, s, time);
 }
 
 /// Water from the surface line to the bottom of the screen, a sandy floor,
-/// and a little lazy kelp. Drawn over the full width so the buttons below
-/// the scene sit in the sea.
+/// and rising bubbles. Full width, so the buttons below the scene sit in it.
 fn draw_water(g: &SceneGeom, bounds: UiRect, time: f32) {
     let c = paint::canvas(bounds);
     let top = g.surface_y;
@@ -422,11 +586,10 @@ fn draw_water(g: &SceneGeom, bounds: UiRect, time: f32) {
             1.0,
         );
         let y = top + h * i as f32;
-        // Wide flat ellipses make seamless bands without hand-made rects.
+        // Thick lines make seamless bands without hand-made rects.
         let hh = (h * 0.5 + 1.0).min(bottom - y);
         c.line(bounds.x, y + hh, bounds.right(), y + hh, hh * 2.0, col);
     }
-    // Surface ripples.
     let mut x = bounds.x;
     let mut i = 0;
     while x < bounds.right() {
@@ -435,14 +598,12 @@ fn draw_water(g: &SceneGeom, bounds: UiRect, time: f32) {
         x += 26.0;
         i += 1;
     }
-    // Sandy floor.
     let floor = bottom - (bottom - top) * 0.18;
     let mut x = bounds.x;
     while x < bounds.right() + 20.0 {
         c.circle(x.min(bounds.right() - 1.0), bottom + 8.0, (bottom - floor).max(4.0), Color::new(0.86, 0.76, 0.52, 0.55));
         x += 38.0;
     }
-    // Rising bubbles.
     for k in 0..7 {
         let bx = bounds.x + bounds.w * ((k as f32 * 0.137 + 0.07) % 1.0);
         let t = (time * 0.25 + k as f32 * 0.31) % 1.0;
@@ -451,96 +612,100 @@ fn draw_water(g: &SceneGeom, bounds: UiRect, time: f32) {
     }
 }
 
-/// The start rock, the stepping stones (numbered), and the pearl rock. Out on
-/// the estimation line there are no stones: just 0, the far end, and water.
-fn draw_path(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, time: f32) {
-    let round = &s.round;
-    // Start rock: a taller boulder so Shelly stands above the path.
+/// The start rock, the stepping stones and (where the stage names it) the
+/// pearl rock. A long path keeps a base-ten rhythm: every fifth stone a bit
+/// bigger, a little post at every ten, so big numbers stay countable.
+fn draw_path(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, m: &SceneModel, time: f32) {
     let (x0, rock_top) = (g.x0, g.rock_top());
     // Narrow enough on a crowded path that stone 1 stays in the clear.
-    let rock_w = match round.stage {
-        HopStage::Estimate => g.r * 1.45,
-        _ => (g.step_px() - g.stone_r - 4.0).clamp(g.r * 1.05, g.r * 1.45),
-    };
+    let rock_w = (g.unit - g.stone_r - 4.0).clamp(g.r * 1.05, g.r * 1.45);
     c.ellipse(x0, g.surface_y + g.r * 0.2, rock_w, g.r * 1.3, 0.0, ROCK);
     c.ellipse(x0 - rock_w * 0.2, rock_top + g.r * 0.35, rock_w * 0.62, g.r * 0.45, 0.0, ROCK_LIGHT);
-    let label = match round.stage {
-        HopStage::Estimate => 20,
-        _ => (g.step_px() * 0.5).clamp(12.0, 22.0) as u16,
-    };
-    c.text_centered("0", x0, g.surface_y + g.r * 1.2 + label as f32, label, WHITE);
+    let label = (g.unit * 0.5).clamp(12.0, 22.0) as u16;
+    let label_y = g.surface_y + g.r * 1.2 + label as f32;
+    if m.numbered {
+        c.text_centered("0", x0, label_y, label, WHITE);
+    }
 
-    let lit_up_to = lit_position(s);
-    match round.stage {
-        HopStage::Estimate => {
-            // A far rock with the line's far end on it, and faint ticks at
-            // the quarter marks so the line reads as a line — not labelled,
-            // that would give the estimate away.
-            let xe = g.x_of(round.span_pos());
-            c.ellipse(xe, g.surface_y + g.r * 0.35, g.r * 1.2, g.r * 1.0, 0.0, ROCK);
-            c.text_centered(&round.span.to_string(), xe, g.surface_y + g.r * 1.3 + label as f32, label, WHITE);
-            c.line(x0, g.surface_y + 3.0, xe, g.surface_y + 3.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.5));
-            for q in 1..4 {
-                let x = lerp(x0, xe, q as f32 / 4.0);
-                c.line(x, g.surface_y - 4.0, x, g.surface_y + 10.0, 2.0, Color::new(1.0, 1.0, 1.0, 0.5));
-            }
+    // A long path (past 20) is grouped: a bigger stone every five, a post
+    // every ten, and only the fives (or, when crowded, the tens) written —
+    // so 48 stays countable as four tens and eight.
+    let long = s.round.span > 20;
+    let every = if !long && g.unit >= 18.0 { 1 } else if g.unit * 5.0 >= 28.0 { 5 } else { 10 };
+    let grouped = long;
+    for st in &m.stones {
+        let x = g.x_of(st.pos);
+        let bob = (time * 1.3 + st.pos as f32).sin() * 0.8;
+        let (fill, glow) = match st.lit {
+            Lit::Dark => (STONE, false),
+            Lit::Counted => (STONE_LIT, true),
+            Lit::PastTarget => (STONE_PAST, true),
+            Lit::Touched => (STONE_LIT, false),
+        };
+        let big = if grouped && st.pos % 5 == 0 { 1.35 } else { 1.0 };
+        let sr = g.stone_r * big;
+        if glow {
+            c.circle(x, g.surface_y + bob - sr * 0.1, sr * 1.4, with_alpha(fill, 0.4));
         }
-        _ => {
-            let step = g.step_px();
-            let every = if step >= 18.0 { 1 } else { 2 };
-            for n in 1..round.pearl {
-                let x = g.x_of(n * round.scale);
-                let lit = lit_up_to.is_some_and(|p| n * round.scale <= p);
-                let bob = (time * 1.3 + n as f32).sin() * 0.8;
-                c.ellipse(x, g.surface_y + bob, g.stone_r, g.stone_r * 0.75, 0.0, if lit { STONE_LIT } else { STONE });
-                c.ellipse(x - g.stone_r * 0.25, g.stone_top() + bob + g.stone_r * 0.15, g.stone_r * 0.55, g.stone_r * 0.2, 0.0,
-                    Color::new(1.0, 1.0, 1.0, 0.35));
-                if n % every == 0 {
-                    c.text_centered(&n.to_string(), x, g.surface_y + g.stone_r + label as f32 + 2.0, label, WHITE);
-                }
-            }
-            // The pearl rock: bigger, with the pearl glinting on top until
-            // it's been won (then it's up in the air, see draw_win).
-            let xp = g.x_of(round.pearl_pos());
-            c.ellipse(xp, g.surface_y + g.r * 0.1, g.r * 1.05, g.r * 0.85, 0.0, ROCK);
-            c.ellipse(xp - g.r * 0.2, g.surface_y - g.r * 0.5, g.r * 0.6, g.r * 0.25, 0.0, ROCK_LIGHT);
-            c.text_centered(&round.pearl.to_string(), xp, g.surface_y + g.r * 1.1 + label as f32, label, GOLD);
-            if s.phase != HopPhase::Won {
-                draw_pearl(c, (xp, g.surface_y - g.r * 0.95), g.r * 0.42, time);
-            }
+        if grouped && st.pos % 10 == 0 {
+            // A ten-post: a little marker pole standing behind the stone.
+            c.line(x, g.surface_y - g.r * 1.1, x, g.surface_y, 2.0, Color::new(1.0, 1.0, 1.0, 0.75));
+            c.circle(x, g.surface_y - g.r * 1.1, 3.0, Color::new(1.0, 1.0, 1.0, 0.9));
         }
+        c.ellipse(x, g.surface_y + bob, sr, sr * 0.75, 0.0, fill);
+        c.ellipse(x - sr * 0.25, g.surface_y - sr * 0.65 + bob, sr * 0.55, sr * 0.2, 0.0, Color::new(1.0, 1.0, 1.0, 0.35));
+        // No number squeezed under the pearl rock's shoulder.
+        let under_rock = m.pearl_rock.is_some_and(|pr| g.x_of(pr) - x < pearl_rock_w(g) + label as f32);
+        if let Some(n) = st.label.filter(|n| n % every == 0 && !under_rock) {
+            c.text_centered(&n.to_string(), x, g.surface_y + g.stone_r + label as f32 + 2.0, label, WHITE);
+        }
+    }
+
+    if let Some(pr) = m.pearl_rock {
+        // The pearl rock, numbered in gold: at these stages the target is
+        // given; the maths is choosing the hop that reaches it.
+        let xp = g.x_of(pr);
+        // Never so wide it swallows the stone before it.
+        let rw = pearl_rock_w(g);
+        c.ellipse(xp, g.surface_y + g.r * 0.1, rw, g.r * 0.85, 0.0, ROCK);
+        c.ellipse(xp - rw * 0.2, g.surface_y - g.r * 0.5, rw * 0.6, g.r * 0.25, 0.0, ROCK_LIGHT);
+        c.text_centered(&pr.to_string(), xp, label_y, label.max(16), GOLD);
+    }
+    if let (Some(pp), None) = (m.pearl_shown, s.win_clock()) {
+        draw_pearl(c, (g.x_of(pp), g.surface_y - g.r * 0.95), g.r * 0.42, time);
     }
 }
 
-/// While flying and after landing, the stones she's already touched glow.
-fn lit_position(s: &HopSession) -> Option<u16> {
-    let t = s.toss.as_ref()?;
-    match s.phase {
-        HopPhase::Flying => {
-            let (hop, _) = s.flight()?;
-            hop.checked_sub(1).map(|i| t.landings[i])
-        }
-        HopPhase::Landed | HopPhase::Won => Some(t.end()),
-        HopPhase::Aiming => None,
-    }
+/// Half-width of the pearl rock: never so wide it swallows the stones before
+/// it, never so thin it reads as a post.
+fn pearl_rock_w(g: &SceneGeom) -> f32 {
+    (g.unit * 1.3).max(g.r * 0.7).min(g.r * 1.05)
 }
 
-/// The dotted arc of the first hop the current pull would make, with the
-/// stone it lands on ringed — the thing that snaps stone to stone as the kid
-/// pulls.
-fn draw_ghost(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, art: &HopArt, time: f32) {
-    if s.phase != HopPhase::Aiming {
-        // Last try's mark stays on the estimation line while she's back on
-        // the rock, so the next estimate can be adjusted from it.
+/// Where the won pearl hangs while it glitters, before it flies to the purse:
+/// popped up beside Shelly's flip, not behind her.
+fn won_pearl_at(g: &SceneGeom, s: &HopSession) -> (f32, f32) {
+    let end = s.toss.as_ref().map_or(0, |t| t.end());
+    let k = s.win_clock().unwrap_or(0.0);
+    let u = ease(k / 0.3);
+    (g.x_of(end) + g.r * 1.6 * u, g.surface_y - g.r * (0.9 + 1.9 * u))
+}
+
+/// The revealed pearl, big and on top of everything in the scene.
+fn draw_won_pearl(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, m: &SceneModel, time: f32) {
+    if m.pearl_shown.is_none() {
         return;
     }
-    // On the estimation line, where the last try came down stays marked.
-    if s.round.stage == HopStage::Estimate {
-        if let Some(t) = s.toss.as_ref() {
-            let x = g.x_of(t.end());
-            c.circle_lines(x, g.surface_y, g.r * 0.6, 3.0, Color::new(1.0, 1.0, 1.0, 0.8));
-            c.line(x, g.surface_y - g.r * 1.2, x, g.surface_y - g.r * 0.6, 2.0, Color::new(1.0, 1.0, 1.0, 0.8));
-        }
+    let Some(k) = s.win_clock() else { return };
+    let grow = 1.0 + 1.1 * ease(k / 0.3);
+    draw_pearl(c, won_pearl_at(g, s), g.r * 0.42 * grow, time);
+}
+
+/// The dotted arc of the first hop the current aim would make, with the
+/// stone it lands on ringed — it snaps stone to stone as the kid pulls.
+fn draw_ghost(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, m: &SceneModel, art: &HopArt, time: f32) {
+    if s.phase != HopPhase::Aiming {
+        return;
     }
     let pulling = art.pull_to.is_some_and(|p| g.aim_for_pointer(p).is_some());
     let keyboard_aimed = s.aim != s.round.min_aim || s.toss.is_some();
@@ -550,7 +715,7 @@ fn draw_ghost(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, art: &HopArt, ti
     let (hx, hy) = g.home();
     let first = s.round.landings(s.aim).first().copied().unwrap_or(s.aim);
     let x1 = g.x_of(first);
-    let water = s.round.stage == HopStage::Estimate || first > s.round.pearl_pos();
+    let water = first > s.round.last_stone();
     let (_, y1) = g.perch(first, water);
     let h = arc_height(g, hx, x1);
     let dots = 14;
@@ -562,14 +727,14 @@ fn draw_ghost(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, art: &HopArt, ti
         c.circle(x, y, 3.0, Color::new(1.0, 1.0, 1.0, a));
     }
     let pulse = (time * 5.0).sin() * 0.5 + 0.5;
-    c.circle_lines(x1, y1 + g.r * 0.5, g.r * (0.8 + 0.1 * pulse), 3.0, with_alpha(GOLD, 0.9));
-    // On the stones, the hop's size rides on the ghost landing — the number
-    // Shelly is counting out loud.
-    if s.round.stage != HopStage::Estimate {
-        let n = first / s.round.scale;
+    c.circle_lines(x1, g.surface_y - g.stone_r * 0.1, (g.stone_r * 1.15).max(8.0) * (1.0 + 0.08 * pulse), 3.0, with_alpha(GOLD, 0.95));
+    // At the skip-counting stages the hop's size rides on the ghost landing —
+    // the number Shelly is saying. Not at the counting stage: there the kid
+    // counts the stones, and nothing reads them out.
+    if m.ghost_label {
         let size = (g.r * 1.1) as u16;
         c.circle(x1, y1 - g.r * 1.9, g.r * 0.85, Color::new(1.0, 1.0, 1.0, 0.85));
-        c.text_centered(&n.to_string(), x1, y1 - g.r * 1.9 + size as f32 * 0.36, size.max(14), INK);
+        c.text_centered(&first.to_string(), x1, y1 - g.r * 1.9 + size as f32 * 0.36, size.max(14), INK);
     }
 }
 
@@ -578,75 +743,70 @@ fn arc_height(g: &SceneGeom, xa: f32, xb: f32) -> f32 {
     ((xb - xa).abs() * 0.45).clamp(30.0, 240.0).min(room)
 }
 
-/// Skip counting out loud: every spot she touches down on gets its number
-/// popped up over it (2… 4… 6…).
-fn draw_counts(c: &paint::Canvas, g: &SceneGeom, s: &HopSession) {
-    if s.round.stage == HopStage::Estimate || s.round.stage == HopStage::Count {
-        return;
-    }
-    let Some(t) = s.toss.as_ref() else { return };
-    let shown = match s.phase {
-        HopPhase::Flying => s.flight().map_or(0, |(hop, _)| hop),
-        HopPhase::Landed | HopPhase::Won => t.landings.len(),
-        HopPhase::Aiming => 0,
-    };
+/// Skip counting out loud: every touch-down gets its number popped up over it
+/// (6… 12… 18… 24) — the same at the "in X hops" stage, so dividing and
+/// skip counting look like one thing.
+fn draw_counts(c: &paint::Canvas, g: &SceneGeom, m: &SceneModel) {
     let size = (g.r * 0.95).clamp(14.0, 26.0) as u16;
-    for (i, &p) in t.landings.iter().take(shown).enumerate() {
-        let x = g.x_of(p);
+    for (i, &(pos, n)) in m.hop_counts.iter().enumerate() {
+        let x = g.x_of(pos);
         let y = g.surface_y - g.r * 2.7 - if i % 2 == 1 { g.r * 0.7 } else { 0.0 };
-        c.circle(x, y - size as f32 * 0.35, size as f32 * 0.8, Color::new(1.0, 1.0, 1.0, 0.8));
-        c.text_centered(&(p / s.round.scale).to_string(), x, y, size, INK);
+        c.circle(x, y - size as f32 * 0.35, size as f32 * 0.8, Color::new(1.0, 1.0, 1.0, 0.85));
+        c.text_centered(&n.to_string(), x, y, size, INK);
     }
 }
 
-/// "Reach the pearl in K hops": K bubbles over Shelly's head, one popping per
-/// hop.
-fn draw_hop_bubbles(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, time: f32) {
-    if s.round.stage != HopStage::Hops {
-        return;
-    }
-    let k = s.round.hops as usize;
-    let used = match s.phase {
-        HopPhase::Flying => s.flight().map_or(0, |(hop, _)| hop + 1),
-        HopPhase::Landed | HopPhase::Won => k,
-        HopPhase::Aiming => 0,
-    };
-    let (hx, hy) = g.home();
-    let br = (g.r * 0.5).max(10.0);
-    let gap = br * 2.5;
-    let y = hy - g.r * 2.4;
-    let x_start = (hx - (k as f32 - 1.0) * gap / 2.0).max(g.rect.x + br + 2.0);
-    for i in 0..k {
-        let x = x_start + i as f32 * gap;
-        let bob = (time * 2.2 + i as f32).sin() * 2.0;
-        if i < used {
-            // Popped: a little ring of spray.
-            c.circle_lines(x, y + bob, br * 0.5, 1.5, Color::new(1.0, 1.0, 1.0, 0.35));
-        } else {
-            c.circle(x, y + bob, br, Color::new(0.75, 0.93, 1.0, 0.95));
-            c.circle_lines(x, y + bob, br, 2.5, Color::new(0.10, 0.35, 0.55, 0.9));
-            c.circle(x - br * 0.35, y + bob - br * 0.35, br * 0.25, WHITE);
-        }
-    }
-}
-
-/// On the estimation line the pearl is hidden; Shelly's thought bubble says
-/// what number it sank at.
-fn draw_target_bubble(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, time: f32) {
-    if s.round.stage != HopStage::Estimate || s.phase == HopPhase::Won {
-        return;
-    }
+/// Shelly's bubble over the start rock: the target as dots (counting) or as
+/// K hop-bubbles.
+fn draw_target(c: &paint::Canvas, g: &SceneGeom, m: &SceneModel, time: f32) {
     let (hx, hy) = g.home();
     let bob = (time * 1.8).sin() * 2.0;
-    let br = (g.r * 1.15).max(20.0);
-    let (bx, by) = (hx + g.r * 1.9, hy - g.r * 2.3 + bob);
-    c.circle(hx + g.r * 0.7, hy - g.r * 1.2 + bob, br * 0.18, Color::new(1.0, 1.0, 1.0, 0.9));
-    c.circle(hx + g.r * 1.1, hy - g.r * 1.6 + bob, br * 0.28, Color::new(1.0, 1.0, 1.0, 0.9));
-    c.circle(bx, by, br, WHITE);
-    c.circle_lines(bx, by, br, 2.0, GOLD);
-    draw_pearl(c, (bx - br * 0.45, by - br * 0.1), br * 0.22, time);
-    let size = (br * 0.85) as u16;
-    c.text_centered(&s.round.pearl.to_string(), bx + br * 0.2, by + size as f32 * 0.35, size.max(14), INK);
+    match m.target {
+        TargetView::None => {}
+        TargetView::Hops { k, used } => {
+            let k = k as usize;
+            let br = (g.r * 0.5).max(10.0);
+            let gap = br * 2.5;
+            let y = hy - g.r * 2.4;
+            let x_start = (hx - (k as f32 - 1.0) * gap / 2.0).max(g.rect.x + br + 2.0);
+            for i in 0..k {
+                let x = x_start + i as f32 * gap;
+                let bob = (time * 2.2 + i as f32).sin() * 2.0;
+                if i < used as usize {
+                    c.circle_lines(x, y + bob, br * 0.5, 1.5, Color::new(1.0, 1.0, 1.0, 0.35));
+                } else {
+                    c.circle(x, y + bob, br, Color::new(0.75, 0.93, 1.0, 0.95));
+                    c.circle_lines(x, y + bob, br, 2.5, Color::new(0.10, 0.35, 0.55, 0.9));
+                    c.circle(x - br * 0.35, y + bob - br * 0.35, br * 0.25, WHITE);
+                }
+            }
+        }
+        TargetView::Dots { n, ticked } => {
+            // Dots like a die face: one row up to three, two rows past that.
+            let dr = (g.r * 0.26).max(6.0);
+            let rows = if n > 3 { 2.0 } else { 1.0 };
+            let gap = dr * 2.7;
+            let br = (n.min(3) as f32 * gap * 0.5 + dr * 1.4).max(g.r * 1.1);
+            let (bx, by) = (hx + g.r * 0.9 + br, hy - g.r * 1.7 - br * 0.6 + bob);
+            c.circle(hx + g.r * 0.7, hy - g.r * 1.2 + bob, (br * 0.16).max(3.0), Color::new(1.0, 1.0, 1.0, 0.9));
+            c.circle(hx + g.r * 1.0, hy - g.r * 1.55 + bob, (br * 0.24).max(4.0), Color::new(1.0, 1.0, 1.0, 0.9));
+            c.circle(bx, by, br, WHITE);
+            c.circle_lines(bx, by, br, 2.5, GOLD);
+            for i in 0..n {
+                let (row, col) = if n > 3 { (i / 3, i % 3) } else { (0, i) };
+                let in_row = if n > 3 && row == 1 { n - 3 } else { n.min(3) };
+                let x = bx + (col as f32 - (in_row as f32 - 1.0) / 2.0) * gap;
+                let y = by + (row as f32 - (rows - 1.0) / 2.0) * gap;
+                if i < ticked {
+                    // Counted off: a gold dot with a ring.
+                    c.circle(x, y, dr * 1.15, GOLD);
+                    c.circle_lines(x, y, dr * 1.15, 2.0, Color::new(0.65, 0.45, 0.05, 1.0));
+                } else {
+                    c.circle(x, y, dr, DOT);
+                }
+            }
+        }
+    }
 }
 
 /// Where Shelly is and what she's doing this frame. All of it is a function
@@ -658,18 +818,22 @@ fn shelly_pose(g: &SceneGeom, s: &HopSession, art: &HopArt, time: f32) -> Pose {
         HopPhase::Aiming => {
             let mut p = Pose::at(hx, hy + (time * 2.0).sin() * 1.2);
             if let Some(ptr) = art.pull_to {
-                // Pulled back: she follows the pointer a little way and
-                // squishes like a rubber ball, eyes squeezed.
+                // Held: lifted (bigger, ringed), and on a slingshot pull she
+                // follows the pointer a little and squishes, eyes squeezed.
+                p.lift = 1.3;
                 let (dx, dy) = (ptr.0 - hx, ptr.1 - hy);
                 let d = (dx * dx + dy * dy).sqrt().max(0.001);
-                let give = d.min(g.r * 1.6);
-                let t = (d / g.max_pull).clamp(0.0, 1.0);
-                p.x += dx / d * give;
-                p.y += dy / d * give;
-                p.squash = 1.0 + 0.45 * t;
-                p.spin = -12.0 * t;
-                p.eyes = if t > 0.15 { -1.0 } else { 0.0 };
-                p.mouth = 0.05;
+                let behind = ptr.0 <= hx + g.reach();
+                if behind {
+                    let give = d.min(g.r * 1.6);
+                    let t = (d / g.max_pull).clamp(0.0, 1.0);
+                    p.x += dx / d * give;
+                    p.y += dy / d * give;
+                    p.squash = 1.0 + 0.45 * t;
+                    p.spin = -12.0 * t;
+                    p.face.eyes = if t > 0.15 { -1.0 } else { 0.0 };
+                    p.face.mouth = 0.05;
+                }
             }
             p
         }
@@ -678,38 +842,42 @@ fn shelly_pose(g: &SceneGeom, s: &HopSession, art: &HopArt, time: f32) -> Pose {
             let (hop, u) = s.flight().unwrap_or((0, 0.0));
             let from = if hop == 0 { 0 } else { t.landings[hop - 1] };
             let to = t.landings[hop];
-            let last = hop + 1 == t.landings.len();
-            let water_end = last && s.round.stage == HopStage::Estimate
-                || to > s.round.pearl_pos() && s.round.stage != HopStage::Estimate;
             let (xa, ya) = if hop == 0 { g.home() } else { g.perch(from, false) };
-            let (xb, yb) = g.perch(to, water_end);
+            let (xb, yb) = g.perch(to, to > s.round.last_stone());
             let h = arc_height(g, xa, xb);
-            let x = lerp(xa, xb, u);
-            let y = lerp(ya, yb, u) - 4.0 * h * u * (1.0 - u);
-            let mut p = Pose::at(x, y);
+            let mut p = Pose::at(lerp(xa, xb, u), lerp(ya, yb, u) - 4.0 * h * u * (1.0 - u));
             // Stretch on take-off, spin through the air, flail the whole way.
             p.squash = if u < 0.15 { 0.7 } else { 1.0 };
             p.spin = u * 360.0;
-            p.eyes = 1.0;
-            p.mouth = 0.7 + 0.3 * (time * 18.0).sin().abs();
-            p.flail = true;
+            p.face = ClamFace { mouth: 0.7 + 0.3 * (time * 18.0).sin().abs(), eyes: 1.0, flail: true };
             p
         }
         HopPhase::Landed => landed_pose(g, s, time),
         HopPhase::Won => {
             let end = s.toss.as_ref().map_or(0, |t| t.end());
-            let water = s.round.stage == HopStage::Estimate;
-            let (x, y) = g.perch(end, water);
-            let c = s.clock;
+            let (x, y) = g.perch(end, false);
             let mut p = Pose::at(x, y);
-            if c < 0.25 {
-                p.squash = 1.5 - c * 2.0; // BONK onto the pearl
+            let Some(c) = s.win_clock() else {
+                // Still counting the stones out: sitting tight on her stone.
+                p.squash = if s.clock < 0.2 { 1.4 } else { 1.0 };
+                return p;
+            };
+            if c < 0.15 {
+                p.squash = 1.5 - c * 3.0; // crouch...
+            } else if c < 0.95 {
+                // ...and a big happy backflip, mouth wide open.
+                let u = (c - 0.15) / 0.8;
+                p.y -= (u * std::f32::consts::PI).sin() * g.r * 3.2;
+                p.spin = -360.0 * ease(u);
+                p.face = ClamFace { mouth: 1.0, eyes: 1.0, flail: true };
             } else {
-                // Happy bouncing.
-                p.y -= ((c - 0.25) * 7.0).sin().abs() * g.r * 0.7;
-                p.mouth = 1.0;
+                // Stuck the landing: a few bouncy cheers.
+                let u = c - 0.95;
+                let fade = 1.0 - (u / 0.9).min(1.0);
+                p.y -= (u * 9.0).sin().abs() * g.r * 0.5 * fade;
+                p.squash = 1.0 + 0.15 * (u * 9.0).cos().abs() * fade;
+                p.face.mouth = 1.0;
             }
-            p.wet = water && c < 0.25;
             p
         }
     }
@@ -717,18 +885,27 @@ fn shelly_pose(g: &SceneGeom, s: &HopSession, art: &HopArt, time: f32) -> Pose {
 
 fn landed_pose(g: &SceneGeom, s: &HopSession, time: f32) -> Pose {
     let t = s.toss.as_ref().unwrap();
-    let c = s.clock;
     let end = t.end();
-    if s.lands_in_water() {
-        // SPLASH. Bob up, spin in place if it was close, paddle home, hop up.
+    let water = s.lands_in_water();
+    // Counting stage: she sits where she landed while the stones are counted.
+    let c = s.clock - s.tally_secs();
+    if c < 0.0 {
+        let (lx, ly) = g.perch(end, water);
+        let mut p = Pose::at(lx, ly + if water { (time * 4.0).sin() * 2.0 } else { 0.0 });
+        p.wet = water;
+        p.squash = if s.clock < 0.2 { 1.4 } else { 1.0 };
+        return p;
+    }
+    if water {
+        // SPLASH. Bob up, paddle home, hop up.
         let (lx, ly) = g.perch(end, true);
         let (hx, hy) = g.home();
         let paddle_end = SPLASH_SECS - 0.5;
         if c < 0.4 {
             let mut p = Pose::at(lx, ly + (0.4 - c) * g.r * 2.0);
             p.wet = true;
-            p.eyes = 1.0;
-            p.mouth = 0.9;
+            p.face.eyes = 1.0;
+            p.face.mouth = 0.9;
             return p;
         }
         if c < paddle_end {
@@ -736,35 +913,28 @@ fn landed_pose(g: &SceneGeom, s: &HopSession, time: f32) -> Pose {
             let mut p = Pose::at(lerp(lx, hx, u), ly + (time * 9.0).sin() * 2.0);
             p.wet = true;
             p.spin = (time * 9.0).sin() * 8.0;
-            if t.near && c < 1.0 {
-                // So close! A dizzy wobble right by the spot.
-                p.spin = (c * 30.0).sin() * 35.0;
-                p.x = lx;
-            }
-            p.flail = true;
-            p.mouth = 0.3;
+            p.face.flail = true;
+            p.face.mouth = 0.3;
             return p;
         }
         let u = ((c - paddle_end) / 0.5).clamp(0.0, 1.0);
-        let x = hx;
-        let y = lerp(ly, hy, u) - 4.0 * g.r * 1.2 * u * (1.0 - u);
-        let mut p = Pose::at(x, y);
+        let mut p = Pose::at(hx, lerp(ly, hy, u) - 4.0 * g.r * 1.2 * u * (1.0 - u));
         p.squash = if u > 0.9 { 1.3 } else { 1.0 };
         return p;
     }
-    // A plain stone: bonk, wobble, shrug, hop home.
+    // A plain stone: bonk, wobble, shrug, glide home.
     let (lx, ly) = g.perch(end, false);
     let mut p = Pose::at(lx, ly);
     if c < 0.3 {
         p.squash = 1.6 - c;
-        p.eyes = -1.0;
+        p.face.eyes = -1.0;
     } else if c < 0.95 {
         let decay = 1.0 - (c - 0.3) / 0.65;
         p.spin = (c * 24.0).sin() * 28.0 * decay;
     } else if c < 1.35 {
         // Shrug: tilt one way, then the other, mouth a little "hm".
         p.spin = ((c - 0.95) * 16.0).sin() * 12.0;
-        p.mouth = 0.25;
+        p.face.mouth = 0.25;
     } else {
         let u = ((c - 1.35) / 0.45).clamp(0.0, 1.0);
         let (hx, hy) = g.home();
@@ -777,7 +947,7 @@ fn landed_pose(g: &SceneGeom, s: &HopSession, time: f32) -> Pose {
 }
 
 /// The rubber band: two strands from the rock's posts to Shelly while she's
-/// being pulled.
+/// pulled back.
 fn draw_band(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, art: &HopArt, pose: Pose) {
     if s.phase != HopPhase::Aiming {
         return;
@@ -789,13 +959,9 @@ fn draw_band(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, art: &HopArt, pos
     }
     let taut = art.pull_to.is_some();
     for &(px, py) in &posts {
-        let (tx, ty) = if taut { (pose.x, pose.y + pose_half_h(g, pose) * 0.5) } else { (hx, hy + g.r * 0.55) };
+        let (tx, ty) = if taut { (pose.x, pose.y + g.r * 0.4 / pose.squash.max(0.3)) } else { (hx, hy + g.r * 0.55) };
         c.line(px, py - g.r * 0.6, tx, ty, if taut { 3.0 } else { 2.0 }, Color::new(0.85, 0.30, 0.25, 0.95));
     }
-}
-
-fn pose_half_h(g: &SceneGeom, pose: Pose) -> f32 {
-    g.r * 0.75 / pose.squash.max(0.3)
 }
 
 /// A splash of droplets where she hit the water.
@@ -821,102 +987,86 @@ fn draw_splash(c: &paint::Canvas, g: &SceneGeom, s: &HopSession) {
     c.circle_lines(x, y, g.r * (0.6 + k * 2.5), 2.5, Color::new(1.0, 1.0, 1.0, 0.7 * fade));
 }
 
-fn draw_shelly(c: &paint::Canvas, g: &SceneGeom, p: Pose, time: f32) {
-    let r = g.r;
-    let (sx, sy) = (p.squash, 1.0 / p.squash.max(0.3));
-    let rot = p.spin.to_radians();
-    let (sn, cs) = rot.sin_cos();
-    // Local shell coordinates → screen, through squash then spin.
-    let tf = |lx: f32, ly: f32| -> (f32, f32) {
-        let (x, y) = (lx * sx, ly * sy);
-        (p.x + x * cs - y * sn, p.y + x * sn + y * cs)
-    };
-
-    // Shadow on whatever's underneath (skip mid-air — she's high up).
-    if !p.flail && !p.wet {
-        c.ellipse(p.x, p.y + r * 0.8 * sy, r * 0.9 * sx, r * 0.18, 0.0, Color::new(0.0, 0.0, 0.0, 0.18));
+/// Shelly, wearing her swag, through the shared dressed-character helper:
+/// the squish, spin and flip move her crown with her.
+fn draw_shelly(c: &paint::Canvas, g: &SceneGeom, p: Pose, outfit: &ShellyOutfit, art: &HopArt, time: f32) {
+    let r = g.r * p.lift;
+    if art.pull_to.is_some() {
+        // In hand: a soft shadow below and a pulsing ring, so she reads as
+        // picked up even when the platform reports no motion.
+        let pulse = (time * 6.0).sin() * 0.5 + 0.5;
+        c.ellipse(p.x, g.rock_top() + g.r * 0.2, r * 0.9, r * 0.2, 0.0, Color::new(0.0, 0.0, 0.0, 0.22));
+        c.circle_lines(p.x, p.y, r * (1.25 + 0.1 * pulse), 3.0, with_alpha(GOLD, 0.8));
+    } else if !p.face.flail && !p.wet {
+        c.ellipse(p.x, p.y + g.r * 0.8, g.r * 0.9 * p.squash, g.r * 0.18, 0.0, Color::new(0.0, 0.0, 0.0, 0.18));
     }
-
-    // Flailing feet under the shell.
-    if p.flail {
-        for i in 0..2 {
-            let side = if i == 0 { -1.0 } else { 1.0 };
-            let wig = (time * 26.0 + i as f32 * 2.0).sin() * r * 0.35;
-            let (ax, ay) = tf(side * r * 0.35, r * 0.45);
-            let (bx, by) = tf(side * r * 0.55 + wig, r * 0.95);
-            c.line(ax, ay, bx, by, (r * 0.16).max(2.0), SHELL_DARK);
-        }
-    }
-
-    // Bottom shell.
-    let (bx, by) = tf(0.0, r * 0.25);
-    c.ellipse(bx, by, r * sx, r * 0.5 * sy, p.spin, SHELL);
-    // The mouth: a dark gap that yawns open to yell / cheer.
-    let open = r * (0.12 + 0.38 * p.mouth.clamp(0.0, 1.0));
-    let (mx, my) = tf(0.0, r * 0.02);
-    c.ellipse(mx, my, r * 0.82 * sx, open * sy, p.spin, MOUTH);
-    if p.mouth > 0.5 {
-        let (tx, ty) = tf(0.0, r * 0.1);
-        c.ellipse(tx, ty, r * 0.35 * sx, open * 0.45 * sy, p.spin, Color::new(0.93, 0.45, 0.55, 1.0));
-    }
-    // Top shell, lifted by the open mouth.
-    let (ux, uy) = tf(0.0, -r * 0.2 - open * 0.6);
-    c.ellipse(ux, uy, r * 0.95 * sx, r * 0.5 * sy, p.spin, SHELL);
-    for i in -1..=1 {
-        let (ax, ay) = tf(i as f32 * r * 0.45, -r * 0.55 - open * 0.6);
-        let (bx2, by2) = tf(i as f32 * r * 0.3, -r * 0.05 - open * 0.6);
-        c.line(ax, ay, bx2, by2, (r * 0.08).max(1.5), SHELL_DARK);
-    }
-    // Eyes on stalks peeking over the lid.
-    for side in [-1.0f32, 1.0] {
-        let (ex, ey) = tf(side * r * 0.32, -r * 0.78 - open * 0.6);
-        let er = r * if p.eyes > 0.5 { 0.3 } else { 0.24 };
-        if p.eyes < -0.5 {
-            // Squeezed shut: > <
-            let d = er * 0.9;
-            c.line(ex - d, ey - d * 0.6, ex + d * 0.2, ey, 2.0, INK);
-            c.line(ex - d, ey + d * 0.6, ex + d * 0.2, ey, 2.0, INK);
-        } else {
-            c.circle(ex, ey, er, WHITE);
-            c.circle_lines(ex, ey, er, 1.2, INK);
-            let look = if p.eyes > 0.5 { 0.0 } else { er * 0.25 };
-            c.circle(ex + look, ey, er * (if p.eyes > 0.5 { 0.35 } else { 0.5 }), INK);
-        }
-    }
+    // The cartoon clam is drawn at radius 14 in tile space.
+    let posture = Posture { x: p.x, y: p.y, scale: r / 14.0, squash: p.squash, spin: p.spin };
+    let fit = SwagFit::CLAM_CARTOON;
+    dressed::draw_dressed(posture, Body::Clam(p.face), Dir::Down, &Outfit { worn: outfit.worn, color: outfit.color, fit }, time);
     if p.wet {
         // The water line cuts across her: a band of water over her bottom half.
         let wl = g.surface_y;
-        c.ellipse(p.x, wl + r * 0.35, r * 1.3, r * 0.45, 0.0, Color::new(0.10, 0.55, 0.70, 0.85));
-        c.line(p.x - r * 1.3, wl, p.x + r * 1.3, wl, 2.0, Color::new(1.0, 1.0, 1.0, 0.6));
+        c.ellipse(p.x, wl + g.r * 0.35, g.r * 1.3, g.r * 0.45, 0.0, Color::new(0.10, 0.55, 0.70, 0.85));
+        c.line(p.x - g.r * 1.3, wl, p.x + g.r * 1.3, wl, 2.0, Color::new(1.0, 1.0, 1.0, 0.6));
     }
 }
 
-/// The pearl pops: a burst ring, sparkles, and the pearl bobbing up high.
-fn draw_win(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, time: f32) {
-    if s.phase != HopPhase::Won {
+/// The win's burst where the pearl pops: a flash, a ring, and rays of glint.
+fn draw_win_burst(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, time: f32) {
+    let Some(k) = s.win_clock() else { return };
+    let (x, y) = won_pearl_at(g, s);
+    if k < 0.6 {
+        // A white flash and a gold shock ring.
+        let u = k / 0.6;
+        c.circle(x, y, g.r * (1.2 + 2.6 * u), Color::new(1.0, 1.0, 0.92, 0.75 * (1.0 - u)));
+        c.circle_lines(x, y, g.r * (1.0 + 4.5 * u), 7.0 * (1.0 - u) + 2.0, with_alpha(GOLD, 1.0 - u));
+    }
+    if k < 1.4 {
+        // Glint rays, turning, long and short, gold with a white core.
+        let fade = 1.0 - (k / 1.4);
+        let reach = 0.6 + ease(k / 0.25) * 0.7;
+        for i in 0..12 {
+            let a = i as f32 / 12.0 * std::f32::consts::TAU + time * 1.2;
+            let (r0, r1) = (g.r * 1.2, g.r * (2.2 + 1.6 * ((i % 2) as f32)) * reach);
+            let (cs, sn) = (a.cos(), a.sin());
+            c.line(x + cs * r0, y + sn * r0, x + cs * r1, y + sn * r1, 6.0, with_alpha(GOLD, fade));
+            c.line(x + cs * r0, y + sn * r0, x + cs * r1, y + sn * r1, 2.0, Color::new(1.0, 1.0, 1.0, fade));
+        }
+        // Confetti bubbles bursting outward and drifting down.
+        let colors = [GOLD, Color::new(1.0, 0.45, 0.65, 1.0), Color::new(0.45, 0.85, 1.0, 1.0), Color::new(0.6, 0.95, 0.5, 1.0)];
+        for i in 0..18 {
+            let a = i as f32 * 2.399; // golden angle: an even spray
+            let v = g.r * (2.2 + (i % 4) as f32 * 0.7);
+            let (px, py) = (x + a.cos() * v * ease(k / 0.5), y + a.sin() * v * ease(k / 0.5) + g.r * 1.5 * k * k);
+            c.circle(px, py, 3.0 + (i % 3) as f32, with_alpha(colors[i % 4], fade));
+        }
+    }
+}
+
+/// The won pearl flies from the stone up into the purse in the top row,
+/// trailing sparkles. Drawn over the whole screen, above the buttons.
+fn draw_pearl_flight(f: &Frame<HopId>, g: &SceneGeom, s: &HopSession, time: f32) {
+    let Some(k) = s.win_clock() else { return };
+    if !(WIN_PEARL_LEAVES..WIN_PEARL_ARRIVES).contains(&k) {
         return;
     }
-    let end = s.toss.as_ref().map_or(0, |t| t.end());
-    let x = g.x_of(end);
-    let k = s.clock;
-    let base_y = g.surface_y - g.r * 1.2;
-    let rise = ease(k / 0.8);
-    let py = lerp(base_y, g.rect.y + g.rect.h * 0.22, rise);
-    if k < 0.9 {
-        let ring = g.r * (0.5 + k * 4.0);
-        c.circle_lines(x, base_y, ring, 4.0, with_alpha(GOLD, 1.0 - k / 0.9));
+    let Some(purse) = f.rect(HopId::PearlIcon) else { return };
+    let from = won_pearl_at(g, s);
+    let to = purse.center();
+    let u = ease((k - WIN_PEARL_LEAVES) / (WIN_PEARL_ARRIVES - WIN_PEARL_LEAVES));
+    let arc = g.r * 3.0;
+    let at = |u: f32| (lerp(from.0, to.0, u), lerp(from.1, to.1, u) - 4.0 * arc * u * (1.0 - u));
+    let c = paint::canvas(f.bounds);
+    for i in 1..6 {
+        let (tx, ty) = at((u - i as f32 * 0.04).max(0.0));
+        c.circle(tx, ty, (g.r * 0.35 - i as f32 * 1.5).max(2.0), with_alpha(GOLD, 0.7 - i as f32 * 0.1));
     }
-    for i in 0..10 {
-        let a = i as f32 / 10.0 * std::f32::consts::TAU + time * 0.8;
-        let d = g.r * (1.2 + 0.4 * (time * 3.0 + i as f32).sin()) * (0.6 + rise);
-        let sz = 2.5 + (i % 3) as f32;
-        c.circle(x + a.cos() * d, py + a.sin() * d, sz, with_alpha(GOLD, 0.85));
-    }
-    draw_pearl(c, (x, py), g.r * 0.7, time);
+    let (px, py) = at(u);
+    draw_pearl(&c, (px, py), g.r * lerp(0.75, 0.45, u), time);
 }
 
-/// A pearl with a highlight. Used on the pearl rock, in the purse, on the
-/// Again button and in Shelly's thought bubble.
+/// A pearl with a highlight: on the pearl rock, in the purse, on Again!.
 fn draw_pearl(c: &paint::Canvas, (x, y): (f32, f32), r: f32, time: f32) {
     let glint = (time * 3.0).sin() * 0.5 + 0.5;
     c.circle(x, y, r * (1.0 + 0.15 * glint), Color::new(1.0, 0.95, 0.75, 0.35));
@@ -956,13 +1106,19 @@ fn draw_hand(c: &paint::Canvas, x: f32, y: f32, pressed: bool, alpha: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use robot_buddy_domain::logic::pearl_hop::generate_round;
     use ::rand::rngs::SmallRng;
     use ::rand::SeedableRng;
+    use robot_buddy_domain::logic::pearl_hop::{generate_round, hop_reducer, HopAction, Landing};
+
+    const NOTHING: &BTreeSet<String> = &BTreeSet::new();
+
+    fn view(s: &HopSession) -> HopView<'_> {
+        HopView { session: s, pearls: 3, caption: "Find my pearl!", outfit: ShellyOutfit { worn: NOTHING, color: "red" } }
+    }
 
     fn geom(band: u8, screen: (f32, f32)) -> (HopSession, PearlHopLayout) {
         let s = HopSession::new(generate_round(band, &mut SmallRng::seed_from_u64(4)));
-        let l = layout(&HopView { session: &s, pearls: 3, caption: "My pearl is on stone 5!" }, screen);
+        let l = layout(&view(&s), screen);
         (s, l)
     }
 
@@ -971,9 +1127,25 @@ mod tests {
         for band in [1u8, 2, 3, 4, 6] {
             for &screen in &layout::SWEEP_SCREENS {
                 let (s, l) = geom(band, screen);
-                for aim in (s.round.min_aim..=s.round.max_aim).step_by(s.round.aim_step() as usize) {
+                for aim in s.round.min_aim..=s.round.max_aim {
                     let p = l.scene.drag_point_for(aim);
                     assert_eq!(l.scene.aim_for_pointer(p), Some(aim), "band {band} {screen:?} aim {aim}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pointing_at_a_stone_aims_the_first_hop_there() {
+        for band in [1u8, 3, 6] {
+            for &screen in &layout::SWEEP_SCREENS {
+                let (s, l) = geom(band, screen);
+                let g = &l.scene;
+                for aim in s.round.min_aim..=s.round.max_aim {
+                    let p = g.tap_point_for(aim);
+                    if p.0 > g.home().0 + g.reach() && p.0 < g.rect.right() {
+                        assert_eq!(g.aim_for_pointer(p), Some(aim), "band {band} {screen:?} aim {aim}");
+                    }
                 }
             }
         }
@@ -989,14 +1161,81 @@ mod tests {
 
     #[test]
     fn the_whole_path_and_the_pull_fit_on_screen() {
-        for band in [1u8, 2, 3, 4, 6] {
+        for band in [1u8, 2, 3, 4, 6, 9] {
             for &screen in &layout::SWEEP_SCREENS {
                 let (s, l) = geom(band, screen);
                 let g = &l.scene;
-                assert!(g.x_of(s.round.span_pos()) <= g.rect.right(), "band {band} {screen:?}");
+                assert!(g.x_of(s.round.span) <= g.rect.right(), "band {band} {screen:?}");
                 let (x, y) = g.drag_point_for(s.round.max_aim);
                 assert!(x >= 0.0 && y <= screen.1, "the biggest pull stays on screen: band {band} {screen:?} ({x}, {y})");
             }
         }
+    }
+
+    /// The counting stage's whole point: nothing on screen says where the
+    /// pearl is until Shelly lands on it. Not a distinct rock, not a pearl,
+    /// not a number, not a lit stone.
+    #[test]
+    fn the_counting_stage_never_shows_the_pearl_before_she_lands_on_it() {
+        for seed in 0..30u64 {
+            let round = generate_round(1, &mut SmallRng::seed_from_u64(seed));
+            let fresh = HopSession::new(round.clone());
+            let check = |s: &HopSession, when: &str| {
+                let m = scene_model(&view(s));
+                assert_eq!(m.pearl_rock, None, "{when}: no pearl rock");
+                assert_eq!(m.pearl_shown, None, "{when}: no pearl drawn");
+                assert!(!m.numbered && !m.ghost_label, "{when}: no numbers");
+                assert!(m.stones.iter().all(|st| st.label.is_none()), "{when}: unnumbered stones");
+                assert!(m.stones.last().unwrap().pos > round.pearl, "{when}: the row runs on past the pearl");
+                assert_eq!(m.target, TargetView::Dots { n: round.pearl, ticked: 0 }, "{when}: the target is dots");
+            };
+            check(&fresh, "aiming");
+            assert!(scene_model(&view(&fresh)).stones.iter().all(|st| st.lit == Lit::Dark), "every stone looks the same");
+            // Aimed right at it, mid-air: still hidden.
+            let mut s = hop_reducer(hop_reducer(fresh.clone(), HopAction::Aim { at: round.pearl }), HopAction::Toss);
+            s = hop_reducer(s, HopAction::Tick { dt: 0.2 });
+            check(&s, "mid-air");
+            // A miss, counted out: dots tick, no pearl.
+            let short = round.pearl - 1;
+            let mut m = hop_reducer(hop_reducer(fresh.clone(), HopAction::Aim { at: short }), HopAction::Toss);
+            while m.phase == HopPhase::Flying {
+                m = hop_reducer(m, HopAction::Tick { dt: 0.1 });
+            }
+            assert_eq!(m.toss.as_ref().unwrap().landing, Landing::Short);
+            // Let the count finish (and no further: then she shrugs home).
+            while m.clock < m.tally_secs() + 0.1 {
+                m = hop_reducer(m, HopAction::Tick { dt: 0.05 });
+            }
+            let model = scene_model(&view(&m));
+            assert_eq!(model.pearl_shown, None, "a short toss never reveals it");
+            assert_eq!(model.target, TargetView::Dots { n: round.pearl, ticked: short }, "dots left over");
+        }
+    }
+
+    #[test]
+    fn too_far_is_counted_past_the_last_dot() {
+        let round = generate_round(1, &mut SmallRng::seed_from_u64(2));
+        let mut s = hop_reducer(hop_reducer(HopSession::new(round.clone()), HopAction::Aim { at: round.pearl + 2 }), HopAction::Toss);
+        for _ in 0..80 {
+            s = hop_reducer(s, HopAction::Tick { dt: 0.05 });
+        }
+        let m = scene_model(&view(&s));
+        let past = m.stones.iter().filter(|st| st.lit == Lit::PastTarget).count();
+        assert_eq!(past, 2, "two stones past the dots");
+        assert_eq!(m.pearl_shown, None);
+    }
+
+    #[test]
+    fn x_hops_echo_the_skip_count() {
+        let round = generate_round(6, &mut SmallRng::seed_from_u64(9));
+        let size = round.pearl / round.hops as u16;
+        let mut s = hop_reducer(hop_reducer(HopSession::new(round.clone()), HopAction::Aim { at: size }), HopAction::Toss);
+        for _ in 0..400 {
+            s = hop_reducer(s, HopAction::Tick { dt: 0.05 });
+        }
+        let m = scene_model(&view(&s));
+        let counts: Vec<u16> = m.hop_counts.iter().map(|&(_, n)| n).collect();
+        let want: Vec<u16> = (1..=round.hops as u16).map(|i| i * size).collect();
+        assert_eq!(counts, want, "{} in {} hops reads as {size}, {}, …", round.pearl, round.hops, size * 2);
     }
 }

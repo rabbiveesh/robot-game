@@ -2093,7 +2093,7 @@ fn pearl_hop_wins_since(h: &Harness, mark: usize) -> Vec<(HopStage, u8, u32)> {
 /// pearl plus the clean bonus; "Again!" deals a fresh round.
 #[test]
 fn every_stage_pays_a_pearl_and_a_first_try_bonus() {
-    for (band, stage) in [(1u8, HopStage::Count), (2, HopStage::SkipCount), (3, HopStage::Hops), (4, HopStage::Estimate)] {
+    for (band, stage) in [(1u8, HopStage::Count), (2, HopStage::SkipCount), (3, HopStage::Hops), (6, HopStage::Hops)] {
         let mut h = on_the_reef(40 + band as u64, band);
         h.open_pearl_hop();
         h.skip_shelly_demo();
@@ -2164,6 +2164,82 @@ fn each_toss_feeds_the_adaptive_system_silently() {
         let after = h.game.profile.operation_stats.get_coarse(op).attempts;
         assert_eq!(after, before + 2, "band {band}: both tosses logged under {op:?}");
     }
+}
+
+/// On a native Linux touchscreen a held finger reports no motion and no
+/// release, so the slingshot can't be drawn back. Picking Shelly up and then
+/// tapping a stone tosses her there instead — at every stage.
+#[test]
+fn shelly_can_be_tossed_by_tapping_where_she_should_land() {
+    for band in [1u8, 2, 3] {
+        let mut h = on_the_reef(30 + band as u64, band);
+        h.open_pearl_hop();
+        h.skip_shelly_demo();
+        let miss = h.missing_aim(true);
+        h.toss_shelly_by_taps(miss);
+        assert_eq!(h.game.pearls, 0, "band {band}: a tapped miss is still a miss");
+        let aim = h.winning_aim();
+        h.toss_shelly_by_taps(aim);
+        assert_eq!(h.game.pearls, 1, "band {band}: a tapped hit pays (second try: no bonus)");
+    }
+}
+
+/// The counting stage only shows dots and identical stones: the pearl's
+/// stone isn't exposed until Shelly lands on it, so pulling until a ring
+/// sits on the pearl can't work — the kid has to count.
+#[test]
+fn the_counting_stage_hides_the_pearl_until_she_lands_on_it() {
+    use robot_buddy_game::ui::pearl_hop::TargetView;
+    let mut h = on_the_reef(14, 1);
+    h.open_pearl_hop();
+    h.skip_shelly_demo();
+    let pearl = h.pearl_hop_round().pearl;
+    let scene = h.game.pearl_hop_scene().unwrap();
+    assert_eq!(scene.pearl_shown, None, "no pearl on screen");
+    assert_eq!(scene.pearl_rock, None, "no special rock");
+    assert!(scene.stones.iter().all(|s| s.label.is_none()), "no numbers on the stones");
+    assert!(scene.stones.len() as u16 > pearl, "stones run on past the pearl");
+    assert_eq!(scene.target, TargetView::Dots { n: pearl, ticked: 0 }, "the target is {pearl} dots");
+
+    h.toss_shelly(pearl - 1);
+    assert_eq!(h.game.pearl_hop_scene().unwrap().pearl_shown, None, "a short toss doesn't give it away");
+    h.toss_shelly(pearl);
+    assert_eq!(h.game.pearls, 1, "counting right finds it");
+}
+
+/// Swag is the same everywhere: Shelly wearing a hat on the reef is wearing
+/// it while she's flung across the water too.
+#[test]
+fn shelly_keeps_her_swag_on_in_pearl_hop() {
+    // Buy a hat from Bolt on the dev map, then hand it to Shelly on the reef.
+    let mut h = Harness::new(15);
+    h.start_dev_game();
+    h.game.profile.math_band = 1;
+    {
+        use robot_buddy_game::tilemap::Map;
+        use robot_buddy_game::npc as npc_mod;
+        h.walk_to_npc(NpcKind::Shopkeeper);
+        h.interact();
+        h.select_option("shop");
+        h.wait_until(|g| g.state == GameState::Shop);
+        h.buy_shop_item("hat");
+        h.close_shop();
+        h.game.map = Map::reef();
+        h.game.npcs = npc_mod::npcs_for_map("reef");
+        h.game.npcs_offstage.clear();
+        h.warp_to(5, 13);
+    }
+    h.walk_to_npc(NpcKind::Clam);
+    h.interact();
+    h.select_option("swag");
+    h.wait_until(|g| g.state == GameState::Swag);
+    h.give_swag("hat");
+    h.close_swag();
+    assert!(h.game.swag_worn_by("clam").contains("hat"), "Shelly is wearing it on the reef");
+
+    h.open_pearl_hop();
+    let scene = h.game.pearl_hop_scene().unwrap();
+    assert_eq!(scene.shelly_wears, vec!["hat".to_string()], "...and in Pearl Hop");
 }
 
 /// Keyboard players aim a stone at a time with the arrows and toss with

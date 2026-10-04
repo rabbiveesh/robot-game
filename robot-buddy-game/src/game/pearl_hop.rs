@@ -9,7 +9,7 @@ use robot_buddy_domain::logic::pearl_hop::{
     generate_round, hop_reducer, HopAction, HopPhase, HopRound, HopSession, HopStage, Landing, Toss,
 };
 use robot_buddy_domain::types::SubSkill;
-use crate::ui::pearl_hop::{HopArt, HopInput, HopView};
+use crate::ui::pearl_hop::{HopArt, HopInput, HopView, ShellyOutfit, WIN_PEARL_ARRIVES};
 
 /// The key Shelly's first-time show-off is remembered under.
 pub const PEARL_HOP_DEMO: &str = "pearl_hop";
@@ -20,6 +20,17 @@ pub struct ActivePearlHop {
     /// Pearls one find is worth here, before the bonuses: the trench Shelly
     /// pays double, which is part of what the dive down is for.
     pub base: u32,
+    /// Shelly's wearer id: whose swag she has on (the same as in the world).
+    pub host: String,
+    /// The pearls just won, still flying to the purse: the purse shows them
+    /// only once they land.
+    in_flight: u32,
+    /// Stones counted out loud so far in the current landing (counting stage).
+    tally_spoken: u16,
+    /// The reaction (or the cheer) has been said for the current landing.
+    reacted: bool,
+    /// The win's caption, held until the count reaches the pearl.
+    won_caption: String,
     /// The pointer while Shelly is being pulled back (the kid's, or the
     /// demo's pretend one).
     pub pull_to: Option<(f32, f32)>,
@@ -67,15 +78,22 @@ pub(super) fn pearl_hop_base(home_map: &str) -> u32 {
     if home_map == "trench" { 2 } else { 1 }
 }
 
-/// Shelly's opener: where the pearl is and, past the first stage, the one
-/// rule of the round. Spoken, and captioned for a reading grown-up.
+/// What Shelly says to open a round: the number, and the one rule.
 fn opening_line(round: &HopRound) -> String {
     let p = round.pearl;
     match round.stage {
-        HopStage::Count => format!("My pearl is on stone {p}! Fling me there!"),
-        HopStage::SkipCount => format!("I always hop the same size! Get me to my pearl on {p}!"),
-        HopStage::Hops => format!("Get me to my pearl on {p} in {} hops!", round.hops),
-        HopStage::Estimate => format!("My pearl sank at {p}! The far rock is {}.", round.span),
+        HopStage::Count => format!("{p}! My pearl is {p} stones away. Count them!"),
+        HopStage::SkipCount => format!("I always hop the same size! My pearl is on {p}!"),
+        HopStage::Hops => format!("My pearl is on {p}. Get me there in {} hops!", round.hops),
+    }
+}
+
+/// The few words on screen for a grown-up reading along. The dots, the
+/// bubbles and Shelly's voice carry the round for the kid.
+fn opening_caption(round: &HopRound) -> String {
+    match round.stage {
+        HopStage::Count => "Find my pearl!".to_string(),
+        HopStage::SkipCount | HopStage::Hops => format!("Hop to {}!", round.pearl),
     }
 }
 
@@ -84,16 +102,15 @@ fn opening_line(round: &HopRound) -> String {
 fn demo_miss_aim(round: &HopRound) -> u16 {
     let wins = round.winning_aims();
     let first = wins.first().copied().unwrap_or(round.min_aim);
-    let over = (first..=round.max_aim)
-        .step_by(round.aim_step().max(1) as usize)
-        .find(|&a| round.resolve(a).landing == Landing::Past);
+    let over = (first..=round.max_aim).find(|&a| round.resolve(a).landing == Landing::Past);
     over.or_else(|| (round.min_aim..=round.max_aim).find(|&a| round.resolve(a).landing != Landing::Pearl))
         .unwrap_or(round.max_aim)
 }
 
 impl Game {
-    /// Open Pearl Hop for a Shelly whose finds are worth `base` pearls.
-    pub(super) fn start_pearl_hop(&mut self, base: u32) {
+    /// Open Pearl Hop for Shelly (`host`, her wearer id), whose finds are
+    /// worth `base` pearls.
+    pub(super) fn start_pearl_hop(&mut self, base: u32, host: String) {
         let round = generate_round(self.profile.math_band, &mut self.rng);
         self.events.push(GameEvent::PearlHopStarted { stage: round.stage, pearl: round.pearl });
         let line = opening_line(&round);
@@ -104,11 +121,16 @@ impl Game {
             HopDemo { step: DemoStep::SelfToss, clock: 0.0, miss_aim, show_aim }
         });
         self.active_pearl_hop = Some(ActivePearlHop {
+            caption: opening_caption(&round),
             session: HopSession::new(round),
             base,
+            host,
+            in_flight: 0,
+            tally_spoken: 0,
+            reacted: false,
+            won_caption: String::new(),
             pull_to: None,
             demo,
-            caption: line,
             counted: 0,
             aim_started: self.game_time,
             toss_ms: 0.0,
@@ -117,10 +139,28 @@ impl Game {
         self.set_state(GameState::PearlHop);
     }
 
-    /// The panel's layout for this frame (step and render both use it).
-    pub fn pearl_hop_layout(&self, screen: (f32, f32)) -> Option<ui::pearl_hop::PearlHopLayout> {
+    /// What Pearl Hop shows this frame (step, render and tests all read it).
+    pub fn pearl_hop_view(&self) -> Option<HopView<'_>> {
         let a = self.active_pearl_hop.as_ref()?;
-        Some(ui::pearl_hop::layout(&HopView { session: &a.session, pearls: self.pearls, caption: &a.caption }, screen))
+        // The won pearls land in the purse when they arrive, not before.
+        let arriving = a.session.win_clock().is_some_and(|c| c < WIN_PEARL_ARRIVES) || a.session.win_clock().is_none();
+        let pearls = if a.session.phase == HopPhase::Won && arriving { self.pearls.saturating_sub(a.in_flight) } else { self.pearls };
+        Some(HopView {
+            session: &a.session,
+            pearls,
+            caption: &a.caption,
+            outfit: ShellyOutfit { worn: self.wardrobe.worn_by(&a.host), color: self.outfit_color(&a.host) },
+        })
+    }
+
+    /// The panel's layout for this frame.
+    pub fn pearl_hop_layout(&self, screen: (f32, f32)) -> Option<ui::pearl_hop::PearlHopLayout> {
+        Some(ui::pearl_hop::layout(&self.pearl_hop_view()?, screen))
+    }
+
+    /// What the scene shows right now (see `ui::pearl_hop::scene_model`).
+    pub fn pearl_hop_scene(&self) -> Option<ui::pearl_hop::SceneModel> {
+        Some(ui::pearl_hop::scene_model(&self.pearl_hop_view()?))
     }
 
     /// One frame of Pearl Hop.
@@ -150,8 +190,8 @@ impl Game {
 
         if a.session.phase == HopPhase::Won {
             if matches!(tap, Some(HopInput::Again)) || matches!(key, Some(HopInput::Again)) {
-                let base = a.base;
-                self.start_pearl_hop(base);
+                let (base, host) = (a.base, a.host.clone());
+                self.start_pearl_hop(base, host);
                 return;
             }
             self.tick_pearl_hop(dt);
@@ -176,7 +216,11 @@ impl Game {
         }
         if pulling {
             let aim = g.aim_for_pointer(pos);
-            if input.mouse_down && !input.mouse_released {
+            // Let go on a release — or on a fresh press while she's held,
+            // which is how a native Linux touchscreen "drops" (it reports no
+            // motion and no release): press Shelly, then tap where she goes.
+            let let_go = input.mouse_released || !input.mouse_down || input.mouse_clicked;
+            if !let_go {
                 self.active_pearl_hop.as_mut().unwrap().pull_to = Some(pos);
                 if let Some(aim) = aim {
                     self.set_pearl_hop_aim(aim);
@@ -195,8 +239,7 @@ impl Game {
         match key {
             Some(HopInput::Nudge(d)) => {
                 let s = &self.active_pearl_hop.as_ref().unwrap().session;
-                let step = s.round.aim_step() as i32;
-                let next = (s.aim as i32 + d * step).clamp(s.round.min_aim as i32, s.round.max_aim as i32) as u16;
+                let next = (s.aim as i32 + d).clamp(s.round.min_aim as i32, s.round.max_aim as i32) as u16;
                 self.set_pearl_hop_aim(next);
             }
             Some(HopInput::Toss) => self.toss_shelly(),
@@ -204,15 +247,14 @@ impl Game {
         }
     }
 
-    /// Move the aim; on the stones, Shelly counts the hop out loud as it
-    /// snaps from stone to stone ("one… two… three…").
+    /// Move the aim; Shelly counts the hop out loud as it snaps from stone to
+    /// stone ("one… two… three…").
     fn set_pearl_hop_aim(&mut self, aim: u16) {
         let a = self.active_pearl_hop.as_mut().unwrap();
         let before = a.session.aim;
         a.session = hop_reducer(a.session.clone(), HopAction::Aim { at: aim });
-        let s = &a.session;
-        if s.aim != before && s.round.stage != HopStage::Estimate {
-            audio::tts::speak("Shelly", &(s.aim / s.round.scale).to_string());
+        if a.session.aim != before {
+            audio::tts::speak("Shelly", &a.session.aim.to_string());
         }
     }
 
@@ -221,6 +263,8 @@ impl Game {
         let a = self.active_pearl_hop.as_mut().unwrap();
         a.session = hop_reducer(a.session.clone(), HopAction::Toss);
         a.counted = 0;
+        a.tally_spoken = 0;
+        a.reacted = false;
         a.toss_ms = ((now - a.aim_started).max(0.0) * 1000.0) as f64;
         a.caption = "Wheee!".to_string();
         audio::tts::speak("Shelly", "Wheee!");
@@ -243,15 +287,23 @@ impl Game {
                 HopPhase::Aiming => a.counted,
             };
             while a.counted < reached {
-                audio::tts::speak("Shelly", &(t.landings[a.counted] / s.round.scale).to_string());
+                audio::tts::speak("Shelly", &(t.landings[a.counted]).to_string());
                 a.counted += 1;
             }
+        }
+
+        // Counting stage: the stones she covered are counted out loud, one
+        // per stone as they light up, before anything else is said.
+        while a.tally_spoken < s.tallied() {
+            a.tally_spoken += 1;
+            audio::tts::speak("Shelly", &a.tally_spoken.to_string());
         }
 
         let after = s.phase;
         if before == HopPhase::Flying && after != HopPhase::Flying {
             self.pearl_hop_landed();
         }
+        self.pearl_hop_react();
         if after == HopPhase::Aiming && before != HopPhase::Aiming {
             let a = self.active_pearl_hop.as_mut().unwrap();
             a.aim_started = now;
@@ -266,38 +318,44 @@ impl Game {
             (s.round.stage, s.toss.clone().unwrap(), s.tosses, a.toss_ms, a.base, s.was_clean())
         };
         let round = self.active_pearl_hop.as_ref().unwrap().session.round.clone();
-        self.log_pearl_hop_toss(&round, &toss, tosses, ms);
+        self.log_pearl_hop_toss(&round, &toss, ms);
 
-        let line = match toss.landing {
-            Landing::Pearl => {
-                // Base for this Shelly's pearl, +1 for getting it first
-                // toss, +1 more with Hermie's Diving Net.
-                let payout = domain_shop::pearl_payout(base, 1, clean, &self.upgrades);
-                let paid = self.award_pearls(payout);
-                self.events.push(GameEvent::PearlHopWon { stage, tosses, pearls: payout.total() });
-                audio::tts::speak("Shelly", "You found my pearl!");
-                self.persist();
-                format!("You found my pearl!  {paid}")
-            }
-            _ if toss.near => {
-                audio::tts::speak("Shelly", "Ooh, so close!");
-                "Ooh, SO close! Try again!".to_string()
-            }
-            Landing::Past => {
-                audio::tts::speak("Shelly", "Sploosh! Just past it!");
-                "Sploosh! Just past it. Try again!".to_string()
-            }
-            Landing::Short => {
-                if stage == HopStage::Estimate {
-                    audio::tts::speak("Shelly", "Sploosh! Not far enough!");
-                    "Sploosh! Not quite that far. Try again!".to_string()
-                } else {
-                    audio::tts::speak("Shelly", "Boing! Not there yet!");
-                    "Boing! Not there yet. Try again!".to_string()
-                }
-            }
+        if toss.landing == Landing::Pearl {
+            // Base for this Shelly's pearl, +1 for getting it first toss, +1
+            // more with Hermie's Diving Net. Paid now; it lands in the purse
+            // when the pearl's flight does.
+            let payout = domain_shop::pearl_payout(base, 1, clean, &self.upgrades);
+            let paid = self.award_pearls(payout);
+            self.events.push(GameEvent::PearlHopWon { stage, tosses, pearls: payout.total() });
+            self.persist();
+            let a = self.active_pearl_hop.as_mut().unwrap();
+            a.in_flight = payout.total();
+            // Shown once the count reaches the pearl (see pearl_hop_react).
+            a.won_caption = format!("My pearl!  {paid}");
+        }
+    }
+
+    /// Say the landing's line once its count is done: the cheer as the pearl
+    /// pops, or the funny reaction to a miss. Never "wrong".
+    fn pearl_hop_react(&mut self) {
+        let a = self.active_pearl_hop.as_mut().unwrap();
+        let s = &a.session;
+        if a.reacted || !matches!(s.phase, HopPhase::Landed | HopPhase::Won) || s.clock < s.tally_secs() {
+            return;
+        }
+        a.reacted = true;
+        let water = s.lands_in_water();
+        let won = a.won_caption.clone();
+        let (said, shown) = match s.toss.as_ref().map(|t| t.landing) {
+            Some(Landing::Pearl) => ("Yaaay! My pearl! You found it!", Some(won.as_str())),
+            Some(Landing::Past) if water => ("Sploosh! Too far!", Some("Sploosh! Too far!")),
+            Some(Landing::Past) => ("Whoa, too far!", Some("Whoa! Too far!")),
+            _ => ("Boing! Not there yet!", Some("Boing! Not there yet!")),
         };
-        self.active_pearl_hop.as_mut().unwrap().caption = line;
+        if let Some(shown) = shown {
+            a.caption = shown.to_string();
+        }
+        audio::tts::speak("Shelly", said);
     }
 
     /// Stealth assessment: every toss is a data point for the adaptive
@@ -305,28 +363,25 @@ impl Game {
     ///
     /// Counting → Add/AddSingle (counting on from zero), concrete stones.
     /// Skip counting → Multiply (hop × hops), on the number path.
-    /// K hops → Divide (the pearl split into K equal hops).
-    /// Estimation has no `Operation`; it goes to the parent log only, so it
-    /// can't move the arithmetic band.
-    fn log_pearl_hop_toss(&mut self, round: &HopRound, toss: &Toss, tosses: u8, ms: f64) {
+    /// X hops → Divide (the pearl split into X equal hops); abstract from
+    /// band 5, where the numbers outgrow counting stones one by one.
+    fn log_pearl_hop_toss(&mut self, round: &HopRound, toss: &Toss, ms: f64) {
         let correct = toss.landing == Landing::Pearl;
         let band = self.profile.math_band;
         let hops = toss.landings.len() as i32;
-        let aim = (toss.aim / round.scale) as i32;
+        let aim = (toss.aim) as i32;
         let pearl = round.pearl as i32;
-        let (op_name, assessed): (&str, Option<(Operation, SubSkill, CraStage)>) = match round.stage {
-            HopStage::Count => ("count", Some((Operation::Add, SubSkill::AddSingle, CraStage::Concrete))),
-            HopStage::SkipCount => (
-                "skip_count",
-                Some((Operation::Multiply, classify_multiplication(aim.max(1), hops.max(1)), CraStage::Representational)),
-            ),
-            HopStage::Hops => (
-                "divide",
-                Some((Operation::Divide, classify_division(pearl, round.hops.max(1) as i32), CraStage::Representational)),
-            ),
-            HopStage::Estimate => ("estimate", None),
+        let (op_name, operation, sub_skill, cra) = match round.stage {
+            HopStage::Count => ("count", Operation::Add, SubSkill::AddSingle, CraStage::Concrete),
+            HopStage::SkipCount => {
+                ("skip_count", Operation::Multiply, classify_multiplication(aim.max(1), hops.max(1)), CraStage::Representational)
+            }
+            HopStage::Hops => {
+                let cra = if band >= 5 { CraStage::Abstract } else { CraStage::Representational };
+                ("divide", Operation::Divide, classify_division(pearl, round.hops.max(1) as i32), cra)
+            }
         };
-        if let Some((operation, sub_skill, cra)) = assessed {
+        {
             self.profile = learner_reducer(self.profile.clone(), LearnerEvent::PuzzleAttempted {
                 correct,
                 operation,
@@ -343,8 +398,8 @@ impl Game {
         // One record per toss in the parent log and the saved attempt log:
         // the toss's answer is where she came down (counting, skip counting)
         // or the hop size picked (X hops).
-        if let Some((operation, sub_skill, cra)) = assessed {
-            let end = (toss.end() / round.scale) as i32;
+        {
+            let end = toss.end() as i32;
             let (a, b, correct_answer, answer) = match round.stage {
                 HopStage::Hops => (pearl, round.hops as i32, pearl / round.hops.max(1) as i32, aim),
                 HopStage::SkipCount => (aim, hops, pearl, end),
@@ -373,7 +428,6 @@ impl Game {
             self.session_log.record_challenge(record.clone());
             self.attempt_log = std::mem::take(&mut self.attempt_log).record(record);
         }
-        let _ = tosses;
         self.events.push(GameEvent::PearlHopTossed {
             stage: round.stage,
             aim: toss.aim,
@@ -461,8 +515,10 @@ impl Game {
         a.pull_to = None;
         a.session = hop_reducer(a.session.clone(), HopAction::Reset);
         a.counted = 0;
+        a.tally_spoken = 0;
+        a.reacted = false;
         a.aim_started = self.game_time;
-        a.caption = opening_line(&a.session.round);
+        a.caption = opening_caption(&a.session.round);
         if self.seen_demos.insert(PEARL_HOP_DEMO.to_string()) {
             self.events.push(GameEvent::PearlHopDemoSeen);
             self.persist();

@@ -678,7 +678,7 @@ impl Harness {
         use robot_buddy_domain::logic::pearl_hop::Landing;
         let r = self.pearl_hop_round();
         let want = if past { Landing::Past } else { Landing::Short };
-        (r.min_aim..=r.max_aim).step_by(r.aim_step() as usize)
+        (r.min_aim..=r.max_aim)
             .find(|&a| r.resolve(a).landing == want)
             .unwrap_or_else(|| panic!("no {want:?} aim in {r:?}"))
     }
@@ -713,14 +713,33 @@ impl Harness {
         self.wait_for_shelly();
     }
 
-    /// Let the toss in the air finish: she's on the pearl, or (after a miss)
-    /// back on her rock ready to go again.
+    /// Let the toss play out: the win's celebration is over (Again! is up),
+    /// or after a miss she's back on her rock ready to go again.
     pub fn wait_for_shelly(&mut self) {
         use robot_buddy_domain::logic::pearl_hop::HopPhase;
         self.run_until(
-            |g| g.active_pearl_hop().is_none_or(|a| matches!(a.session.phase, HopPhase::Won | HopPhase::Aiming)),
-            1200,
+            |g| g.active_pearl_hop().is_none_or(|a| a.session.phase == HopPhase::Aiming || a.session.win_done()),
+            1500,
         );
+    }
+
+    /// Toss Shelly the way a native Linux touchscreen can: it reports a
+    /// press, then no motion and no release while the finger is down. Press
+    /// Shelly to pick her up, then tap the stone she should land on.
+    pub fn toss_shelly_by_taps(&mut self, aim: u16) {
+        let l = self.game.pearl_hop_layout(SCREEN).expect("toss_shelly_by_taps: Pearl Hop isn't open");
+        let (hx, hy) = l.scene.home();
+        let target = l.scene.tap_point_for(aim);
+        self.step(&FrameInput::empty().with_mouse_click(hx, hy));
+        for _ in 0..5 {
+            // Held, no motion, no release: still at the press point.
+            self.step(&FrameInput::empty().with_mouse_held(hx, hy));
+        }
+        self.step(&FrameInput::empty().with_mouse_click(target.0, target.1));
+        for _ in 0..3 {
+            self.step(&FrameInput::empty().with_mouse_held(target.0, target.1));
+        }
+        self.wait_for_shelly();
     }
 
     /// Tap Pearl Hop's Leave button.

@@ -64,7 +64,7 @@ robot-buddy-domain/              # Pure Rust domain (no browser deps)
                                  #   manipulate_concrete, number_line, base_ten,
                                  #   descent (the dive shaft that gates the trench),
                                  #   pearl_hop (Shelly's slingshot number path: count,
-                                 #   skip-count, K hops = divide, open-water estimate)
+                                 #   skip-count, X hops = divide, growing with the band)
     quest/                       # Quest data model + step reducer + micro-quest gen
     world/                       # movement resolver, random encounters
     text/                        # voice_parser (spoken-number → integer)
@@ -84,7 +84,8 @@ robot-buddy-game/                # Macroquad game (depends on domain)
     save.rs                      # SaveBackend trait + LocalStorageBackend (prod) + InMemoryBackend (tests)
     tilemap.rs, npc.rs, session.rs, settings.rs
     sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit),
-                                 #   attract (the "game here!" beacon over minigame hosts)
+                                 #   attract (the "game here!" beacon over minigame hosts),
+                                 #   dressed (THE way a character is drawn: body + swag, posed)
     ui/                          # challenge, concrete (hands-on "Show me" workspace), descent, dialogue, hud, interaction_menu, pearl_hop, shop, swag, swatches, title_screen, settings_overlay, visuals
       layout/                    # declarative layout (ADR-004): node tree → LayoutEngine → Frame
                                  #   (placed text + hit targets) read by BOTH draw and click;

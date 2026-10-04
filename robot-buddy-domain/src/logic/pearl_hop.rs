@@ -10,7 +10,11 @@
 //! | `Count`     | one hop of `aim` stones                    | counting, 1:1      |
 //! | `SkipCount` | hops of `aim`, repeated until she reaches or passes the pearl | skip counting |
 //! | `Hops`      | exactly `hops` equal hops of `aim`         | division (inverse) |
-//! | `Estimate`  | one hop to `aim` on an unmarked 0..span line | magnitude estimation |
+//!
+//! The counting stage hides the pearl under one of a row of identical
+//! stones and shows the target as dots, so counting the stones is the only
+//! way to find it. From band 3 up, "my pearl in X hops" grows with the band:
+//! bigger pearls, more hops, times tables past 2, 3 and 5.
 //!
 //! Nothing here can fail. Short and she shrugs on a plain stone; long and she
 //! splashes into open water and paddles back. Tosses are unlimited and
@@ -30,13 +34,21 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 
 /// Seconds for one hop in the air. The single long hop of the counting stage
-/// and the estimation stage takes a bit longer so it reads as a big fling.
+/// takes a bit longer so it reads as a big fling.
 pub const HOP_SECS: f32 = 0.55;
 pub const BIG_HOP_SECS: f32 = 0.95;
 /// Landed short on a plain stone: bonk, wobble, shrug, hop home.
 pub const SHRUG_SECS: f32 = 1.8;
 /// Sailed past: splash, bob up, paddle back to the start rock.
 pub const SPLASH_SECS: f32 = 2.4;
+/// Counting stage: after she lands, the stones she covered light up one at
+/// a time with her count ("one… two… three…") before anything else happens.
+pub const TALLY_STEP_SECS: f32 = 0.42;
+/// The win: the pearl pops, Shelly flips, the pearl flies to the purse.
+pub const WIN_SECS: f32 = 1.8;
+/// Stones in the counting stage's row. Always the same, so the row's length
+/// never gives away where the pearl is.
+pub const COUNT_STONES: u16 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -48,62 +60,40 @@ pub enum HopStage {
     SkipCount,
     /// "Reach the pearl in K hops": the kid picks the hop size.
     Hops,
-    /// No stones: land near a number on an open-water line.
-    Estimate,
 }
 
 impl HopStage {
     /// Which stage a learner at `band` plays. The youngest count; then skip
-    /// counting, then its inverse, then estimation.
+    /// counting; then its inverse, division, which keeps growing with the band.
     pub fn for_band(band: u8) -> HopStage {
         match band {
             0 | 1 => HopStage::Count,
             2 => HopStage::SkipCount,
-            3 => HopStage::Hops,
-            _ => HopStage::Estimate,
+            _ => HopStage::Hops,
         }
     }
 }
 
-/// One pearl's worth of puzzle.
-///
-/// All positions (aim, landings, the pearl) are measured in *sub-units*:
-/// `scale` of them per number on the path. Stones are whole numbers, so the
-/// stone stages use `scale == 1`; the estimation line is continuous, so it
-/// uses tenths.
+/// One pearl's worth of puzzle. Positions (aim, landings, the pearl) are
+/// stone numbers; the start rock is 0.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HopRound {
     pub stage: HopStage,
-    /// The pearl's number: its stone, or its value on the estimation line.
+    /// The stone the pearl is on.
     pub pearl: u16,
-    /// The last number drawn. Stone stages: open water runs from the pearl
-    /// rock to here. Estimate: the far end of the line (10, 20 or 100).
+    /// The last position drawn. Counting: the row's last stone. The other
+    /// stages: open water runs from the pearl rock to here.
     pub span: u16,
-    /// Hops per toss: 1 (Count, Estimate), K (Hops), or 0 for "repeat until
-    /// she reaches or passes the pearl" (SkipCount).
+    /// Hops per toss: 1 (Count), K (Hops), or 0 for "repeat until she
+    /// reaches or passes the pearl" (SkipCount).
     pub hops: u8,
-    /// Sub-units per number (1 for stones, 10 for the estimation line).
-    pub scale: u16,
-    /// The smallest and largest aim a pull can set, in sub-units.
+    /// The smallest and largest aim (hop size) a pull can set.
     pub min_aim: u16,
     pub max_aim: u16,
-    /// How close to the pearl counts as landing on it, in sub-units. Zero on
-    /// the stones (you land on it or you don't).
-    pub tolerance: u16,
 }
 
 impl HopRound {
-    /// The pearl's position in sub-units.
-    pub fn pearl_pos(&self) -> u16 {
-        self.pearl * self.scale
-    }
-
-    /// The far end of the path in sub-units.
-    pub fn span_pos(&self) -> u16 {
-        self.span * self.scale
-    }
-
     /// Every spot Shelly touches down on for a toss of `aim`, in order. The
     /// last one is where she ends up.
     pub fn landings(&self, aim: u16) -> Vec<u16> {
@@ -113,7 +103,7 @@ impl HopRound {
                 // Repeat the hop until she reaches or passes the pearl.
                 let mut out = Vec::new();
                 let mut at = 0u16;
-                while at < self.pearl_pos() {
+                while at < self.pearl {
                     at = at.saturating_add(aim);
                     out.push(at);
                 }
@@ -128,20 +118,13 @@ impl HopRound {
     pub fn resolve(&self, aim: u16) -> Toss {
         let landings = self.landings(aim);
         let end = *landings.last().unwrap_or(&0);
-        let pearl = self.pearl_pos();
-        let off = end.abs_diff(pearl);
-        let landing = if off <= self.tolerance {
-            Landing::Pearl
-        } else if end < pearl {
-            Landing::Short
-        } else {
-            Landing::Past
+        let pearl = self.pearl;
+        let landing = match end.cmp(&pearl) {
+            std::cmp::Ordering::Equal => Landing::Pearl,
+            std::cmp::Ordering::Less => Landing::Short,
+            std::cmp::Ordering::Greater => Landing::Past,
         };
-        // "So close!" — only meaningful where closeness is the skill.
-        let near = landing != Landing::Pearl
-            && self.stage == HopStage::Estimate
-            && off <= self.tolerance.saturating_mul(2);
-        Toss { aim, landings, landing, near }
+        Toss { aim, landings, landing }
     }
 
     /// Every aim in range that lands on the pearl. Never empty for a
@@ -152,13 +135,22 @@ impl HopRound {
             .collect()
     }
 
-    /// One arrow-key press worth of aim: a stone on the stones, a
-    /// twentieth of the line out on open water.
-    pub fn aim_step(&self) -> u16 {
+    /// The last position with a stone to land on. Past it is open water.
+    /// The counting stage's row runs on past the (hidden) pearl; the other
+    /// stages end at the pearl's rock.
+    pub fn last_stone(&self) -> u16 {
         match self.stage {
-            HopStage::Estimate => (self.span_pos() / 20).max(1),
-            _ => self.scale,
+            HopStage::Count => self.span,
+            HopStage::SkipCount | HopStage::Hops => self.pearl,
         }
+    }
+
+    /// Does this stage hide the pearl until Shelly lands on it? At the
+    /// counting stage the pearl's stone looks like every other stone, so the
+    /// only way to find it is to count. Later stages name the pearl's stone:
+    /// the maths there is picking the hop that reaches it.
+    pub fn pearl_hidden(&self) -> bool {
+        self.stage == HopStage::Count
     }
 
     /// The first aim a fresh round starts at: the smallest pull there is.
@@ -172,8 +164,7 @@ impl HopRound {
 pub enum Landing {
     /// On the pearl. It pops.
     Pearl,
-    /// Came down before the pearl: on a plain stone (or open water, on the
-    /// estimation line). She shrugs and hops home.
+    /// Came down before the pearl, on a plain stone. She shrugs and hops home.
     Short,
     /// Sailed past the pearl: splash, paddle back.
     Past,
@@ -186,12 +177,10 @@ pub struct Toss {
     pub aim: u16,
     pub landings: Vec<u16>,
     pub landing: Landing,
-    /// A near miss on the estimation line: she wobbles on the edge of it.
-    pub near: bool,
 }
 
 impl Toss {
-    /// Where she finally comes down, in sub-units.
+    /// Where she finally comes down.
     pub fn end(&self) -> u16 {
         *self.landings.last().unwrap_or(&0)
     }
@@ -204,8 +193,8 @@ pub enum HopPhase {
     Aiming,
     /// In the air (possibly several hops).
     Flying,
-    /// Came down somewhere that isn't the pearl; reacting (shrug / splash /
-    /// wobble), then back to the rock. Never an ending.
+    /// Came down somewhere that isn't the pearl; reacting (count, shrug or
+    /// splash), then back to the rock. Never an ending.
     Landed,
     /// On the pearl. The round is over until it's reset.
     Won,
@@ -215,7 +204,7 @@ pub enum HopPhase {
 #[serde(rename_all = "camelCase")]
 pub struct HopSession {
     pub round: HopRound,
-    /// The current pull, in sub-units. Kept between tosses, so after a miss
+    /// The current pull (hop size). Kept between tosses, so after a miss
     /// the kid adjusts from where they were instead of starting over.
     pub aim: u16,
     pub phase: HopPhase,
@@ -254,7 +243,7 @@ impl HopSession {
     /// Seconds each hop of `toss` takes in the air.
     pub fn hop_secs(&self) -> f32 {
         match self.round.stage {
-            HopStage::Count | HopStage::Estimate => BIG_HOP_SECS,
+            HopStage::Count => BIG_HOP_SECS,
             _ => HOP_SECS,
         }
     }
@@ -279,18 +268,50 @@ impl HopSession {
 
     /// How long the reaction to a miss lasts before she's back on the rock.
     pub fn reaction_secs(&self) -> f32 {
-        if self.lands_in_water() { SPLASH_SECS } else { SHRUG_SECS }
+        self.tally_secs() + if self.lands_in_water() { SPLASH_SECS } else { SHRUG_SECS }
+    }
+
+    /// How many stones get counted out after the landing (counting stage
+    /// only): every stone from 1 to where she came down, the water past the
+    /// row excluded.
+    pub fn tally_len(&self) -> u16 {
+        match (self.round.stage, self.toss.as_ref()) {
+            (HopStage::Count, Some(t)) => t.end().min(self.round.last_stone()),
+            _ => 0,
+        }
+    }
+
+    /// The counted beat after a landing, before the reaction (or the win).
+    pub fn tally_secs(&self) -> f32 {
+        self.tally_len() as f32 * TALLY_STEP_SECS
+    }
+
+    /// Stones counted out so far in the current Landed/Won beat.
+    pub fn tallied(&self) -> u16 {
+        match self.phase {
+            HopPhase::Landed | HopPhase::Won => {
+                (((self.clock / TALLY_STEP_SECS).floor() as u16) + 1).min(self.tally_len())
+            }
+            _ => 0,
+        }
+    }
+
+    /// Seconds into the win's own celebration (after the count), or None
+    /// before it starts.
+    pub fn win_clock(&self) -> Option<f32> {
+        (self.phase == HopPhase::Won && self.clock >= self.tally_secs()).then(|| self.clock - self.tally_secs())
+    }
+
+    /// The win's celebration is over: time to offer "Again!".
+    pub fn win_done(&self) -> bool {
+        self.win_clock().is_some_and(|c| c >= WIN_SECS)
     }
 
     /// Did the toss that just landed come down in the water (splash, paddle
-    /// back) rather than on a plain stone (shrug)? Past the pearl there are
-    /// no stones, and out on the estimation line there are none at all.
+    /// back) rather than on a stone (shrug)? Anything past the last stone is
+    /// water.
     pub fn lands_in_water(&self) -> bool {
-        match self.toss.as_ref().map(|t| t.landing) {
-            Some(Landing::Past) => true,
-            Some(Landing::Short) => self.round.stage == HopStage::Estimate,
-            _ => false,
-        }
+        self.toss.as_ref().is_some_and(|t| t.landing != Landing::Pearl && t.end() > self.round.last_stone())
     }
 }
 
@@ -339,11 +360,11 @@ pub fn hop_reducer(state: HopSession, action: HopAction) -> HopSession {
 pub fn generate_round(band: u8, rng: &mut impl Rng) -> HopRound {
     match HopStage::for_band(band) {
         HopStage::Count => {
+            // The pearl hides under one of COUNT_STONES identical stones, and
+            // the row always has stones past it, so neither the row's end nor
+            // a lonely last rock gives it away. One aim past the row is water.
             let pearl = rng.gen_range(3..=6);
-            HopRound {
-                stage: HopStage::Count, pearl, span: pearl + 3, hops: 1, scale: 1,
-                min_aim: 1, max_aim: pearl + 3, tolerance: 0,
-            }
+            HopRound { stage: HopStage::Count, pearl, span: COUNT_STONES, hops: 1, min_aim: 1, max_aim: COUNT_STONES + 1 }
         }
         HopStage::SkipCount => {
             // A hop of 2, 3 or 5 repeated 2–4 times. The aim starts at 2
@@ -353,42 +374,29 @@ pub fn generate_round(band: u8, rng: &mut impl Rng) -> HopRound {
             let size = [2u16, 3, 5][rng.gen_range(0..3)];
             let times = rng.gen_range(2..=4);
             let pearl = size * times;
-            HopRound {
-                stage: HopStage::SkipCount, pearl, span: pearl + 3, hops: 0, scale: 1,
-                min_aim: 2, max_aim: (pearl - 1).min(6), tolerance: 0,
-            }
+            HopRound { stage: HopStage::SkipCount, pearl, span: pearl + 3, hops: 0, min_aim: 2, max_aim: (pearl - 1).min(6) }
         }
         HopStage::Hops => {
-            let k = rng.gen_range(2..=4u8);
-            let size = rng.gen_range(2..=5u16);
+            // "My pearl in K hops": pearl ÷ K is the hop. The numbers grow
+            // with the band — more hops, bigger hops, times tables past 2, 3
+            // and 5. The biggest pull is the band's, not the round's, so its
+            // reach never hints at the answer.
+            let (hops, sizes, max_aim) = hops_for_band(band);
+            let k = rng.gen_range(hops);
+            let size = rng.gen_range(sizes) as u16;
             let pearl = size * k as u16;
-            HopRound {
-                stage: HopStage::Hops, pearl, span: pearl + 3, hops: k, scale: 1,
-                min_aim: 1, max_aim: 8, tolerance: 0,
-            }
+            HopRound { stage: HopStage::Hops, pearl, span: pearl + (pearl / 8).max(3), hops: k, min_aim: 1, max_aim }
         }
-        HopStage::Estimate => {
-            let span: u16 = match band {
-                0..=4 => 10,
-                5 => 20,
-                _ => 100,
-            };
-            // Keep off the ends and the dead centre — those are free.
-            let edge = (span / 10).max(2);
-            let pearl = loop {
-                let p = rng.gen_range(edge..=span - edge);
-                if p.abs_diff(span / 2) > span / 20 {
-                    break p;
-                }
-            };
-            let scale = 10;
-            HopRound {
-                stage: HopStage::Estimate, pearl, span, hops: 1, scale,
-                min_aim: 1, max_aim: span * scale,
-                // Within 8% of the line is on it.
-                tolerance: span * scale * 8 / 100,
-            }
-        }
+    }
+}
+
+/// X-hops by band: (hop counts, hop sizes, the biggest pull).
+fn hops_for_band(band: u8) -> (std::ops::RangeInclusive<u8>, std::ops::RangeInclusive<u8>, u16) {
+    match band {
+        0..=3 => (2..=4, 2..=5, 8),
+        4 => (2..=5, 3..=6, 9),
+        5 => (3..=6, 3..=8, 11),
+        _ => (4..=8, 4..=9, 12),
     }
 }
 
@@ -399,7 +407,7 @@ mod tests {
     use rand::SeedableRng;
 
     fn count(pearl: u16) -> HopRound {
-        HopRound { stage: HopStage::Count, pearl, span: pearl + 3, hops: 1, scale: 1, min_aim: 1, max_aim: pearl + 3, tolerance: 0 }
+        HopRound { stage: HopStage::Count, pearl, span: COUNT_STONES, hops: 1, min_aim: 1, max_aim: COUNT_STONES + 1 }
     }
 
     fn land(mut s: HopSession) -> HopSession {
@@ -448,6 +456,36 @@ mod tests {
     }
 
     #[test]
+    fn counting_stage_past_the_pearl_is_more_stones_then_water() {
+        let r = count(4);
+                let s = land(toss_at(HopSession::new(r.clone()), 6));
+        assert!(!s.lands_in_water(), "stone 6 is a stone: the row runs on past the pearl");
+        let s = land(toss_at(HopSession::new(r), COUNT_STONES + 1));
+        assert!(s.lands_in_water(), "off the end of the row is a splash");
+    }
+
+    #[test]
+    fn the_landing_is_counted_out_stone_by_stone() {
+        let s = land(toss_at(HopSession::new(count(5)), 3));
+        assert_eq!(s.tally_len(), 3);
+        assert_eq!(s.tallied(), 1, "the first stone lights the moment she lands");
+        let mut t = s.clone();
+        for _ in 0..40 {
+            t = hop_reducer(t, HopAction::Tick { dt: 0.05 });
+        }
+        assert_eq!(t.tallied(), 3, "...then the rest, one at a time");
+        assert!(s.reaction_secs() > s.tally_secs(), "the shrug comes after the count");
+
+        let won = land(toss_at(HopSession::new(count(5)), 5));
+        assert!(won.win_clock().is_none(), "the pearl isn't revealed until the count reaches it");
+        let mut w = won;
+        for _ in 0..200 {
+            w = hop_reducer(w, HopAction::Tick { dt: 0.05 });
+        }
+        assert!(w.win_done());
+    }
+
+    #[test]
     fn too_short_lands_on_a_plain_stone() {
         let s = land(toss_at(HopSession::new(count(5)), 3));
         let t = s.toss.as_ref().unwrap();
@@ -457,7 +495,7 @@ mod tests {
 
     #[test]
     fn skip_counting_repeats_the_hop_until_it_reaches_or_passes() {
-        let r = HopRound { stage: HopStage::SkipCount, pearl: 9, span: 12, hops: 0, scale: 1, min_aim: 2, max_aim: 6, tolerance: 0 };
+        let r = HopRound { stage: HopStage::SkipCount, pearl: 9, span: 12, hops: 0, min_aim: 2, max_aim: 6 };
         assert_eq!(r.landings(3), vec![3, 6, 9]);
         assert_eq!(r.resolve(3).landing, Landing::Pearl);
         assert_eq!(r.landings(2), vec![2, 4, 6, 8, 10], "2s hop right over an odd pearl");
@@ -467,7 +505,7 @@ mod tests {
 
     #[test]
     fn k_hops_is_the_inverse() {
-        let r = HopRound { stage: HopStage::Hops, pearl: 12, span: 15, hops: 3, scale: 1, min_aim: 1, max_aim: 8, tolerance: 0 };
+        let r = HopRound { stage: HopStage::Hops, pearl: 12, span: 15, hops: 3, min_aim: 1, max_aim: 8 };
         assert_eq!(r.landings(4), vec![4, 8, 12]);
         assert_eq!(r.resolve(3).landing, Landing::Short);
         assert_eq!(r.resolve(5).landing, Landing::Past);
@@ -475,21 +513,10 @@ mod tests {
     }
 
     #[test]
-    fn estimation_takes_close_enough_and_wobbles_near_misses() {
-        let r = HopRound { stage: HopStage::Estimate, pearl: 37, span: 100, hops: 1, scale: 10, min_aim: 1, max_aim: 1000, tolerance: 80 };
-        assert_eq!(r.resolve(400).landing, Landing::Pearl, "40 is close enough to 37");
-        let near = r.resolve(480);
-        assert_eq!(near.landing, Landing::Past);
-        assert!(near.near, "48 is a near miss");
-        let far = r.resolve(800);
-        assert!(!far.near, "80 is just a miss");
-    }
-
-    #[test]
     fn aiming_is_clamped_and_ignored_mid_air() {
         let s = HopSession::new(count(4));
         let s = hop_reducer(s, HopAction::Aim { at: 99 });
-        assert_eq!(s.aim, 7);
+        assert_eq!(s.aim, COUNT_STONES + 1);
         let s = hop_reducer(s, HopAction::Aim { at: 0 });
         assert_eq!(s.aim, 1);
         let s = hop_reducer(hop_reducer(s, HopAction::Aim { at: 4 }), HopAction::Toss);
@@ -521,7 +548,7 @@ mod tests {
         for (band, seed, r) in rounds() {
             assert!(r.min_aim >= 1 && r.min_aim <= r.max_aim, "band {band} seed {seed}: {r:?}");
             assert!(!r.winning_aims().is_empty(), "band {band} seed {seed}: no aim wins {r:?}");
-            assert!(r.pearl_pos() < r.span_pos(), "band {band} seed {seed}: water past the pearl {r:?}");
+            assert!(r.pearl < r.span, "band {band} seed {seed}: water past the pearl {r:?}");
             // And playing the winning aim through the reducer really wins.
             let aim = r.winning_aims()[0];
             let s = land(toss_at(HopSession::new(r.clone()), aim));
@@ -540,7 +567,7 @@ mod tests {
     #[test]
     fn a_miss_is_never_a_fail_state() {
         for (band, seed, r) in rounds() {
-            for aim in (r.min_aim..=r.max_aim).step_by(r.aim_step() as usize) {
+            for aim in r.min_aim..=r.max_aim {
                 let s = settle(toss_at(HopSession::new(r.clone()), aim));
                 match s.toss.as_ref().unwrap().landing {
                     Landing::Pearl => assert_eq!(s.phase, HopPhase::Won),
@@ -592,16 +619,37 @@ mod tests {
         assert_eq!(stage(1), HopStage::Count);
         assert_eq!(stage(2), HopStage::SkipCount);
         assert_eq!(stage(3), HopStage::Hops);
-        assert_eq!(stage(4), HopStage::Estimate);
-        assert_eq!(stage(10), HopStage::Estimate);
+        assert_eq!(stage(4), HopStage::Hops);
+        assert_eq!(stage(10), HopStage::Hops);
         for (band, seed, r) in rounds() {
             assert_eq!(r.stage, HopStage::for_band(band), "band {band} seed {seed}");
             if r.stage == HopStage::Count {
                 assert!((3..=6).contains(&r.pearl), "the youngest get 3–6 stones: {r:?}");
+                assert_eq!(r.span, COUNT_STONES, "the row is always the same length");
+                assert!(r.pearl < r.last_stone(), "stones run on past the pearl");
+                assert!(r.pearl_hidden());
             }
             if r.stage == HopStage::SkipCount {
                 assert!(r.min_aim >= 2, "a hop of 1 is just walking");
                 assert!(r.max_aim < r.pearl, "one giant hop isn't skip counting");
+            }
+        }
+    }
+
+    #[test]
+    fn x_hops_grow_with_the_band() {
+        let biggest = |band: u8| (0..60u64).map(|seed| generate_round(band, &mut SmallRng::seed_from_u64(seed)).pearl).max().unwrap();
+        assert!(biggest(3) <= 20);
+        assert!(biggest(6) > biggest(3), "higher bands reach bigger pearls");
+        let tables: std::collections::BTreeSet<u16> = (0..200u64)
+            .map(|seed| generate_round(7, &mut SmallRng::seed_from_u64(seed)))
+            .map(|r| r.pearl / r.hops as u16)
+            .collect();
+        assert!(tables.iter().any(|&t| t > 5), "times tables past 2, 3 and 5: {tables:?}");
+        for band in 3..=9 {
+            for seed in 0..40 {
+                let r = generate_round(band, &mut SmallRng::seed_from_u64(seed));
+                assert!(r.span <= 90, "the path stays countable on screen: {r:?}");
             }
         }
     }

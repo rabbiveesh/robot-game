@@ -481,36 +481,41 @@ pub fn quest_beats_are_sane_everywhere() {
 
 // ─── Pearl Hop ──────────────────────────────────────────
 
-/// Shelly's panel at every stage, aiming and after the win (Again! up), with
-/// short and long captions and a big purse, on every sweep screen. The scene
-/// has to keep real room to play in, even on a small phone.
+/// Shelly's panel at every stage — aiming, mid-win (pearl flying to the
+/// purse) and after the win (Again! up) — with short and long captions, a big
+/// purse and a hat on, on every sweep screen. The scene has to keep real room
+/// to play in, even on a small phone.
 pub fn pearl_hop_is_sane_everywhere() {
     use rand::SeedableRng;
-    use robot_buddy_domain::logic::pearl_hop::{generate_round, hop_reducer, HopAction, HopPhase, HopSession};
-    use robot_buddy_game::ui::pearl_hop::{self, HopView};
+    use robot_buddy_domain::logic::pearl_hop::{generate_round, hop_reducer, HopAction, HopSession};
+    use robot_buddy_game::ui::pearl_hop::{self, HopView, ShellyOutfit};
 
-    let captions = [
-        "My pearl is on stone 5! Fling me there!",
-        "You found my pearl!  +3 pearls  (your net caught one!)",
-        "I always hop the same size! Get me to my pearl on 15!",
-    ];
-    for band in [1u8, 2, 3, 4, 5, 6] {
+    let captions = ["Find my pearl!", "My pearl!  +3 pearls  (your net caught one!)", "Boing! Not there yet!"];
+    let worn: BTreeSet<String> = ["hat".to_string()].into_iter().collect();
+    for band in [1u8, 2, 3, 4, 5, 6, 9] {
         let round = generate_round(band, &mut rand::rngs::SmallRng::seed_from_u64(band as u64));
         let aiming = HopSession::new(round.clone());
-        let mut won = hop_reducer(aiming.clone(), HopAction::Aim { at: round.winning_aims()[0] });
-        won = hop_reducer(won, HopAction::Toss);
-        for _ in 0..200 {
-            won = hop_reducer(won, HopAction::Tick { dt: 0.1 });
+        let mut s = hop_reducer(hop_reducer(aiming.clone(), HopAction::Aim { at: round.winning_aims()[0] }), HopAction::Toss);
+        let mut mid_win = None;
+        for _ in 0..400 {
+            s = hop_reducer(s, HopAction::Tick { dt: 0.05 });
+            if mid_win.is_none() && s.win_clock().is_some_and(|c| c > 0.6) {
+                mid_win = Some(s.clone());
+            }
         }
-        assert_eq!(won.phase, HopPhase::Won);
+        assert!(s.win_done());
+        let mid_win = mid_win.unwrap();
         for &screen in &SWEEP_SCREENS {
-            for session in [&aiming, &won] {
+            for session in [&aiming, &mid_win, &s] {
                 for caption in captions {
-                    let view = HopView { session, pearls: 1234, caption };
+                    let view = HopView { session, pearls: 1234, caption, outfit: ShellyOutfit { worn: &worn, color: "red" } };
                     let l = pearl_hop::layout(&view, screen);
                     assert_sane(&l.frame, screen_rect(screen));
                     assert!(l.leave().is_some(), "Leave is always tappable");
-                    assert_eq!(l.again().is_some(), session.phase == HopPhase::Won);
+                    assert_eq!(l.again().is_some(), session.win_done(), "Again! only once the win has played");
+                    if let (Some(again), Some(cap)) = (l.again(), l.frame.rect(pearl_hop::HopId::Caption)) {
+                        assert!(again.y - cap.bottom() >= 12.0, "Again! has room under the caption at {screen:?}");
+                    }
                     let scene = l.scene.rect;
                     assert!(scene.h >= 200.0 && scene.w >= 300.0, "room to play at {screen:?}: {scene:?}");
                 }

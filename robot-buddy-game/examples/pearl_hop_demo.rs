@@ -193,8 +193,8 @@ impl Director {
         let rest = (self.cursor.0 + 60.0, self.cursor.1 + 40.0);
         self.glide(rest, 0.4).await;
         self.wait_until(
-            |h| h.game.active_pearl_hop().is_none_or(|a| matches!(a.session.phase, HopPhase::Won | HopPhase::Aiming)),
-            12.0,
+            |h| h.game.active_pearl_hop().is_none_or(|a| a.session.phase == HopPhase::Aiming || a.session.win_done()),
+            14.0,
         ).await;
     }
 
@@ -202,25 +202,17 @@ impl Director {
         self.h.game.active_pearl_hop().unwrap().session.round.clone()
     }
 
-    fn aim_landing(&self, want: Landing, near: Option<bool>) -> u16 {
+    /// A miss of the given kind, as close to the pearl as there is — it reads
+    /// as "almost".
+    fn aim_landing(&self, want: Landing) -> u16 {
         let r = self.round();
         let mut aims: Vec<u16> = (r.min_aim..=r.max_aim).collect();
-        // Prefer a miss close to the pearl — it reads as "almost".
-        let p = r.pearl_pos();
-        aims.sort_by_key(|&a| r.resolve(a).end().abs_diff(p));
-        aims.into_iter()
-            .find(|&a| {
-                let t = r.resolve(a);
-                t.landing == want && near.is_none_or(|n| t.near == n)
-            })
-            .expect("an aim with that landing")
+        aims.sort_by_key(|&a| r.resolve(a).end().abs_diff(r.pearl));
+        aims.into_iter().find(|&a| r.resolve(a).landing == want).expect("an aim with that landing")
     }
 
     fn win_aim(&self) -> u16 {
-        let r = self.round();
-        let wins = r.winning_aims();
-        // On the estimation line, the middle of the target window.
-        wins[wins.len() / 2]
+        self.round().winning_aims()[0]
     }
 
     async fn again_with_band(&mut self, band: u8) {
@@ -244,6 +236,41 @@ fn spawn_encoder(w: usize, h: usize, dir: &str, mp4: &str) -> std::process::Chil
         .stdin(std::process::Stdio::piped())
         .spawn()
         .expect("start ffmpeg (set DEMO_FFMPEG)")
+}
+
+/// Dress Shelly up off camera, the way a kid would: buy Color Change from
+/// Bolt and a Kelp Crown from Hermie, then hand both to her on the reef.
+fn dress_shelly(h: &mut Harness) {
+    h.game.dum_dums = 99;
+    h.walk_to_npc(NpcKind::Shopkeeper);
+    h.interact();
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+    h.buy_shop_item("color_change");
+    h.pick_shop_color("orange");
+    h.close_shop();
+    h.visit_map("trench", 22, 9);
+    h.game.pearls = 30;
+    h.walk_to_npc(NpcKind::HermitCrab);
+    h.interact();
+    h.select_option("shop");
+    h.wait_until(|g| g.state == GameState::Shop);
+    h.buy_shop_item("kelp_crown");
+    h.close_shop();
+    h.game.pearls = 0;
+    h.visit_map("reef", 5, 13);
+    for item in ["kelp_crown", "color_change"] {
+        h.walk_to_npc(NpcKind::Clam);
+        h.interact();
+        h.select_option("swag");
+        h.wait_until(|g| g.state == GameState::Swag);
+        h.give_swag(item);
+        if item == "color_change" {
+            h.pick_swag_color("orange");
+        }
+        h.close_swag();
+    }
+    assert!(h.game.swag_worn_by("clam").contains("kelp_crown"));
 }
 
 fn to_reef(h: &mut Harness) {
@@ -271,6 +298,7 @@ async fn main() {
 
     let mut h = Harness::new(2024);
     h.start_dev_game();
+    dress_shelly(&mut h);
     to_reef(&mut h);
     h.game.profile.math_band = 1;
     let mp4 = std::env::var("DEMO_MP4").unwrap_or_else(|_| "pearl_hop_demo.mp4".into());
@@ -306,46 +334,49 @@ async fn main() {
     d.wait_until(|h| h.game.active_pearl_hop().is_some_and(|a| a.demo.is_none()), 20.0).await;
     d.idle(0.8).await;
 
-    // 3. Stage 1: count the stones. A bit too far first — sploosh — then right.
+    // 3. Stage 1: the pearl hides under one of the stones; the dots say how
+    //    many. A short toss is counted out — one, two, three — with dots
+    //    left over; then the right one.
     d.show_cursor = true;
-    d.banner = "Stage 1 (youngest): one toss, count the stones to the pearl".into();
-    let past = d.aim_landing(Landing::Past, None);
-    d.fling(past, 1.8).await;
+    d.banner = "Stage 1: the dots say how many stones. Count to find the hidden pearl".into();
+    let pearl = d.round().pearl;
+    let short = 3.min(pearl - 1);
+    d.fling(short, 1.8).await;
     d.idle(0.4).await;
     let win = d.win_aim();
-    d.fling(win, 1.6).await;
-    d.idle(2.0).await;
+    d.fling(win, 1.8).await;
+    d.idle(1.0).await;
 
     // 4. Stage 2: skip counting. One overshoot, then a size that lands.
     d.again_with_band(2).await;
     d.banner = "Stage 2: she always hops the same size, counting out loud (skip counting)".into();
     d.idle(1.2).await;
-    let over = d.aim_landing(Landing::Past, None);
+    let over = d.aim_landing(Landing::Past);
     d.fling(over, 1.4).await;
     d.idle(0.4).await;
     let win = d.win_aim();
     d.fling(win, 1.4).await;
-    d.idle(2.0).await;
+    d.idle(1.0).await;
 
-    // 5. Stage 3: reach the pearl in K hops (division).
+    // 5. Stage 3: reach the pearl in X hops (division), first try.
     d.again_with_band(3).await;
-    d.banner = "Stage 3: reach the pearl in K hops (the bubbles). Pick the hop size".into();
+    d.banner = "Stage 3: reach the pearl in X hops (the bubbles). Pick the hop size".into();
     d.idle(1.4).await;
-    // Straight in, first try: the pearl plus the first-try bonus.
     let win = d.win_aim();
     d.fling(win, 1.5).await;
-    d.idle(2.0).await;
+    d.idle(1.0).await;
 
-    // 6. Stage 4: open-water estimation. A near miss, then a hit.
+    // 6. Higher bands: the same X hops with bigger numbers, on a base-ten
+    //    path. One wrong pick, then the right one.
     d.again_with_band(6).await;
-    d.banner = "Stage 4: no stones. Land near the number on an open 0-100 line".into();
-    d.idle(1.4).await;
-    let near = d.aim_landing(Landing::Past, Some(true));
-    d.fling(near, 1.8).await;
+    d.banner = "Higher bands: bigger numbers, same idea. The path groups in fives and tens".into();
+    d.idle(1.6).await;
+    let short = d.aim_landing(Landing::Short);
+    d.fling(short, 1.6).await;
     d.idle(0.4).await;
     let win = d.win_aim();
-    d.fling(win, 1.8).await;
-    d.idle(2.2).await;
+    d.fling(win, 1.6).await;
+    d.idle(1.2).await;
 
     // 7. Leave, back to the reef.
     d.banner = "Leave is always one tap away".into();

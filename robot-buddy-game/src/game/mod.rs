@@ -1832,7 +1832,7 @@ impl Game {
 
                 if opts.len() == 1 {
                     if let Some(base) = hop_base {
-                        self.start_pearl_hop(base);
+                        self.start_pearl_hop(base, self.menu_target_id.clone());
                         return;
                     }
                     let lines = npc_dialogue_lines(target_ref, &mut self.rng);
@@ -2483,7 +2483,7 @@ impl Game {
                         self.start_dialogue(lines);
                     } else if let Some(base) = self.pearl_hop_host(&self.menu_target_id.clone()) {
                         // Talking to Shelly IS Pearl Hop.
-                        self.start_pearl_hop(base);
+                        self.start_pearl_hop(base, self.menu_target_id.clone());
                         return;
                     } else {
                         // Pull lines first to free the borrow before start_dialogue.
@@ -3419,12 +3419,12 @@ impl Game {
 
     // ─── Rendering ─────────────────────────────────────
 
-    /// Paint whatever `who` is wearing over the sprite just drawn for them.
-    /// No-op for anyone who's been given nothing, which is almost everyone.
-    fn draw_swag_on(&self, who: &str, x: f32, y: f32, dir: Dir, fit: sprites::swag::SwagFit) {
-        let worn = self.wardrobe.worn_by(who);
-        if worn.is_empty() { return; }
-        sprites::swag::draw_swag(x, y, dir, 0.0, worn, self.outfit_color(who), fit);
+    /// Draw `who` (a wearer id) as `body`, upright at the tile (x, y), with
+    /// whatever they're wearing — through the one dressed-character helper,
+    /// so no buddy is ever drawn without their swag.
+    fn draw_dressed(&self, who: &str, body: sprites::dressed::Body, x: f32, y: f32, dir: Dir, fit: sprites::swag::SwagFit) {
+        let outfit = sprites::dressed::Outfit { worn: self.wardrobe.worn_by(who), color: self.outfit_color(who), fit };
+        sprites::dressed::draw_dressed(sprites::dressed::Posture::tile(x, y), body, dir, &outfit, self.game_time);
     }
 
     fn render_world(&mut self, screen: (f32, f32)) {
@@ -3547,13 +3547,11 @@ impl Game {
                     }
                     SpriteKind::Sparky => {
                         let e = &self.sparky.entity;
-                        sprites::robot::draw_robot(e.x, e.y, e.dir, e.frame, self.game_time);
-                        self.draw_swag_on("sparky", e.x, e.y, e.dir,
-                            sprites::swag::SwagFit::ROBOT);
+                        self.draw_dressed("sparky", sprites::dressed::Body::Robot { frame: e.frame },
+                            e.x, e.y, e.dir, sprites::swag::SwagFit::ROBOT);
                     }
                     SpriteKind::Npc(n) => {
-                        n.draw(self.game_time);
-                        self.draw_swag_on(n.id_str(), n.entity.x, n.entity.y, n.entity.dir,
+                        self.draw_dressed(n.id_str(), n.body(), n.entity.x, n.entity.y, n.entity.dir,
                             n.sprite.swag_fit());
                     }
                     SpriteKind::Mount(n) => {
@@ -3561,8 +3559,7 @@ impl Game {
                         // sprite at the player's tile, facing the player's way,
                         // so the kid sits astride its back rather than
                         // alongside a blob.
-                        n.draw_at(self.player.x, self.player.y, self.player.dir, self.game_time);
-                        self.draw_swag_on(n.id_str(), self.player.x, self.player.y,
+                        self.draw_dressed(n.id_str(), n.body(), self.player.x, self.player.y,
                             self.player.dir, n.sprite.swag_fit());
                     }
                 }
@@ -3754,8 +3751,7 @@ impl Game {
         self.render_shop_overlay(screen);
 
         // Shelly's Pearl Hop — a full-screen minigame.
-        if let (Some(a), Some(layout)) = (self.active_pearl_hop.as_ref(), self.pearl_hop_layout(screen)) {
-            let view = ui::pearl_hop::HopView { session: &a.session, pearls: self.pearls, caption: &a.caption };
+        if let (Some(view), Some(layout)) = (self.pearl_hop_view(), self.pearl_hop_layout(screen)) {
             let art = self.pearl_hop_art(&layout);
             ui::pearl_hop::draw(&view, &layout, &art, self.game_time);
         }
