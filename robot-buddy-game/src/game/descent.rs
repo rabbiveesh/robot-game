@@ -24,7 +24,7 @@ impl Game {
             format!("The bottom is {door} marks down!")
         };
         audio::tts::speak(&speaker, &line);
-        self.active_descent = Some(ActiveDescent {
+        self.activity.descent = Some(ActiveDescent {
             session: DiveSession::new(puzzle),
             landed_timer: 0.0,
             message: None,
@@ -36,13 +36,13 @@ impl Game {
     /// the door holds a short beat, pays a pearl for a clean dive, and then
     /// lets the shaft portal do its normal job.
     pub(super) fn step_descent(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
-        let Some(ad) = self.active_descent.as_ref() else { return };
+        let Some(ad) = self.activity.descent.as_ref() else { return };
         let layout = ui::descent::layout(&ad.session, screen);
 
         // Landed: hold the beat, then descend for real.
         if ad.session.phase == DivePhase::Landed {
             let done = {
-                let ad = self.active_descent.as_mut().unwrap();
+                let ad = self.activity.descent.as_mut().unwrap();
                 ad.landed_timer += dt;
                 ad.landed_timer >= 1.4 || input.pressed(KeyCode::Space) || input.mouse_clicked
             };
@@ -63,7 +63,7 @@ impl Game {
         let action = match intent {
             // Bailing is always free — swim up and the shaft is still there.
             ui::descent::DescentInput::Leave => {
-                self.active_descent = None;
+                self.activity.descent = None;
                 self.set_state(GameState::Playing);
                 return;
             }
@@ -71,13 +71,13 @@ impl Game {
             ui::descent::DescentInput::Rise(n) => DiveAction::Rise { n },
         };
 
-        let ad = self.active_descent.as_mut().unwrap();
+        let ad = self.activity.descent.as_mut().unwrap();
         ad.session = dive_reducer(ad.session.clone(), action);
         ad.message = None;
 
         // One line of buddy chatter per beat — a nudge, never a verdict.
         let (speaker, line) = (self.current_buddy_name(), {
-            let s = &self.active_descent.as_ref().unwrap().session;
+            let s = &self.activity.descent.as_ref().unwrap().session;
             match s.phase {
                 DivePhase::Landed if self.dive_portal().is_some() =>
                     Some("We made it! The trench door is open!".to_string()),
@@ -98,7 +98,7 @@ impl Game {
     /// is still standing on so the normal transfer (and arrival speech) fires.
     /// A map with no shaft sends the diver to the Dogfish House instead.
     pub(super) fn resolve_descent(&mut self) {
-        let Some(ad) = self.active_descent.take() else { return };
+        let Some(ad) = self.activity.descent.take() else { return };
         let optimal = ad.session.puzzle.optimal_kicks();
         self.events.push(GameEvent::DescentLanded {
             door: ad.session.puzzle.door,
