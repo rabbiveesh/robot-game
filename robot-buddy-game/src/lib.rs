@@ -12,6 +12,7 @@ pub mod audio;
 pub mod session;
 pub mod settings;
 pub mod input;
+pub mod trace;
 pub mod pathfinding;
 pub mod number_track;
 pub mod text;

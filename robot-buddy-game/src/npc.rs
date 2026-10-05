@@ -59,6 +59,9 @@ pub enum NpcKind {
     CtrlTriggerBalance,
     CtrlTriggerSudoku,
     CtrlTriggerChallenge,
+    /// The manipulatives bench: each visit opens the next hands-on
+    /// "Show me" workspace (see `ui::concrete::BENCH`).
+    CtrlManipulatives,
     CtrlToggleEncounters,
     CtrlTriggerEncounter,
     CtrlToggleQuest,
@@ -107,6 +110,7 @@ impl NpcKind {
             NpcKind::CtrlTriggerBalance => "ctrl_trigger_balance",
             NpcKind::CtrlTriggerSudoku => "ctrl_trigger_sudoku",
             NpcKind::CtrlTriggerChallenge => "ctrl_trigger_challenge",
+            NpcKind::CtrlManipulatives => "ctrl_manipulatives",
             NpcKind::CtrlToggleEncounters => "ctrl_toggle_encounters",
             NpcKind::CtrlTriggerEncounter => "ctrl_trigger_encounter",
             NpcKind::CtrlToggleQuest => "ctrl_toggle_quest",
@@ -164,6 +168,7 @@ impl NpcKind {
             NpcKind::CtrlTriggerBalance => "Trigger Balance",
             NpcKind::CtrlTriggerSudoku => "Trigger Sudoku",
             NpcKind::CtrlTriggerChallenge => "Trigger Challenge",
+            NpcKind::CtrlManipulatives => "Manipulatives Bench",
             NpcKind::CtrlToggleEncounters => "Encounters Flag",
             NpcKind::CtrlTriggerEncounter => "Trigger Encounter",
             NpcKind::CtrlToggleQuest => "Quest Flag",
@@ -186,7 +191,8 @@ impl NpcKind {
         NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
         NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerBalance, NpcKind::CtrlTriggerSudoku,
-        NpcKind::CtrlTriggerChallenge, NpcKind::CtrlToggleEncounters, NpcKind::CtrlTriggerEncounter,
+        NpcKind::CtrlTriggerChallenge, NpcKind::CtrlManipulatives,
+        NpcKind::CtrlToggleEncounters, NpcKind::CtrlTriggerEncounter,
         NpcKind::CtrlToggleQuest, NpcKind::CtrlStartQuest,
     ];
 
@@ -202,7 +208,7 @@ impl NpcKind {
             NpcKind::CtrlBand | NpcKind::CtrlKenkenLevel | NpcKind::CtrlCraReset
             | NpcKind::CtrlIntroReset | NpcKind::CtrlTriggerKenken
             | NpcKind::CtrlTriggerPattern | NpcKind::CtrlTriggerBalance
-            | NpcKind::CtrlTriggerSudoku | NpcKind::CtrlTriggerChallenge
+            | NpcKind::CtrlTriggerSudoku | NpcKind::CtrlTriggerChallenge | NpcKind::CtrlManipulatives
             | NpcKind::CtrlToggleEncounters | NpcKind::CtrlTriggerEncounter
             | NpcKind::CtrlToggleQuest | NpcKind::CtrlStartQuest)
     }
@@ -753,6 +759,7 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(CtrlToggleQuest,      10, 5, S::OldOak,     false, true, false),
             n(CtrlStartQuest,       10, 7, S::Sage,       false, true, false),
             n(CtrlTriggerChallenge, 8,  5, S::Kid2,       false, true, false),
+            n(CtrlManipulatives,    6,  3, S::Kid1,       false, true, false),
         ],
         "dev" => vec![
             // Sprite gallery -- one of each NPC, lined up. Natural talk = TTS test.

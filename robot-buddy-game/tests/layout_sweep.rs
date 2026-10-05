@@ -23,6 +23,8 @@ sweep_tests! {
     a_wrong_answer_does_not_move_the_answer_buttons => sweep::challenge_sweep::a_wrong_answer_does_not_move_the_answer_buttons,
     tapping_a_drawn_button_answers_it_even_under_a_wrapped_question =>
         sweep::challenge_sweep::tapping_a_drawn_button_answers_it_even_under_a_wrapped_question,
+    the_hands_on_workspace_is_sane_everywhere =>
+        sweep::challenge_sweep::the_hands_on_workspace_is_sane_everywhere,
     dialogue_lines_are_sane_everywhere => sweep::dialogue_lines_are_sane_everywhere,
     settings_overlay_is_sane_everywhere => sweep::settings_overlay_is_sane_everywhere,
     quest_beats_are_sane_everywhere => sweep::quest_beats_are_sane_everywhere,

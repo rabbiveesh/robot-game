@@ -11,11 +11,11 @@ use ::rand::seq::SliceRandom;
 use std::collections::HashMap;
 
 use robot_buddy_domain::challenge::challenge_state::{
-    ChallengeState, DisplaySpeech, RenderHint, VoiceState,
+    ChallengeAction, ChallengeState, DisplaySpeech, RenderHint, VoiceState,
     challenge_reducer,
 };
 use robot_buddy_domain::learning::challenge_generator::{
-    Challenge, ChallengeProfile, generate_challenge,
+    Challenge, ChallengeProfile, generate_challenge, generate_challenge_at,
 };
 use robot_buddy_domain::learning::learner_profile::{
     LearnerProfile, LearnerEvent, learner_reducer,
@@ -29,6 +29,8 @@ use robot_buddy_domain::learning::intake_assessor::{
 use robot_buddy_domain::economy::give;
 use robot_buddy_domain::economy::rewards;
 use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
+use robot_buddy_domain::logic::manipulate_concrete::ConcreteKind;
+use robot_buddy_domain::learning::attempt_log::{AnswerAt, AttemptLog, AttemptRecord, Help};
 use robot_buddy_domain::logic::kenken::{
     self, KenKenAction, KenKenPhase, KenKenSession, cage_ops_for_band, generate_kenken,
 };
@@ -189,8 +191,18 @@ impl IntakeState {
 struct ActiveChallenge {
     state: ChallengeState,
     challenge: Challenge,
+    /// The hands-on "Show me" workspace, once a Concrete-stage kid asks for it.
+    workspace: Option<ui::concrete::Workspace>,
     complete_timer: f32,
     start_time: f32,
+    // For the attempt log:
+    /// Every answer given, and when.
+    answers: Vec<AnswerAt>,
+    /// When Show me was pressed (game time).
+    help_at: Option<f32>,
+    /// The learner's CRA stage for this operation when it was asked (Show me
+    /// lowers the one on `state`).
+    stage_asked: CraStage,
 }
 
 pub struct ActiveKenKen {
@@ -417,6 +429,15 @@ pub enum GameEvent {
     DialogueAdvanced,
     ChallengeStarted { question: String },
     ChallengeResolved { correct: bool, response_ms: f64 },
+    /// "Show me" at the Concrete stage opened the hands-on workspace.
+    ManipulativeOpened { kind: ConcreteKind },
+    /// The kid finished building the problem in the workspace (all counters
+    /// moved). Not an answer — the quiz still decides.
+    ManipulativeBuilt { kind: ConcreteKind },
+    /// A whole row of five moved as one piece (a grouping signal).
+    ManipulativeRowMoved,
+    /// A full ten-frame snapped into a ten-rod (`bundled`), or a rod opened.
+    TenRod { bundled: bool },
     /// A gate guardian's puzzle was solved; the passage is now open.
     GateOpened { gate_id: String },
     /// The rocket spent fuel taking a space jump.
@@ -588,6 +609,10 @@ pub struct Game {
     pub features: FeatureFlags,
     /// Tiles walked since the last random encounter (for encounter pacing).
     steps_since_encounter: u32,
+    /// Which manipulative the control room's bench opens next (dev only).
+    manip_bench_next: usize,
+    /// The "grab the stick" nudge has been said this play session.
+    row_nudge_given: bool,
     /// Gate id whose challenge is currently on screen (set when the kid takes
     /// on a gate guardian; cleared when that challenge resolves).
     opening_gate: Option<String>,
@@ -665,6 +690,9 @@ pub struct Game {
     rng: SmallRng,
     pub events: Vec<GameEvent>,
     pub session_log: session::SessionLog,
+    /// Every challenge, in detail, across sessions (saved; bounded). What the
+    /// parent export carries for `analyze`.
+    pub attempt_log: AttemptLog,
 }
 
 impl Game {
@@ -710,6 +738,8 @@ impl Game {
             wardrobe: Wardrobe::new(),
             features: FeatureFlags::default(),
             steps_since_encounter: 0,
+            manip_bench_next: 0,
+            row_nudge_given: false,
             opening_gate: None,
             satisfied_gates: std::collections::HashSet::new(),
             paid_tolls: std::collections::HashSet::new(),
@@ -746,6 +776,7 @@ impl Game {
             rng: SmallRng::seed_from_u64(seed),
             events: Vec::new(),
             session_log: session::SessionLog::new(),
+            attempt_log: AttemptLog::new(),
         }
     }
 
@@ -790,6 +821,18 @@ impl Game {
             .map(|ac| &ac.challenge)
             .or_else(|| self.intake.as_ref().and_then(|iq| iq.challenge.as_ref().map(|ac| &ac.challenge)))?;
         ch.choices.iter().position(|c| c.correct)
+    }
+
+    /// The active challenge's layout, exactly as `step` hit-tests it. Tests
+    /// click through this (Show me, the workspace's counters).
+    pub fn challenge_layout(&self, screen: (f32, f32)) -> Option<ui::challenge::ChallengeLayout> {
+        let ac = self.activity.challenge.as_ref()?;
+        Some(ui::challenge::layout(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen))
+    }
+
+    /// The hands-on "Show me" workspace, if one is open.
+    pub fn challenge_workspace(&self) -> Option<&ui::concrete::Workspace> {
+        self.activity.challenge.as_ref().and_then(|ac| ac.workspace.as_ref())
     }
 
     /// Phase of the active challenge (intake or normal). None if no challenge.
@@ -1081,7 +1124,7 @@ impl Game {
             || (self.debug_overlay.visible && input.pressed(KeyCode::E))
         {
             let json = session::build_export(
-                &self.player_name, &self.session_log, &self.gifts_given,
+                &self.player_name, &self.session_log, self.attempt_log.records(), &self.gifts_given,
                 self.dum_dums, self.play_time, &self.profile, self.map.id,
             );
             let filename = format!("robot-buddy-session-{}.json", self.play_time as u64);
@@ -1176,6 +1219,7 @@ impl Game {
                         self.dum_dums = 20;
                         self.play_time = 0.0;
                         self.behavior_signals.clear();
+                        self.attempt_log = AttemptLog::new();
 
                         self.map = Map::by_id("dev");
                         self.npcs = npc::npcs_for_map(self.map.id);
@@ -1204,6 +1248,7 @@ impl Game {
                         self.play_time = 0.0;
                         self.active_slot = slot;
                         self.behavior_signals.clear();
+                        self.attempt_log = AttemptLog::new();
 
                         self.map = Map::overworld();
                         self.player = Entity::new(14, 12);
@@ -1297,7 +1342,7 @@ impl Game {
                         if let Some(action) = ui::challenge::handle_click(
                             mx, my, &ac.state, &ac.challenge,
                             // Same pure layout render paints — hit rects can't drift.
-                            &ui::challenge::layout(&ac.state, &ac.challenge, screen),
+                            &ui::challenge::layout(&ac.state, &ac.challenge, None, screen),
                         ) {
                             ac.state = challenge_reducer(ac.state.clone(), action);
                             speak_challenge_feedback(&ac.state, "Sparky");
@@ -1958,7 +2003,45 @@ impl Game {
                 if ac.complete_timer >= 2.5 { dismiss = true; }
             }
 
+            // The hands-on workspace gets first claim on the pointer: a press on
+            // a counter is a pickup, not a click on the panel beneath it.
+            let mut pointer_busy = false;
+            let area = ui::challenge::layout(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen)
+                .workspace();
+            if let (Some(ws), Some(area)) = (ac.workspace.as_mut(), area) {
+                ws.tick(dt);
+                match ui::concrete::handle_pointer(ws, input, area) {
+                    ui::concrete::Pointer::Idle => {}
+                    ui::concrete::Pointer::Busy => pointer_busy = true,
+                    ui::concrete::Pointer::Landed(landed) => {
+                        pointer_busy = true;
+                        if landed.row {
+                            self.events.push(GameEvent::ManipulativeRowMoved);
+                        }
+                        if landed.filled_ten {
+                            audio::tts::speak(&buddy, ui::concrete::FULL_TEN_LINE);
+                        } else if !self.row_nudge_given
+                            && landed.singles_past_a_row >= ui::concrete::ROW_NUDGE_AFTER
+                        {
+                            // Once, and only after a whole row's worth of singles.
+                            self.row_nudge_given = true;
+                            audio::tts::speak(&buddy, ui::concrete::ROW_NUDGE_LINE);
+                        }
+                        if landed.built {
+                            self.events.push(GameEvent::ManipulativeBuilt {
+                                kind: ws.session.puzzle.kind,
+                            });
+                        }
+                    }
+                    ui::concrete::Pointer::Rod { bundled, .. } => {
+                        pointer_busy = true;
+                        self.events.push(GameEvent::TenRod { bundled });
+                    }
+                }
+            }
+
             if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge, input) {
+                note_action(ac, &action, self.game_time);
                 ac.state = challenge_reducer(ac.state.clone(), action);
                 speak_challenge_feedback(&ac.state, &buddy);
             } else if ac.state.phase == Phase::Complete
@@ -1967,15 +2050,19 @@ impl Game {
                 dismiss = true;
             }
 
-            if !dismiss && input.mouse_clicked {
+            if !dismiss && !pointer_busy && input.mouse_clicked {
                 let (mx, my) = input.mouse_pos;
                 if let Some(action) = ui::challenge::handle_click(
                     mx, my, &ac.state, &ac.challenge,
                     // Same pure layout render paints — hit rects can't drift.
-                    &ui::challenge::layout(&ac.state, &ac.challenge, screen),
+                    &ui::challenge::layout(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen),
                 ) {
+                    let show_me = matches!(action, ChallengeAction::ShowMe);
+                    note_action(ac, &action, self.game_time);
                     ac.state = challenge_reducer(ac.state.clone(), action);
-                    speak_challenge_feedback(&ac.state, &buddy);
+                    if !(show_me && open_concrete_workspace(ac, &mut self.rng, &mut self.events, &buddy)) {
+                        speak_challenge_feedback(&ac.state, &buddy);
+                    }
                 } else if ac.state.phase == Phase::Complete {
                     dismiss = true;
                 }
@@ -1986,20 +2073,9 @@ impl Game {
                 let was_correct = ac.state.correct == Some(true);
                 let response_ms = ((self.game_time - ac.start_time) as f64 * 1000.0).min(30000.0);
 
-                self.session_log.record_challenge(session::ChallengeRecord {
-                    question: ac.challenge.display_text.clone(),
-                    correct_answer: ac.challenge.correct_answer,
-                    player_answer: None,
-                    correct: was_correct,
-                    operation: ac.challenge.numbers.op.clone(),
-                    band: ac.challenge.band,
-                    sampled_band: ac.challenge.sampled_band,
-                    hint_used: ac.state.hint_used,
-                    told_me: ac.state.told_me,
-                    attempts: ac.state.attempts,
-                    source: self.menu_target_id.clone(),
-                    play_time_at_event: self.play_time,
-                });
+                let record = attempt_record(&ac, was_correct, input.now, self.play_time, &self.menu_target_id);
+                self.session_log.record_challenge(record.clone());
+                self.attempt_log = std::mem::take(&mut self.attempt_log).record(record);
 
                 let event = LearnerEvent::PuzzleAttempted {
                     correct: was_correct,
@@ -2160,6 +2236,33 @@ impl Game {
                 audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
                 self.activity.challenge = Some(ac);
                 self.set_state(GameState::Challenge);
+            }
+            CtrlManipulatives => {
+                // The bench: each visit opens the next manipulative, already
+                // out as if a Concrete-stage kid had pressed "Show me". Numbers
+                // follow the band knob (clamped to where the frames apply).
+                let bench = ui::concrete::BENCH;
+                let op = bench[self.manip_bench_next % bench.len()];
+                self.manip_bench_next += 1;
+                let band = self.profile.math_band.clamp(2, 4);
+                let rng = &mut self.rng;
+                let mut challenge = generate_challenge_at(band, op, rng);
+                for _ in 0..20 {
+                    if ui::concrete::puzzle_for(&challenge, rng).is_some() { break; }
+                    challenge = generate_challenge_at(band, op, rng);
+                }
+                if ui::concrete::puzzle_for(&challenge, rng).is_none() {
+                    challenge = generate_challenge_at(2, op, rng);
+                }
+                let mut ac = active_challenge_for(challenge, &self.profile, self.game_time);
+                ac.state.render_hint.cra_stage = CraStage::Concrete;
+                note_action(&mut ac, &ChallengeAction::ShowMe, self.game_time);
+                ac.state = challenge_reducer(ac.state, ChallengeAction::ShowMe);
+                let buddy = self.current_buddy_name();
+                self.begin_challenge(ac);
+                if let Some(ac) = self.activity.challenge.as_mut() {
+                    open_concrete_workspace(ac, &mut self.rng, &mut self.events, &buddy);
+                }
             }
             CtrlToggleEncounters => {
                 self.features.encounters = !self.features.encounters;
@@ -2533,7 +2636,7 @@ impl Game {
                     }
                     SettingsResult::ExportSession => {
                         let json = session::build_export(
-                            &self.player_name, &self.session_log, &self.gifts_given,
+                            &self.player_name, &self.session_log, self.attempt_log.records(), &self.gifts_given,
                             self.dum_dums, self.play_time, &self.profile, self.map.id,
                         );
                         let filename = format!("robot-buddy-session-{}.json", self.play_time as u64);
@@ -3332,8 +3435,8 @@ impl Game {
             if let Some(ref iq) = self.intake {
                 if let Some(ref ac) = iq.challenge {
                     {
-                        let layout = ui::challenge::layout(&ac.state, &ac.challenge, screen);
-                        ui::challenge::draw(&layout, &ac.state, &ac.challenge, self.game_time);
+                        let layout = ui::challenge::layout(&ac.state, &ac.challenge, None, screen);
+                        ui::challenge::draw(&layout, &ac.state, &ac.challenge, None, self.game_time);
                     }
                 }
             }
@@ -3594,10 +3697,9 @@ impl Game {
 
         // Challenge overlay (separate from intake's in-render_world drawing).
         if let Some(ref ac) = self.activity.challenge {
-            {
-                        let layout = ui::challenge::layout(&ac.state, &ac.challenge, screen);
-                        ui::challenge::draw(&layout, &ac.state, &ac.challenge, self.game_time);
-                    }
+            let ws = ac.workspace.as_ref();
+            let layout = ui::challenge::layout(&ac.state, &ac.challenge, ws, screen);
+            ui::challenge::draw(&layout, &ac.state, &ac.challenge, ws, self.game_time);
         }
 
         // KenKen overlay
@@ -3707,6 +3809,7 @@ impl Game {
             fuel: self.fuel,
             upgrades: self.upgrades.iter().cloned().collect(),
             game_pace: self.game_pace,
+            attempt_log: self.attempt_log.clone(),
         }
     }
 
@@ -3728,6 +3831,7 @@ impl Game {
         self.fuel = save_data.fuel;
         self.upgrades = save_data.upgrades.iter().cloned().collect();
         self.game_pace = save_data.game_pace;
+        self.attempt_log = save_data.attempt_log.clone();
 
         self.map = Map::by_id(&save_data.map_id);
         self.npcs_offstage.clear();
@@ -3871,7 +3975,12 @@ fn make_challenge_profile(profile: &LearnerProfile) -> ChallengeProfile {
 fn start_challenge(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32) -> ActiveChallenge {
     let cp = make_challenge_profile(profile);
     let challenge = generate_challenge(&cp, rng);
+    active_challenge_for(challenge, profile, game_time)
+}
 
+/// Present an already-generated challenge at the learner's CRA stage for its
+/// operation.
+fn active_challenge_for(challenge: Challenge, profile: &LearnerProfile, game_time: f32) -> ActiveChallenge {
     let cra = profile.cra_stages
         .get(&challenge.operation)
         .copied()
@@ -3903,8 +4012,12 @@ fn start_challenge(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32)
     ActiveChallenge {
         state: cs,
         challenge,
+        workspace: None,
         complete_timer: 0.0,
         start_time: game_time,
+        answers: Vec::new(),
+        help_at: None,
+        stage_asked: cra,
     }
 }
 
@@ -3936,8 +4049,12 @@ fn start_intake_challenge(challenge: Challenge, _band: u8, game_time: f32) -> Ac
     ActiveChallenge {
         state: cs,
         challenge,
+        workspace: None,
         complete_timer: 0.0,
         start_time: game_time,
+        answers: Vec::new(),
+        help_at: None,
+        stage_asked: CraStage::Abstract,
     }
 }
 
@@ -4130,6 +4247,67 @@ fn display_name_for_buddy_id(id: &str) -> String {
     npc::NpcKind::from_id(id)
         .map(|k| k.display_name().to_string())
         .unwrap_or_else(|| id.to_string())
+}
+
+/// "Show me" landed on the Concrete stage: swap the static picture for the
+/// hands-on workspace, and have the buddy say what to do (the only
+/// instructions a pre-reader gets). Returns false — leaving the static
+/// picture — when the problem doesn't fit the ten-frames.
+/// Note what the attempt log needs from an action before it's applied: an
+/// answer and when, or when Show me was first pressed.
+fn note_action(ac: &mut ActiveChallenge, action: &ChallengeAction, game_time: f32) {
+    let ms = ((game_time - ac.start_time).max(0.0) * 1000.0) as u32;
+    match action {
+        ChallengeAction::AnswerSubmitted { answer } => ac.answers.push(AnswerAt { value: *answer, ms }),
+        ChallengeAction::ShowMe if ac.help_at.is_none() => ac.help_at = Some(game_time),
+        _ => {}
+    }
+}
+
+/// The attempt log's record of a finished challenge.
+fn attempt_record(ac: &ActiveChallenge, correct: bool, now: f64, play_secs: f32, source: &str) -> AttemptRecord {
+    let c = &ac.challenge;
+    let help = match (&ac.workspace, ac.state.hint_used) {
+        (Some(_), _) => Help::Workspace,
+        (None, true) => Help::Picture,
+        (None, false) => Help::None,
+    };
+    AttemptRecord {
+        at: now,
+        play_secs,
+        source: source.to_string(),
+        operation: c.operation,
+        sub_skill: c.sub_skill,
+        a: c.numbers.a,
+        b: c.numbers.b,
+        format: c.numbers.format.clone(),
+        band: c.sampled_band,
+        center_band: c.center_band,
+        cra_stage: ac.stage_asked,
+        correct_answer: c.correct_answer,
+        answers: ac.answers.clone(),
+        correct,
+        help,
+        help_ms: ac.help_at.map(|t| ((t - ac.start_time).max(0.0) * 1000.0) as u32),
+        told_me: ac.state.told_me,
+        workspace: ac.workspace.as_ref().map(|w| w.usage().clone()),
+    }
+}
+
+fn open_concrete_workspace(
+    ac: &mut ActiveChallenge,
+    rng: &mut SmallRng,
+    events: &mut Vec<GameEvent>,
+    buddy: &str,
+) -> bool {
+    if ac.workspace.is_some() || ac.state.render_hint.cra_stage != CraStage::Concrete {
+        return false;
+    }
+    let Some(ws) = ui::concrete::Workspace::for_challenge(&ac.challenge, rng) else { return false };
+    audio::tts::speak(buddy, ui::concrete::intro_line(&ws));
+    events.push(GameEvent::ManipulativeOpened { kind: ws.session.puzzle.kind });
+    ac.workspace = Some(ws);
+    true
 }
 
 fn speak_challenge_feedback(cs: &ChallengeState, speaker: &str) {

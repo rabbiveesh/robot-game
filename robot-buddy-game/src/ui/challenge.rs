@@ -5,12 +5,17 @@
 //! `Frame` that `Game::step` hit-tests and `Game::render` paints, so the
 //! buttons you see are exactly the buttons you can tap — a long wrapped word
 //! problem pushes both down together.
+//!
+//! "Show me" puts one of two things under the question: the static CRA picture
+//! (`visuals`), or — at the Concrete stage — the hands-on workspace
+//! (`concrete`), which the kid builds by dragging.
 
 use crate::prelude::*;
 use robot_buddy_domain::challenge::challenge_state::{ChallengeAction, ChallengeState};
 use robot_buddy_domain::learning::challenge_generator::Challenge;
 use robot_buddy_domain::types::Phase;
 
+use super::concrete::{self, Workspace};
 use super::visuals;
 use crate::input::FrameInput;
 use crate::ui::layout::{self, col, paint, region, row, text, Align, Fit, Frame, Justify, Kind, Node};
@@ -24,6 +29,8 @@ pub enum ChallengeId {
     Question,
     /// The CRA visual (Show me / teaching).
     Visual,
+    /// The hands-on workspace (Concrete-stage Show me).
+    Workspace,
     Feedback,
     Choice(usize),
     ChoiceKey(usize),
@@ -54,6 +61,10 @@ impl ChallengeLayout {
     pub fn tell_me(&self) -> Option<UiRect> {
         self.frame.rect(ChallengeId::TellMe)
     }
+    /// Where the hands-on workspace sits, when it's showing.
+    pub fn workspace(&self) -> Option<UiRect> {
+        self.frame.rect(ChallengeId::Workspace)
+    }
 }
 
 const PANEL_W: f32 = 760.0;
@@ -72,6 +83,13 @@ fn sanitize_math_text(text: &str) -> String {
 /// at that width — the same `visuals::plan` that draws it.
 fn visual(h: f32) -> Node<ChallengeId> {
     region(0.0, h).auto_w().id(ChallengeId::Visual).fixed()
+}
+
+/// The hands-on workspace. It asks for its natural size but gives up height
+/// on a short screen (down to `min_h`); the counters scale to whatever it gets.
+fn workspace(ws: &Workspace, max_w: f32) -> Node<ChallengeId> {
+    let (w, h) = concrete::extent(ws, max_w);
+    region(w, h).id(ChallengeId::Workspace).shrink(1.0).min_h(h * concrete::MIN_HEIGHT_SHARE).align_self(Align::Center)
 }
 
 /// A labelled scaffold button ("Show me" / "Tell me").
@@ -95,10 +113,16 @@ fn answer_button(i: usize, label: &str) -> Node<ChallengeId> {
         .child(region(0.0, 20.0).min_h(0.0))
 }
 
-/// Lay the overlay out for `screen`. Pure.
-pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) -> ChallengeLayout {
+/// Lay the overlay out for `screen`. Pure. `workspace` is the hands-on
+/// "Show me", when one is open; otherwise Show me gets the static picture.
+pub fn layout(
+    cs: &ChallengeState,
+    challenge: &Challenge,
+    workspace: Option<&Workspace>,
+    screen: (f32, f32),
+) -> ChallengeLayout {
     let bounds = layout::screen_rect(screen);
-    let build = |visual_h: f32| tree(cs, challenge, screen, visual_h);
+    let build = |visual_h: f32| tree(cs, challenge, workspace, screen, visual_h);
     let mut frame = layout::layout(&build(0.0), bounds);
     // Two passes: the first finds how wide the visual's slot is (the panel's
     // width doesn't depend on its content), the second reserves its height
@@ -109,8 +133,17 @@ pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) ->
     ChallengeLayout { frame }
 }
 
-fn tree(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32), visual_h: f32) -> Node<ChallengeId> {
-    let sh = screen.1;
+fn tree(
+    cs: &ChallengeState,
+    challenge: &Challenge,
+    workspace: Option<&Workspace>,
+    screen: (f32, f32),
+    visual_h: f32,
+) -> Node<ChallengeId> {
+    let (sw, sh) = screen;
+    // The panel's inner width (PANEL_W or the screen, less the padding): the
+    // most room the workspace can ask for.
+    let inner_w = (sw - 2.0 * MARGIN).min(PANEL_W) - 48.0;
     // Short windows (640x480) get tighter spacing so a wrapped word problem,
     // the visual and feedback all fit above the buttons.
     let compact = sh < 600.0;
@@ -164,7 +197,10 @@ fn tree(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32), visual_h
         col()
             .gap(gap)
             .child(text(q_text, 42, Fit::shrink_then_wrap(22, 6)).id(ChallengeId::Question).center_text())
-            .maybe(cs.hint_used.then(|| visual(visual_h)))
+            .maybe(cs.hint_used.then(|| match workspace {
+                Some(ws) => self::workspace(ws, inner_w),
+                None => visual(visual_h),
+            }))
             .maybe(feedback_slot)
             .child(
                 row()
@@ -205,7 +241,13 @@ const GREEN_ANS: Color = Color::new(0.412, 0.941, 0.682, 1.0); // #69F0AE
 const HINT_GRAY: Color = Color::new(0.471, 0.565, 0.604, 1.0); // #78909C
 
 /// Paint the overlay from its frame.
-pub fn draw(layout: &ChallengeLayout, cs: &ChallengeState, challenge: &Challenge, time: f32) {
+pub fn draw(
+    layout: &ChallengeLayout,
+    cs: &ChallengeState,
+    challenge: &Challenge,
+    workspace: Option<&Workspace>,
+    time: f32,
+) {
     let f = &layout.frame;
     paint::dim(f.bounds, 0.5);
     let teaching = cs.phase == Phase::Teaching;
@@ -238,6 +280,11 @@ pub fn draw(layout: &ChallengeLayout, cs: &ChallengeState, challenge: &Challenge
                 paint::round_rect(r, 16.0, DARK_BG);
                 paint::outline(r, 4.0, if teaching { ORANGE } else { GOLD });
             }
+            ChallengeId::Workspace => {
+                if let Some(ws) = workspace {
+                    concrete::draw(ws, r, f.bounds);
+                }
+            }
             ChallengeId::Visual => visuals::draw(challenge, r),
             ChallengeId::Choice(i) => {
                 let correct = challenge.choices.get(i).is_some_and(|c| c.correct);
@@ -253,6 +300,10 @@ pub fn draw(layout: &ChallengeLayout, cs: &ChallengeState, challenge: &Challenge
             }
             _ => {}
         }
+    }
+    // The carried counter rides above everything, wherever the finger is.
+    if let (Some(ws), Some(area)) = (workspace, layout.workspace()) {
+        concrete::draw_drag(ws, area, f.bounds);
     }
 }
 
