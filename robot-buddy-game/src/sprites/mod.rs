@@ -2,6 +2,8 @@ pub mod player;
 pub mod robot;
 pub mod npcs;
 pub mod swag;
+pub mod attract;
+pub mod dressed;
 
 #[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Dir {

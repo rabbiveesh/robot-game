@@ -450,18 +450,13 @@ impl Game {
             // Live preview of the buddy in their current outfit, so handing
             // something over visibly lands on them.
             if let Some((px, py)) = layout.preview() {
-                match asw.recipient_sprite {
-                    Some(sprite) => {
-                        sprite.draw_sprite(px, py, Dir::Down, self.game_time, false);
-                        sprites::swag::draw_swag(px, py, Dir::Down, 0.0, taken,
-                            self.outfit_color(&asw.recipient_id), sprite.swag_fit());
-                    }
-                    None => {
-                        sprites::robot::draw_robot(px, py, Dir::Down, 0, self.game_time);
-                        sprites::swag::draw_swag(px, py, Dir::Down, 0.0, taken,
-                            self.outfit_color(&asw.recipient_id), sprites::swag::SwagFit::ROBOT);
-                    }
-                }
+                use sprites::dressed::{draw_dressed, Body, Outfit, Posture};
+                let (body, fit) = match asw.recipient_sprite {
+                    Some(sprite) => (Body::Npc { sprite, asleep: false }, sprite.swag_fit()),
+                    None => (Body::Robot { frame: 0 }, sprites::swag::SwagFit::ROBOT),
+                };
+                let outfit = Outfit { worn: taken, color: self.outfit_color(&asw.recipient_id), fit };
+                draw_dressed(Posture::tile(px, py), body, Dir::Down, &outfit, self.game_time);
             }
         }
     }

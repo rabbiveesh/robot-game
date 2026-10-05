@@ -281,6 +281,29 @@ async fn main() {
         snap_game("20_dogfish_house", &mut h).await;
     }
 
+    // ── Pearl Hop: Shelly's beacon on the reef, then every stage, aiming and won ──
+    {
+        let mut h = Harness::new(21);
+        h.start_dev_game();
+        h.game.map = Map::reef();
+        h.game.npcs = npc_mod::npcs_for_map("reef");
+        h.game.npcs_offstage.clear();
+        h.warp_to(6, 12);
+        h.advance(20);
+        snap_game("21_reef_shelly_beacon", &mut h).await;
+        for band in [1u8, 2, 3, 6] {
+            h.game.profile.math_band = band;
+            h.open_pearl_hop();
+            h.skip_shelly_demo();
+            snap_game(&format!("22_pearl_hop_band{band}"), &mut h).await;
+            let aim = h.winning_aim();
+            h.toss_shelly(aim);
+            h.advance(30);
+            snap_game(&format!("23_pearl_hop_band{band}_won"), &mut h).await;
+            h.leave_pearl_hop_by_tap();
+        }
+    }
+
     // ── Panels drawn directly: a 4-line dialogue and a wrapped word problem ──
     {
         use robot_buddy_game::ui::dialogue::{DialogueBox, DialogueLine};

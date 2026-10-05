@@ -63,7 +63,8 @@ robot-buddy-domain/              # Pure Rust domain (no browser deps)
                                  #   kenken, patterns, balance, sudoku, shooter,
                                  #   manipulate_concrete, number_line, base_ten,
                                  #   descent (the dive shaft that gates the trench),
-                                 #   leap (Shelly's pearl stones — skip-counting)
+                                 #   pearl_hop (Shelly's slingshot number path: count,
+                                 #   skip-count, X hops = divide, growing with the band)
     quest/                       # Quest data model + step reducer + micro-quest gen
     world/                       # movement resolver, random encounters
     text/                        # voice_parser (spoken-number → integer)
@@ -82,8 +83,10 @@ robot-buddy-game/                # Macroquad game (depends on domain)
     trace.rs                     # opt-in input trace (ROBOT_TRACE=1): raw events, per-frame input, drag decisions
     save.rs                      # SaveBackend trait + LocalStorageBackend (prod) + InMemoryBackend (tests)
     tilemap.rs, npc.rs, session.rs, settings.rs
-    sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit)
-    ui/                          # challenge, concrete (hands-on "Show me" workspace), descent, dialogue, hud, interaction_menu, leap, shop, swag, swatches, title_screen, settings_overlay, visuals
+    sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit),
+                                 #   attract (the "game here!" beacon over minigame hosts),
+                                 #   dressed (THE way a character is drawn: body + swag, posed)
+    ui/                          # challenge, concrete (hands-on "Show me" workspace), descent, dialogue, hud, interaction_menu, pearl_hop, shop, swag, swatches, title_screen, settings_overlay, visuals
       layout/                    # declarative layout (ADR-004): node tree → LayoutEngine → Frame
                                  #   (placed text + hit targets) read by BOTH draw and click;
                                  #   FontMetrics (headless, real font), paging, assert_sane, painter

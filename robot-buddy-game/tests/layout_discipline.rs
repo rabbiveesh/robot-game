@@ -34,6 +34,7 @@ const MIGRATED: &[&str] = &[
     "settings_overlay.rs",
     "visuals.rs",
     "concrete.rs",
+    "pearl_hop.rs",
 ];
 
 /// Raw macroquad calls a migrated panel must not make (besides every
@@ -51,10 +52,12 @@ fn forbidden_name(name: &str) -> bool {
     FORBIDDEN.contains(&name) || name == "draw" || name.starts_with("draw_") || name.starts_with("gl_")
 }
 
-/// Module names whose `draw_*`-style functions are allowed: the painter and
-/// the migrated modules themselves (they're scanned too).
+/// Module names whose `draw_*`-style functions are allowed: the painter, the
+/// migrated modules themselves (they're scanned too), and `dressed` — the one
+/// way a character reaches the screen, body and swag together, in its own
+/// tile space under a posture transform (a sprite, not a layout).
 fn trusted_module(m: &str) -> bool {
-    m == "paint" || MIGRATED.iter().any(|f| f.trim_end_matches(".rs") == m)
+    m == "paint" || m == "dressed" || MIGRATED.iter().any(|f| f.trim_end_matches(".rs") == m)
 }
 
 /// Hand-made rects that are deliberate, with why. (file, enclosing fn or
@@ -65,6 +68,8 @@ const COORD_ALLOW: &[(&str, &str, &str)] = &[
     ("dialogue.rs", "draw", ".inset"),
     // The swatch being worn gets a gold frame just outside the swatch.
     ("swatches.rs", "paint_swatch", ".expand"),
+    // The pearl purse swells past its icon box as a won pearl drops in.
+    ("pearl_hop.rs", "draw", ".expand"),
     // Display-list prims in the visual's local coordinates; painted through a
     // paint::Canvas bound to the layout region, which checks they stay inside.
     ("visuals.rs", "*", "UiRect::new"),
@@ -369,8 +374,8 @@ fn the_scanner_flags_unmigrated_helpers_but_not_local_or_migrated_ones() {
     let src = "use crate::sprites::player;
                fn draw_star_burst() {}
                fn f() { draw_star_burst(); visuals::draw(c, r); super::visuals::draw(c, r); paint::text(t, WHITE);
-                        crate::ui::leap::draw_stones(s); player::draw_player(x, y); leap::draw(s); }";
-    assert_eq!(calls(src), vec!["crate::sprites::player::draw_player", "crate::ui::leap::draw_stones", "leap::draw"]);
+                        crate::ui::descent::draw_stones(s); player::draw_player(x, y); descent::draw(s); }";
+    assert_eq!(calls(src), vec!["crate::sprites::player::draw_player", "crate::ui::descent::draw_stones", "descent::draw"]);
 }
 
 #[test]
@@ -380,4 +385,41 @@ fn the_scanner_finds_hand_made_rects() {
                #[cfg(test)] mod tests { fn t() { UiRect::new(0.0, 0.0, 1.0, 1.0); } }";
     let coords: Vec<String> = scan(src).coords.into_iter().map(|(f, w)| format!("{f}:{w}")).collect();
     assert_eq!(coords, vec!["draw:.expand", "draw:.inset", "draw:UiRect { .. }", "draw:UiRect::new"]);
+}
+
+/// Characters reach the screen with their swag, by construction: the only
+/// caller of `draw_swag` is `sprites::dressed` (plus the kid's own cosmetics
+/// in `sprites::player`), and no game or UI file draws an NPC or Sparky body
+/// directly. A new screen that shows a buddy has to go through
+/// `dressed::draw_dressed`, so it can't forget what they're wearing.
+#[test]
+fn characters_are_drawn_dressed() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut offenders = Vec::new();
+    let mut stack = vec![src.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let rel = path.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+            if !rel.ends_with(".rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for (needle, allowed) in [
+                ("draw_swag(", &["sprites/swag.rs", "sprites/dressed.rs", "sprites/player.rs"][..]),
+                ("draw_sprite(", &["npc.rs", "sprites/dressed.rs"][..]),
+            ] {
+                if text.contains(needle) && !allowed.contains(&rel.as_str()) {
+                    offenders.push(format!("{rel} calls {needle}..)"));
+                }
+            }
+        }
+    }
+    assert!(offenders.is_empty(), "draw characters with sprites::dressed::draw_dressed:\n  {}", offenders.join("\n  "));
+    let hop = read("pearl_hop.rs");
+    assert!(hop.contains("dressed::draw_dressed"), "Pearl Hop draws Shelly dressed");
 }
