@@ -22,7 +22,7 @@ impl Game {
             source: source.clone(),
         });
         let ship_draw_x = session.ship_x;
-        self.active_shooter = Some(ActiveShooter {
+        self.activity.shooter = Some(ActiveShooter {
             session,
             ship_draw_x,
             complete_timer: 0.0,
@@ -38,16 +38,16 @@ impl Game {
         let tapped_leave = input.mouse_clicked
             && ui::shooter::leave_hit(screen, input.mouse_pos.0, input.mouse_pos.1);
         if input.pressed(KeyCode::Escape) || tapped_leave {
-            self.active_shooter = None;
+            self.activity.shooter = None;
             self.set_state(GameState::Playing);
             return;
         }
 
-        let prev_wave = self.active_shooter.as_ref().map(|a| a.session.wave).unwrap_or(0);
-        let prev_cleared = self.active_shooter.as_ref().map_or(0, |a| a.session.cleared_waves.len());
+        let prev_wave = self.activity.shooter.as_ref().map(|a| a.session.wave).unwrap_or(0);
+        let prev_cleared = self.activity.shooter.as_ref().map_or(0, |a| a.session.cleared_waves.len());
         let mut finished = false;
 
-        if let Some(a) = self.active_shooter.as_mut() {
+        if let Some(a) = self.activity.shooter.as_mut() {
             if a.session.phase == ShooterPhase::Complete {
                 // Victory beat, then dismiss on a tap or after a short pause.
                 a.complete_timer += dt;
@@ -97,7 +97,7 @@ impl Game {
         }
 
         // A wave just paired off with no wrong pairs: cheer, right as it clears.
-        let clean_now = self.active_shooter.as_ref().is_some_and(|a| {
+        let clean_now = self.activity.shooter.as_ref().is_some_and(|a| {
             a.session.cleared_waves.len() > prev_cleared
                 && a.session.cleared_waves.last().is_some_and(|w| w.is_clean())
         });
@@ -106,14 +106,14 @@ impl Game {
         }
 
         // A wave just cleared (index advanced but the run isn't over yet).
-        if let Some(a) = self.active_shooter.as_ref() {
+        if let Some(a) = self.activity.shooter.as_ref() {
             if a.session.wave > prev_wave && a.session.phase == ShooterPhase::Playing {
                 self.events.push(GameEvent::ShooterWaveCleared { wave: prev_wave as u8 });
             }
         }
 
         if finished {
-            if let Some(a) = self.active_shooter.take() {
+            if let Some(a) = self.activity.shooter.take() {
                 let waves = a.session.wave as u8;
                 let hits = a.session.hits;
                 let misses = a.session.misses;

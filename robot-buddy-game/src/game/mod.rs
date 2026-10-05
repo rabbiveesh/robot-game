@@ -142,6 +142,28 @@ enum IntakePhase {
     Complete,
 }
 
+/// Every in-progress activity — the challenge on screen, a puzzle, the
+/// shooter, a shop counter, a quest step. They live together so leaving them
+/// is one assignment of `Activities::default()`: a new activity added here is
+/// cleared by every exit path (back to title, dev ESC, loading a save)
+/// without anyone having to remember a list.
+#[derive(Default)]
+struct Activities {
+    challenge: Option<ActiveChallenge>,
+    kenken: Option<ActiveKenKen>,
+    pattern: Option<ActivePattern>,
+    balance: Option<ActiveBalance>,
+    sudoku: Option<ActiveSudoku>,
+    shooter: Option<ActiveShooter>,
+    shop: Option<ActiveShop>,
+    swag: Option<ActiveSwag>,
+    descent: Option<ActiveDescent>,
+    pearl_hop: Option<ActivePearlHop>,
+    quest: Option<ActiveQuest>,
+    /// A random encounter's challenge is queued to open.
+    pending_challenge: bool,
+}
+
 struct IntakeState {
     question_index: usize,
     current_band: u8,
@@ -558,17 +580,8 @@ pub struct Game {
     // State machine
     pub state: GameState,
     intake: Option<IntakeState>,
-    active_challenge: Option<ActiveChallenge>,
-    active_kenken: Option<ActiveKenKen>,
-    active_pattern: Option<ActivePattern>,
-    active_balance: Option<ActiveBalance>,
-    active_sudoku: Option<ActiveSudoku>,
-    active_shooter: Option<ActiveShooter>,
-    active_shop: Option<ActiveShop>,
-    active_swag: Option<ActiveSwag>,
-    active_descent: Option<ActiveDescent>,
-    active_pearl_hop: Option<ActivePearlHop>,
-    active_quest: Option<ActiveQuest>,
+    /// Whatever the kid is in the middle of. See `Activities`.
+    activity: Activities,
     /// Cosmetics bought from Bolt (persisted in the save).
     /// Who's wearing which shop swag — the kid included, under
     /// `wardrobe::PLAYER`. Swag handed to a buddy leaves the kid's outfit
@@ -584,7 +597,6 @@ pub struct Game {
     manip_bench_next: usize,
     /// The "grab the stick" nudge has been said this play session.
     row_nudge_given: bool,
-    pending_challenge: bool,
     /// Gate id whose challenge is currently on screen (set when the kid takes
     /// on a gate guardian; cleared when that challenge resolves).
     opening_gate: Option<String>,
@@ -708,23 +720,12 @@ impl Game {
             play_time: 0.0,
             state: GameState::Title,
             intake: None,
-            active_challenge: None,
-            active_kenken: None,
-            active_pattern: None,
-            active_balance: None,
-            active_sudoku: None,
-            active_shooter: None,
-            active_shop: None,
-            active_swag: None,
-            active_descent: None,
-            active_pearl_hop: None,
-            active_quest: None,
+            activity: Activities::default(),
             wardrobe: Wardrobe::new(),
             features: FeatureFlags::default(),
             steps_since_encounter: 0,
             manip_bench_next: 0,
             row_nudge_given: false,
-            pending_challenge: false,
             opening_gate: None,
             satisfied_gates: std::collections::HashSet::new(),
             paid_tolls: std::collections::HashSet::new(),
@@ -803,7 +804,7 @@ impl Game {
     /// Index (0-based) of the correct choice in the currently-active challenge,
     /// be it intake or normal. None if no challenge is on screen.
     pub fn correct_choice_index(&self) -> Option<usize> {
-        let ch = self.active_challenge.as_ref()
+        let ch = self.activity.challenge.as_ref()
             .map(|ac| &ac.challenge)
             .or_else(|| self.intake.as_ref().and_then(|iq| iq.challenge.as_ref().map(|ac| &ac.challenge)))?;
         ch.choices.iter().position(|c| c.correct)
@@ -812,18 +813,18 @@ impl Game {
     /// The active challenge's layout, exactly as `step` hit-tests it. Tests
     /// click through this (Show me, the workspace's counters).
     pub fn challenge_layout(&self, screen: (f32, f32)) -> Option<ui::challenge::ChallengeLayout> {
-        let ac = self.active_challenge.as_ref()?;
+        let ac = self.activity.challenge.as_ref()?;
         Some(ui::challenge::layout(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen))
     }
 
     /// The hands-on "Show me" workspace, if one is open.
     pub fn challenge_workspace(&self) -> Option<&ui::concrete::Workspace> {
-        self.active_challenge.as_ref().and_then(|ac| ac.workspace.as_ref())
+        self.activity.challenge.as_ref().and_then(|ac| ac.workspace.as_ref())
     }
 
     /// Phase of the active challenge (intake or normal). None if no challenge.
     pub fn challenge_phase(&self) -> Option<Phase> {
-        self.active_challenge.as_ref()
+        self.activity.challenge.as_ref()
             .map(|ac| ac.state.phase)
             .or_else(|| self.intake.as_ref().and_then(|iq| iq.challenge.as_ref().map(|ac| ac.state.phase)))
     }
@@ -831,13 +832,13 @@ impl Game {
     /// Read-only view of the active KenKen session (None if no puzzle is on screen).
     /// Tests use this with `ui::kenken::layout` to compute click targets.
     pub fn active_kenken(&self) -> Option<&ActiveKenKen> {
-        self.active_kenken.as_ref()
+        self.activity.kenken.as_ref()
     }
 
     /// Read-only view of the active pattern session (None if none is on screen).
     /// Tests use this with `ui::patterns::layout` to compute click targets.
     pub fn active_pattern(&self) -> Option<&ActivePattern> {
-        self.active_pattern.as_ref()
+        self.activity.pattern.as_ref()
     }
 
     /// True once the kid has solved the gate guardian with this id. Lets tests
@@ -855,26 +856,26 @@ impl Game {
     /// Read-only view of the active balance session (None if none is on screen).
     /// Tests use this with `ui::balance::layout` to compute click targets.
     pub fn active_balance(&self) -> Option<&ActiveBalance> {
-        self.active_balance.as_ref()
+        self.activity.balance.as_ref()
     }
 
     /// Read-only view of the active Sudoku session (None if none is on screen).
     /// Tests use this with `ui::sudoku::layout` to compute click targets.
     pub fn active_sudoku(&self) -> Option<&ActiveSudoku> {
-        self.active_sudoku.as_ref()
+        self.activity.sudoku.as_ref()
     }
 
     pub fn active_shooter(&self) -> Option<&ActiveShooter> {
-        self.active_shooter.as_ref()
+        self.activity.shooter.as_ref()
     }
 
     /// Read-only view of the active shop session (None if the shop is closed).
     pub fn active_shop(&self) -> Option<&ActiveShop> {
-        self.active_shop.as_ref()
+        self.activity.shop.as_ref()
     }
 
     pub fn active_swag(&self) -> Option<&ActiveSwag> {
-        self.active_swag.as_ref()
+        self.activity.swag.as_ref()
     }
 
     /// If `id` names a Pearl Hop host here (or tagging along), what one of
@@ -887,7 +888,7 @@ impl Game {
 
     /// Shelly's Pearl Hop, while it's up.
     pub fn active_pearl_hop(&self) -> Option<&ActivePearlHop> {
-        self.active_pearl_hop.as_ref()
+        self.activity.pearl_hop.as_ref()
     }
 
     /// Has Shelly's first-time show-off already played for this save?
@@ -896,12 +897,12 @@ impl Game {
     }
 
     pub fn active_descent(&self) -> Option<&ActiveDescent> {
-        self.active_descent.as_ref()
+        self.activity.descent.as_ref()
     }
 
     /// Read-only view of the active quest run (None if not on a quest).
     pub fn active_quest(&self) -> Option<&ActiveQuest> {
-        self.active_quest.as_ref()
+        self.activity.quest.as_ref()
     }
 
     /// Snapshot of the event log length. Pair with `events_since(mark)` to
@@ -928,6 +929,11 @@ impl Game {
             self.events.push(GameEvent::StateChanged { from: self.state, to: new_state });
             self.state = new_state;
         }
+    }
+
+    /// Drop whatever the kid was in the middle of (see `Activities`).
+    fn leave_activities(&mut self) {
+        self.activity = Activities::default();
     }
 
     fn start_dialogue(&mut self, lines: Vec<DialogueLine>) {
@@ -991,18 +997,7 @@ impl Game {
         {
             self.set_state(GameState::Title);
             self.dialogue.active = false;
-            self.active_challenge = None;
-            self.active_kenken = None;
-            self.active_pattern = None;
-            self.active_balance = None;
-            self.active_sudoku = None;
-            self.active_shooter = None;
-            self.active_shop = None;
-            self.active_swag = None;
-            self.active_descent = None;
-            self.active_pearl_hop = None;
-            self.active_quest = None;
-            self.pending_challenge = false;
+            self.leave_activities();
         }
         self.dum_dum_hud.update(dt);
         self.pearl_hud.update(dt);
@@ -1755,7 +1750,7 @@ impl Game {
                     speaker: buddy,
                     text: "OOOOH a treasure chest! But it has a LOCK! We need to solve the puzzle to open it!".into(),
                 }]);
-                self.pending_challenge = true;
+                self.activity.pending_challenge = true;
                 self.set_state(GameState::Dialogue);
             } else if let Some(target) = npc::get_interact_target_with_companion(
                 self.player.tile_x, self.player.tile_y, self.player.dir,
@@ -1787,7 +1782,7 @@ impl Game {
                         speaker: target_name,
                         text: "*yaaawn* Oh, hello! I'm napping right across the path. Solve a little number puzzle for me and I'll scooch aside, deal?".into(),
                     }]);
-                    self.pending_challenge = true;
+                    self.activity.pending_challenge = true;
                     self.set_state(GameState::Dialogue);
                     return;
                 }
@@ -1798,7 +1793,7 @@ impl Game {
                     self.menu_target_id = target_id;
                     self.menu_target_name = target_name.clone();
                     self.pending_refuel = true;
-                    self.pending_challenge = true;
+                    self.activity.pending_challenge = true;
                     self.start_dialogue(vec![DialogueLine {
                         speaker: target_name,
                         text: "BEEP BOOP! Solve a number puzzle and I'll fill the rocket right up to the top!".into(),
@@ -1837,7 +1832,7 @@ impl Game {
                     }
                     let lines = npc_dialogue_lines(target_ref, &mut self.rng);
                     if self.menu_can_challenge && self.rng.gen::<f32>() < 0.4 {
-                        self.pending_challenge = true;
+                        self.activity.pending_challenge = true;
                     }
                     self.start_dialogue(lines);
                     self.set_state(GameState::Dialogue);
@@ -1869,7 +1864,7 @@ impl Game {
 
                 if opts.len() == 1 {
                     if self.rng.gen::<f32>() < 0.5 {
-                        self.pending_challenge = true;
+                        self.activity.pending_challenge = true;
                     }
                     let lines = sparky_dialogue_lines(&mut self.rng);
                     self.start_dialogue(lines);
@@ -1985,8 +1980,8 @@ impl Game {
             self.dialogue.advance();
             self.events.push(GameEvent::DialogueAdvanced);
             if !self.dialogue.active {
-                if self.pending_challenge {
-                    self.pending_challenge = false;
+                if self.activity.pending_challenge {
+                    self.activity.pending_challenge = false;
                     let ac = start_challenge(&mut self.rng, &self.profile, self.game_time);
                     self.begin_challenge(ac);
                 } else {
@@ -2002,7 +1997,7 @@ impl Game {
         let buddy = self.current_buddy_name();
 
         let mut dismiss = false;
-        if let Some(ref mut ac) = self.active_challenge {
+        if let Some(ref mut ac) = self.activity.challenge {
             if ac.state.phase == Phase::Complete && ac.state.correct == Some(true) {
                 ac.complete_timer += dt;
                 if ac.complete_timer >= 2.5 { dismiss = true; }
@@ -2074,7 +2069,7 @@ impl Game {
             }
         }
         if dismiss {
-            if let Some(ac) = self.active_challenge.take() {
+            if let Some(ac) = self.activity.challenge.take() {
                 let was_correct = ac.state.correct == Some(true);
                 let response_ms = ((self.game_time - ac.start_time) as f64 * 1000.0).min(30000.0);
 
@@ -2200,7 +2195,7 @@ impl Game {
                     grid_size: ak.session.puzzle.grid_size,
                     source,
                 });
-                self.active_kenken = Some(ak);
+                self.activity.kenken = Some(ak);
                 self.set_state(GameState::KenKen);
             }
             CtrlTriggerPattern => {
@@ -2210,7 +2205,7 @@ impl Game {
                     level: self.profile.pattern_level,
                     source,
                 });
-                self.active_pattern = Some(ap);
+                self.activity.pattern = Some(ap);
                 self.set_state(GameState::Pattern);
             }
             CtrlTriggerBalance => {
@@ -2220,7 +2215,7 @@ impl Game {
                     level: balance::balance_level_for_band(self.profile.math_band),
                     source,
                 });
-                self.active_balance = Some(ab);
+                self.activity.balance = Some(ab);
                 self.set_state(GameState::Balance);
             }
             CtrlTriggerSudoku => {
@@ -2230,7 +2225,7 @@ impl Game {
                     grid_size: asd.session.puzzle.grid_size,
                     source,
                 });
-                self.active_sudoku = Some(asd);
+                self.activity.sudoku = Some(asd);
                 self.set_state(GameState::Sudoku);
             }
             CtrlTriggerChallenge => {
@@ -2239,7 +2234,7 @@ impl Game {
                     question: ac.challenge.display_text.clone(),
                 });
                 audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
-                self.active_challenge = Some(ac);
+                self.activity.challenge = Some(ac);
                 self.set_state(GameState::Challenge);
             }
             CtrlManipulatives => {
@@ -2265,7 +2260,7 @@ impl Game {
                 ac.state = challenge_reducer(ac.state, ChallengeAction::ShowMe);
                 let buddy = self.current_buddy_name();
                 self.begin_challenge(ac);
-                if let Some(ac) = self.active_challenge.as_mut() {
+                if let Some(ac) = self.activity.challenge.as_mut() {
                     open_concrete_workspace(ac, &mut self.rng, &mut self.events, &buddy);
                 }
             }
@@ -2352,7 +2347,7 @@ impl Game {
                     question: ac.challenge.display_text.clone(),
                 });
                 audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
-                self.active_challenge = Some(ac);
+                self.activity.challenge = Some(ac);
                 self.set_state(GameState::Challenge);
             }
         }
@@ -2365,30 +2360,30 @@ impl Game {
             question: ac.challenge.display_text.clone(),
         });
         audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
-        self.active_challenge = Some(ac);
+        self.activity.challenge = Some(ac);
         self.set_state(GameState::Challenge);
     }
 
     fn start_quest(&mut self, quest: Quest) {
         let session = quest::quest_reducer(QuestSession::new(quest), QuestAction::Start);
         let puzzle = build_quest_puzzle(&session, &mut self.rng);
-        self.active_quest = Some(ActiveQuest { session, puzzle, message: None });
+        self.activity.quest = Some(ActiveQuest { session, puzzle, message: None });
         self.set_state(GameState::Quest);
     }
 
     fn step_quest(&mut self, input: &FrameInput, screen: (f32, f32)) {
         // Pull the current step (clone) so we can mutate the session afterward.
-        let step = match self.active_quest.as_ref().and_then(|aq| aq.session.current_step().cloned()) {
+        let step = match self.activity.quest.as_ref().and_then(|aq| aq.session.current_step().cloned()) {
             Some(s) => s,
             None => {
-                self.active_quest = None;
+                self.activity.quest = None;
                 self.set_state(GameState::Playing);
                 return;
             }
         };
 
         let intent = {
-            let aq = self.active_quest.as_ref().unwrap();
+            let aq = self.activity.quest.as_ref().unwrap();
             let Some(view) = quest_view(aq) else { return };
             if input.mouse_clicked {
                 let (mx, my) = input.mouse_pos;
@@ -2422,11 +2417,11 @@ impl Game {
             },
             QuestClick::Answer(v) => {
                 if let QuestStep::MathPuzzle { .. } = &step {
-                    let answer = self.active_quest.as_ref().unwrap().puzzle.as_ref().map(|p| p.answer);
+                    let answer = self.activity.quest.as_ref().unwrap().puzzle.as_ref().map(|p| p.answer);
                     if Some(v) == answer {
                         act = Some(QuestAction::CompletePuzzle { correct: true });
                     } else {
-                        self.active_quest.as_mut().unwrap().message =
+                        self.activity.quest.as_mut().unwrap().message =
                             Some("Hmm, not quite — try again!".into());
                     }
                 }
@@ -2441,19 +2436,19 @@ impl Game {
         if let Some(action) = act {
             // Apply on a detached session so self.rng is free for the next
             // puzzle without overlapping the active_quest borrow.
-            let mut session = self.active_quest.as_ref().unwrap().session.clone();
+            let mut session = self.activity.quest.as_ref().unwrap().session.clone();
             session = quest::quest_reducer(session, action);
             let new_puzzle = build_quest_puzzle(&session, &mut self.rng);
             let complete = session.status == QuestStatus::Complete;
             {
-                let aq = self.active_quest.as_mut().unwrap();
+                let aq = self.activity.quest.as_mut().unwrap();
                 aq.session = session;
                 aq.puzzle = new_puzzle;
                 aq.message = None;
             }
             if complete {
                 self.events.push(GameEvent::QuestCompleted);
-                self.active_quest = None;
+                self.activity.quest = None;
                 self.set_state(GameState::Playing);
             }
         }
@@ -2477,7 +2472,7 @@ impl Game {
                 "talk" => {
                     if self.menu_target_id == "sparky" {
                         if self.menu_can_challenge && self.rng.gen::<f32>() < 0.5 {
-                            self.pending_challenge = true;
+                            self.activity.pending_challenge = true;
                         }
                         let lines = sparky_dialogue_lines(&mut self.rng);
                         self.start_dialogue(lines);
@@ -2497,7 +2492,7 @@ impl Game {
                             });
                         if let Some(lines) = lines {
                             if self.menu_can_challenge && self.rng.gen::<f32>() < 0.4 {
-                                self.pending_challenge = true;
+                                self.activity.pending_challenge = true;
                             }
                             self.start_dialogue(lines);
                         }
@@ -2511,7 +2506,7 @@ impl Game {
                         grid_size: ak.session.puzzle.grid_size,
                         source: ak.source_npc.clone(),
                     });
-                    self.active_kenken = Some(ak);
+                    self.activity.kenken = Some(ak);
                     self.set_state(GameState::KenKen);
                 }
                 "pattern" => {
@@ -2521,7 +2516,7 @@ impl Game {
                         level: self.profile.pattern_level,
                         source: ap.source_npc.clone(),
                     });
-                    self.active_pattern = Some(ap);
+                    self.activity.pattern = Some(ap);
                     self.set_state(GameState::Pattern);
                 }
                 "balance" => {
@@ -2531,7 +2526,7 @@ impl Game {
                         level: balance::balance_level_for_band(self.profile.math_band),
                         source: ab.source_npc.clone(),
                     });
-                    self.active_balance = Some(ab);
+                    self.activity.balance = Some(ab);
                     self.set_state(GameState::Balance);
                 }
                 "sudoku" => {
@@ -2541,7 +2536,7 @@ impl Game {
                         grid_size: asd.session.puzzle.grid_size,
                         source: asd.source_npc.clone(),
                     });
-                    self.active_sudoku = Some(asd);
+                    self.activity.sudoku = Some(asd);
                     self.set_state(GameState::Sudoku);
                 }
                 "dive" => {
@@ -2551,7 +2546,7 @@ impl Game {
                     let source = self.menu_target_id.clone();
                     // The menu only offers "shop" for an NPC that runs one.
                     let Some(shop) = npc::NpcKind::from_id(&source).and_then(|k| k.shop()) else { return };
-                    self.active_shop = Some(ActiveShop {
+                    self.activity.shop = Some(ActiveShop {
                         shop,
                         catalog: shop.catalog(),
                         owned: self.shop_owned_for(shop),
@@ -2660,17 +2655,7 @@ impl Game {
                         self.parent_panel_open = false;
                         audio::tts::cancel();
                         self.dialogue.active = false;
-                        self.active_challenge = None;
-                        self.active_kenken = None;
-                        self.active_pattern = None;
-                        self.active_balance = None;
-                        self.active_sudoku = None;
-                        self.active_shop = None;
-                        self.active_swag = None;
-                        self.active_descent = None;
-                        self.active_pearl_hop = None;
-                        self.active_quest = None;
-                        self.pending_challenge = false;
+                        self.leave_activities();
                         self.set_state(GameState::Title);
                     }
                 }
@@ -3713,38 +3698,38 @@ impl Game {
         self.dialogue.draw(screen);
 
         // Challenge overlay (separate from intake's in-render_world drawing).
-        if let Some(ref ac) = self.active_challenge {
+        if let Some(ref ac) = self.activity.challenge {
             let ws = ac.workspace.as_ref();
             let layout = ui::challenge::layout(&ac.state, &ac.challenge, ws, screen);
             ui::challenge::draw(&layout, &ac.state, &ac.challenge, ws, self.game_time);
         }
 
         // KenKen overlay
-        if let Some(ref ak) = self.active_kenken {
+        if let Some(ref ak) = self.activity.kenken {
             let layout = ui::kenken::layout(&ak.session, screen);
             ui::kenken::draw_kenken(&ak.session, &layout, self.game_time, ak.selected, ak.intro_step);
         }
 
         // Pattern overlay
-        if let Some(ref ap) = self.active_pattern {
+        if let Some(ref ap) = self.activity.pattern {
             let layout = ui::patterns::layout(&ap.session, screen);
             ui::patterns::draw_pattern(&ap.session, &layout, self.game_time);
         }
 
         // Balance overlay
-        if let Some(ref ab) = self.active_balance {
+        if let Some(ref ab) = self.activity.balance {
             let layout = ui::balance::layout(&ab.session, screen);
             ui::balance::draw_balance(&ab.session, &layout, self.game_time);
         }
 
         // Sudoku overlay
-        if let Some(ref asd) = self.active_sudoku {
+        if let Some(ref asd) = self.activity.sudoku {
             let layout = ui::sudoku::layout(&asd.session, screen);
             ui::sudoku::draw_sudoku(&asd.session, &layout, asd.selected);
         }
 
         // Goyish Map shooter — a full-screen minigame.
-        if let Some(ref a) = self.active_shooter {
+        if let Some(ref a) = self.activity.shooter {
             ui::shooter::draw(&a.session, a.ship_draw_x, self.track_toast_text(), screen, self.game_time);
         }
 
@@ -3757,7 +3742,7 @@ impl Game {
         }
 
         // Descent overlay
-        if let Some(ref ad) = self.active_descent {
+        if let Some(ref ad) = self.activity.descent {
             let layout = ui::descent::layout(&ad.session, screen);
             ui::descent::draw(&ad.session, &layout, ad.message.as_deref(), self.game_time);
         }
@@ -3765,7 +3750,7 @@ impl Game {
         self.render_swag_overlay(screen);
 
         // Quest overlay
-        if let Some(ref aq) = self.active_quest {
+        if let Some(ref aq) = self.activity.quest {
             if let Some(view) = quest_view(aq) {
                 let layout = ui::quest::layout(&view, &aq.session.quest.title, aq.message.as_deref(), screen);
                 ui::quest::draw(&layout);
@@ -3831,6 +3816,8 @@ impl Game {
     }
 
     fn load_from_save(&mut self, save_data: &SaveData) {
+        // A save is a fresh start in the world: nothing from before carries over.
+        self.leave_activities();
         self.player_name = save_data.name.clone();
         self.player_gender = save_data.gender;
         self.profile = save_data.profile.clone();

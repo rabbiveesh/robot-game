@@ -948,6 +948,15 @@ impl Harness {
         self.click(x, y);
     }
 
+    /// Open the parent overlay (P, works mid-minigame) and click "Back to
+    /// title screen".
+    pub fn parent_back_to_title(&mut self) {
+        self.press(KeyCode::P);
+        let (x, y) = robot_buddy_game::ui::settings_overlay::back_to_title_center(SCREEN, true);
+        self.click(x, y);
+        assert_eq!(self.game.state, GameState::Title);
+    }
+
     /// Click a feature toggle in the (revealed) parent section.
     pub fn toggle_feature_in_settings(&mut self, feature: robot_buddy_game::ui::settings_overlay::Feature) {
         let (x, y) = robot_buddy_game::ui::settings_overlay::feature_toggle_center(SCREEN, feature);

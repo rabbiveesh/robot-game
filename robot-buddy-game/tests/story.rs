@@ -1849,6 +1849,19 @@ fn enter_shooter(h: &mut Harness) {
     assert_eq!(h.game.state, GameState::Shooter);
 }
 
+#[test]
+fn back_to_title_mid_shooter_leaves_no_shooter_behind() {
+    // A parent can pull the kid out of any minigame from the P overlay. Coming
+    // back to the world afterwards must not drag the old minigame along.
+    let mut h = Harness::new(11);
+    h.start_dev_game();
+    enter_shooter(&mut h);
+    assert!(h.game.active_shooter().is_some());
+
+    h.parent_back_to_title();
+    assert!(h.game.active_shooter().is_none(), "the shooter is left behind at the title screen");
+}
+
 /// Two on-screen, untagged aliens whose values do (`bond`) or don't sum to the
 /// target.
 fn shooter_pair(h: &Harness, bond: bool) -> (u32, u32) {

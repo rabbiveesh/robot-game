@@ -7,7 +7,7 @@ use super::*;
 impl Game {
     /// Everything the shop panel shows, borrowed from the live session.
     pub fn shop_model(&self) -> Option<ui::shop::ShopModel<'_>> {
-        let ash = self.active_shop.as_ref()?;
+        let ash = self.activity.shop.as_ref()?;
         Some(ui::shop::ShopModel {
             shop: ash.shop,
             catalog: &ash.catalog,
@@ -40,14 +40,14 @@ impl Game {
 
         match intent {
             ui::shop::ShopInput::Page(page) => {
-                if let Some(ash) = self.active_shop.as_mut() {
+                if let Some(ash) = self.activity.shop.as_mut() {
                     ash.page = page;
                 }
             }
             ui::shop::ShopInput::Close => {
                 // "Done" dismisses the nearest thing: the color picker if it's
                 // up, otherwise the whole shop.
-                let ash = self.active_shop.as_mut().unwrap();
+                let ash = self.activity.shop.as_mut().unwrap();
                 if ash.picking_color {
                     ash.picking_color = false;
                     ash.message = None;
@@ -55,21 +55,21 @@ impl Game {
                 }
                 // Purchases went straight into the wardrobe and upgrades as
                 // they settled, so closing has nothing to hand back.
-                self.active_shop = None;
+                self.activity.shop = None;
                 self.set_state(GameState::Playing);
             }
             ui::shop::ShopInput::SelectItem(i) => {
                 // Balances read before the session borrow so the purchase
                 // branch below can use them without fighting the borrowck.
                 let purse = {
-                    let shop = self.active_shop.as_ref().unwrap().shop;
+                    let shop = self.activity.shop.as_ref().unwrap().shop;
                     self.balance_for(shop.currency())
                 };
-                let trade_purse = match self.active_shop.as_ref().unwrap().catalog[i].kind {
+                let trade_purse = match self.activity.shop.as_ref().unwrap().catalog[i].kind {
                     ItemKind::Trade { .. } => purse,
                     _ => 0,
                 };
-                let ash = self.active_shop.as_mut().unwrap();
+                let ash = self.activity.shop.as_mut().unwrap();
                 if ash.selected.is_some() || ash.picking_color {
                     return; // already solving a purchase or picking a color
                 }
@@ -135,7 +135,7 @@ impl Game {
                     Traded(domain_shop::TradeQuote),
                 }
                 let settled = {
-                    let ash = self.active_shop.as_mut().unwrap();
+                    let ash = self.activity.shop.as_mut().unwrap();
                     let Some(i) = ash.selected else { return };
                     if v != ash.answer {
                         // Natural consequence, not punishment — recount and retry.
@@ -198,8 +198,8 @@ impl Game {
                         }
                         // The shelf's "owned" marks are read from the real
                         // wardrobe, never kept as a second copy.
-                        let owned = self.active_shop.as_ref().map(|ash| self.shop_owned_for(ash.shop));
-                        if let (Some(ash), Some(owned)) = (self.active_shop.as_mut(), owned) {
+                        let owned = self.activity.shop.as_ref().map(|ash| self.shop_owned_for(ash.shop));
+                        if let (Some(ash), Some(owned)) = (self.activity.shop.as_mut(), owned) {
                             ash.owned = owned;
                         }
                     }
@@ -229,7 +229,7 @@ impl Game {
                     wearer: wardrobe::PLAYER.into(),
                     color: id.to_string(),
                 });
-                let ash = self.active_shop.as_mut().unwrap();
+                let ash = self.activity.shop.as_mut().unwrap();
                 ash.message = Some("Looking good!".into());
                 // Persist right away, same as a purchase — the new outfit
                 // should survive a reload even if the kid quits now.
@@ -287,7 +287,7 @@ impl Game {
 
     /// Shop overlay, plus the live outfit preview while picking a color.
     pub(super) fn render_shop_overlay(&self, screen: (f32, f32)) {
-        if let (Some(ash), Some(model)) = (self.active_shop.as_ref(), self.shop_model()) {
+        if let (Some(ash), Some(model)) = (self.activity.shop.as_ref(), self.shop_model()) {
             let layout = ui::shop::layout(&model, screen);
             ui::shop::draw_shop(&model, &layout);
 
@@ -315,7 +315,7 @@ impl Game {
             .chain(self.companion.iter())
             .find(|n| n.id_str() == self.menu_target_id)
             .map(|n| n.sprite);
-        self.active_swag = Some(ActiveSwag {
+        self.activity.swag = Some(ActiveSwag {
             recipient_id: self.menu_target_id.clone(),
             recipient_name: self.menu_target_name.clone(),
             recipient_sprite: sprite,
@@ -332,7 +332,7 @@ impl Game {
     /// Handing a piece over moves it off the kid, so the list shrinks as they
     /// dress their buddy up — and Bolt is free to sell them another one.
     pub fn swag_model(&self) -> Option<ui::swag::SwagModel<'_>> {
-        let asw = self.active_swag.as_ref()?;
+        let asw = self.activity.swag.as_ref()?;
         let picking = asw.picking_color.then(|| {
             let current = self.outfit_color(&asw.recipient_id);
             ui::swag::ColorPick {
@@ -366,11 +366,11 @@ impl Game {
             }
         };
         let Some(intent) = intent else { return };
-        let Some(asw) = self.active_swag.as_ref() else { return };
+        let Some(asw) = self.activity.swag.as_ref() else { return };
 
         match intent {
             ui::swag::SwagInput::Page(page) => {
-                if let Some(asw) = self.active_swag.as_mut() {
+                if let Some(asw) = self.activity.swag.as_mut() {
                     asw.page = page;
                 }
             }
@@ -378,13 +378,13 @@ impl Game {
                 // Done backs out of the swatches to the list they came from;
                 // opened for a recolour, there's no list to go back to.
                 if asw.picking_color && !asw.recolor_only {
-                    if let Some(asw) = self.active_swag.as_mut() {
+                    if let Some(asw) = self.activity.swag.as_mut() {
                         asw.picking_color = false;
                         asw.message = None;
                     }
                     return;
                 }
-                self.active_swag = None;
+                self.activity.swag = None;
                 self.set_state(GameState::Playing);
             }
             ui::swag::SwagInput::PickColor(i) => {
@@ -392,7 +392,7 @@ impl Game {
                 let (who, name) = (asw.recipient_id.clone(), asw.recipient_name.clone());
                 self.dress(wardrobe::WardrobeAction::set_color(&who, color));
                 self.events.push(GameEvent::OutfitColorPicked { wearer: who, color: color.to_string() });
-                if let Some(asw) = self.active_swag.as_mut() {
+                if let Some(asw) = self.activity.swag.as_mut() {
                     asw.message = Some(format!("{name} looks great!"));
                 }
                 self.persist();
@@ -412,7 +412,7 @@ impl Game {
                         // The fun of Color Change is choosing — so the buddy
                         // gets to choose too, starting from the colour it was.
                         if item.id == domain_shop::COLOR_CHANGE {
-                            if let Some(asw) = self.active_swag.as_mut() {
+                            if let Some(asw) = self.activity.swag.as_mut() {
                                 asw.picking_color = true;
                             }
                         }
@@ -423,7 +423,7 @@ impl Game {
                     HandOver::NotWorn => None,
                 };
                 let remaining = self.swag_catalog_for(wardrobe::PLAYER);
-                if let Some(asw) = self.active_swag.as_mut() {
+                if let Some(asw) = self.activity.swag.as_mut() {
                     asw.items = remaining;
                     asw.message = message;
                 }
@@ -443,7 +443,7 @@ impl Game {
 
     /// Give-Swag overlay, with the buddy previewed in their current outfit.
     pub(super) fn render_swag_overlay(&self, screen: (f32, f32)) {
-        if let (Some(asw), Some(model)) = (self.active_swag.as_ref(), self.swag_model()) {
+        if let (Some(asw), Some(model)) = (self.activity.swag.as_ref(), self.swag_model()) {
             let layout = ui::swag::layout(&model, screen);
             let taken = model.taken;
             ui::swag::draw(&model, &layout);
@@ -557,7 +557,7 @@ mod tests {
 
     /// Open Bolt's shop directly (skipping the walk-and-talk).
     fn open_shop(g: &mut Game) {
-        g.active_shop = Some(ActiveShop {
+        g.activity.shop = Some(ActiveShop {
             shop: ShopKind::Bolt,
             trading: None,
             catalog: domain_shop::shop_catalog(),
@@ -588,7 +588,7 @@ mod tests {
 
     /// The catalog row for `id`.
     fn shop_row(g: &Game, id: &str) -> ui::shop::UiRect {
-        let i = g.active_shop.as_ref().unwrap().catalog.iter().position(|it| it.id == id).expect("item in catalog");
+        let i = g.activity.shop.as_ref().unwrap().catalog.iter().position(|it| it.id == id).expect("item in catalog");
         shop_layout(g).item(i).expect("row on screen")
     }
 
@@ -601,14 +601,14 @@ mod tests {
         // Tap the Color Change row, then answer the purchase subtraction.
         let row = shop_row(&g, "color_change");
         click_shop(&mut g, row);
-        let answer = g.active_shop.as_ref().unwrap().answer;
+        let answer = g.activity.shop.as_ref().unwrap().answer;
         let tile = {
-            let ash = g.active_shop.as_ref().unwrap();
+            let ash = g.activity.shop.as_ref().unwrap();
             shop_layout(&g).answer(&shop_view(ash, g.outfit_color(wardrobe::PLAYER)), answer).expect("correct answer tile")
         };
         click_shop(&mut g, tile);
 
-        let ash = g.active_shop.as_ref().unwrap();
+        let ash = g.activity.shop.as_ref().unwrap();
         assert!(ash.owned.contains("color_change"));
         assert!(ash.picking_color, "buying Color Change should open the picker");
 
@@ -620,9 +620,9 @@ mod tests {
         // Done dismisses the picker but keeps the shop open.
         let close = shop_layout(&g).done().unwrap();
         click_shop(&mut g, close);
-        let ash = g.active_shop.as_ref().unwrap();
+        let ash = g.activity.shop.as_ref().unwrap();
         assert!(!ash.picking_color, "Done should close the picker first");
-        assert!(g.active_shop.is_some(), "the shop itself should stay open");
+        assert!(g.activity.shop.is_some(), "the shop itself should stay open");
     }
 
     #[test]
@@ -634,7 +634,7 @@ mod tests {
         // Reopen the picker from the owned Color Change row.
         let row = shop_row(&g, "color_change");
         click_shop(&mut g, row);
-        assert!(g.active_shop.as_ref().unwrap().picking_color);
+        assert!(g.activity.shop.as_ref().unwrap().picking_color);
 
         // Pick a sequence with repeats and back-tracking. Each pick must stick,
         // the picker must stay open, and the highlighted swatch must follow.
@@ -643,9 +643,9 @@ mod tests {
             click_shop(&mut g, swatch);
             assert_eq!(g.outfit_color(wardrobe::PLAYER), sprites::player::OUTFIT_COLORS[i].0,
                 "picking swatch {i} should set the kid's colour to {}", sprites::player::OUTFIT_COLORS[i].0);
-            assert!(g.active_shop.as_ref().unwrap().picking_color,
+            assert!(g.activity.shop.as_ref().unwrap().picking_color,
                 "picker should stay open so the kid can keep changing colors");
-            match shop_view(g.active_shop.as_ref().unwrap(), g.outfit_color(wardrobe::PLAYER)) {
+            match shop_view(g.activity.shop.as_ref().unwrap(), g.outfit_color(wardrobe::PLAYER)) {
                 ui::shop::ShopView::PickingColor { current, .. } =>
                     assert_eq!(current, i, "the highlighted swatch should track the latest pick"),
                 _ => panic!("expected the PickingColor view while picking"),
@@ -661,7 +661,7 @@ mod tests {
         let row = shop_row(&g, "color_change");
         click_shop(&mut g, row);
         assert!(
-            g.active_shop.as_ref().unwrap().picking_color,
+            g.activity.shop.as_ref().unwrap().picking_color,
             "tapping an owned Color Change should reopen the picker, not refuse the sale"
         );
     }

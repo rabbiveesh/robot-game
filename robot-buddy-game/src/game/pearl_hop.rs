@@ -120,7 +120,7 @@ impl Game {
             let show_aim = round.min_aim + (round.max_aim - round.min_aim) / 3;
             HopDemo { step: DemoStep::SelfToss, clock: 0.0, miss_aim, show_aim }
         });
-        self.active_pearl_hop = Some(ActivePearlHop {
+        self.activity.pearl_hop = Some(ActivePearlHop {
             caption: opening_caption(&round),
             session: HopSession::new(round),
             base,
@@ -141,7 +141,7 @@ impl Game {
 
     /// What Pearl Hop shows this frame (step, render and tests all read it).
     pub fn pearl_hop_view(&self) -> Option<HopView<'_>> {
-        let a = self.active_pearl_hop.as_ref()?;
+        let a = self.activity.pearl_hop.as_ref()?;
         // The won pearls land in the purse when they arrive, not before.
         let arriving = a.session.win_clock().is_some_and(|c| c < WIN_PEARL_ARRIVES) || a.session.win_clock().is_none();
         let pearls = if a.session.phase == HopPhase::Won && arriving { self.pearls.saturating_sub(a.in_flight) } else { self.pearls };
@@ -166,8 +166,8 @@ impl Game {
     /// One frame of Pearl Hop.
     pub(super) fn step_pearl_hop(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         let Some(l) = self.pearl_hop_layout(screen) else { return };
-        self.active_pearl_hop.as_mut().unwrap().now = input.now;
-        let a = self.active_pearl_hop.as_ref().unwrap();
+        self.activity.pearl_hop.as_mut().unwrap().now = input.now;
+        let a = self.activity.pearl_hop.as_ref().unwrap();
         let (mx, my) = input.mouse_pos;
         let tap = if input.mouse_clicked { ui::pearl_hop::handle_click(mx, my, &l) } else { None };
         let key = ui::pearl_hop::handle_key(input, &a.session);
@@ -208,10 +208,10 @@ impl Game {
     fn aim_pearl_hop(&mut self, input: &FrameInput, key: Option<HopInput>, l: &ui::pearl_hop::PearlHopLayout) {
         let g = l.scene;
         let pos = input.mouse_pos;
-        let pulling = self.active_pearl_hop.as_ref().unwrap().pull_to.is_some();
+        let pulling = self.activity.pearl_hop.as_ref().unwrap().pull_to.is_some();
 
         if !pulling && input.mouse_clicked && g.grabs(pos.0, pos.1) {
-            self.active_pearl_hop.as_mut().unwrap().pull_to = Some(pos);
+            self.activity.pearl_hop.as_mut().unwrap().pull_to = Some(pos);
             return;
         }
         if pulling {
@@ -221,14 +221,14 @@ impl Game {
             // motion and no release): press Shelly, then tap where she goes.
             let let_go = input.mouse_released || !input.mouse_down || input.mouse_clicked;
             if !let_go {
-                self.active_pearl_hop.as_mut().unwrap().pull_to = Some(pos);
+                self.activity.pearl_hop.as_mut().unwrap().pull_to = Some(pos);
                 if let Some(aim) = aim {
                     self.set_pearl_hop_aim(aim);
                 }
                 return;
             }
             // Let go: a real pull tosses her; a tap on her does nothing.
-            self.active_pearl_hop.as_mut().unwrap().pull_to = None;
+            self.activity.pearl_hop.as_mut().unwrap().pull_to = None;
             if let Some(aim) = aim {
                 self.set_pearl_hop_aim(aim);
                 self.toss_shelly();
@@ -238,7 +238,7 @@ impl Game {
 
         match key {
             Some(HopInput::Nudge(d)) => {
-                let s = &self.active_pearl_hop.as_ref().unwrap().session;
+                let s = &self.activity.pearl_hop.as_ref().unwrap().session;
                 let next = (s.aim as i32 + d).clamp(s.round.min_aim as i32, s.round.max_aim as i32) as u16;
                 self.set_pearl_hop_aim(next);
             }
@@ -250,7 +250,7 @@ impl Game {
     /// Move the aim; Shelly counts the hop out loud as it snaps from stone to
     /// stone ("one… two… three…").
     fn set_pearl_hop_aim(&mut self, aim: u16) {
-        let a = self.active_pearl_hop.as_mut().unwrap();
+        let a = self.activity.pearl_hop.as_mut().unwrap();
         let before = a.session.aim;
         a.session = hop_reducer(a.session.clone(), HopAction::Aim { at: aim });
         if a.session.aim != before {
@@ -260,7 +260,7 @@ impl Game {
 
     fn toss_shelly(&mut self) {
         let now = self.game_time;
-        let a = self.active_pearl_hop.as_mut().unwrap();
+        let a = self.activity.pearl_hop.as_mut().unwrap();
         a.session = hop_reducer(a.session.clone(), HopAction::Toss);
         a.counted = 0;
         a.tally_spoken = 0;
@@ -274,7 +274,7 @@ impl Game {
     /// she comes down.
     fn tick_pearl_hop(&mut self, dt: f32) {
         let now = self.game_time;
-        let a = self.active_pearl_hop.as_mut().unwrap();
+        let a = self.activity.pearl_hop.as_mut().unwrap();
         let before = a.session.phase;
         a.session = hop_reducer(a.session.clone(), HopAction::Tick { dt });
         let s = &a.session;
@@ -305,7 +305,7 @@ impl Game {
         }
         self.pearl_hop_react();
         if after == HopPhase::Aiming && before != HopPhase::Aiming {
-            let a = self.active_pearl_hop.as_mut().unwrap();
+            let a = self.activity.pearl_hop.as_mut().unwrap();
             a.aim_started = now;
         }
     }
@@ -313,11 +313,11 @@ impl Game {
     /// She came down. Log the toss; pay for the pearl, or react to the miss.
     fn pearl_hop_landed(&mut self) {
         let (stage, toss, tosses, ms, base, clean) = {
-            let a = self.active_pearl_hop.as_ref().unwrap();
+            let a = self.activity.pearl_hop.as_ref().unwrap();
             let s = &a.session;
             (s.round.stage, s.toss.clone().unwrap(), s.tosses, a.toss_ms, a.base, s.was_clean())
         };
-        let round = self.active_pearl_hop.as_ref().unwrap().session.round.clone();
+        let round = self.activity.pearl_hop.as_ref().unwrap().session.round.clone();
         self.log_pearl_hop_toss(&round, &toss, ms);
 
         if toss.landing == Landing::Pearl {
@@ -328,7 +328,7 @@ impl Game {
             let paid = self.award_pearls(payout);
             self.events.push(GameEvent::PearlHopWon { stage, tosses, pearls: payout.total() });
             self.persist();
-            let a = self.active_pearl_hop.as_mut().unwrap();
+            let a = self.activity.pearl_hop.as_mut().unwrap();
             a.in_flight = payout.total();
             // Shown once the count reaches the pearl (see pearl_hop_react).
             a.won_caption = format!("My pearl!  {paid}");
@@ -338,7 +338,7 @@ impl Game {
     /// Say the landing's line once its count is done: the cheer as the pearl
     /// pops, or the funny reaction to a miss. Never "wrong".
     fn pearl_hop_react(&mut self) {
-        let a = self.active_pearl_hop.as_mut().unwrap();
+        let a = self.activity.pearl_hop.as_mut().unwrap();
         let s = &a.session;
         if a.reacted || !matches!(s.phase, HopPhase::Landed | HopPhase::Won) || s.clock < s.tally_secs() {
             return;
@@ -406,7 +406,7 @@ impl Game {
                 _ => (pearl, 0, pearl, end),
             };
             let record = AttemptRecord {
-                at: self.active_pearl_hop.as_ref().map_or(0.0, |a| a.now),
+                at: self.activity.pearl_hop.as_ref().map_or(0.0, |a| a.now),
                 play_secs: self.play_time,
                 source: "shelly".to_string(),
                 operation,
@@ -437,7 +437,7 @@ impl Game {
     }
 
     fn leave_pearl_hop(&mut self) {
-        self.active_pearl_hop = None;
+        self.activity.pearl_hop = None;
         self.events.push(GameEvent::PearlHopLeft);
         self.set_state(GameState::Playing);
     }
@@ -448,7 +448,7 @@ impl Game {
         let g = l.scene;
         let (hx, hy) = g.home();
         let (step, clock, miss_aim, show_aim) = {
-            let d = self.active_pearl_hop.as_mut().unwrap().demo.as_mut().unwrap();
+            let d = self.activity.pearl_hop.as_mut().unwrap().demo.as_mut().unwrap();
             d.clock += dt;
             (d.step, d.clock, d.miss_aim, d.show_aim)
         };
@@ -460,15 +460,15 @@ impl Game {
             DemoStep::SelfToss => {
                 // She scrunches herself back, counting as she goes, then lets go.
                 if clock >= SELF_TOSS_AT {
-                    self.active_pearl_hop.as_mut().unwrap().pull_to = None;
+                    self.activity.pearl_hop.as_mut().unwrap().pull_to = None;
                     self.set_pearl_hop_aim(miss_aim);
                     self.toss_shelly();
-                    let d = self.active_pearl_hop.as_mut().unwrap().demo.as_mut().unwrap();
+                    let d = self.activity.pearl_hop.as_mut().unwrap().demo.as_mut().unwrap();
                     d.step = DemoStep::Watching;
                     d.clock = 0.0;
                 } else {
                     let p = toward(miss_aim, (clock / SELF_PULL_SECS).clamp(0.0, 1.0));
-                    self.active_pearl_hop.as_mut().unwrap().pull_to = Some(p);
+                    self.activity.pearl_hop.as_mut().unwrap().pull_to = Some(p);
                     if let Some(aim) = g.aim_for_pointer(p) {
                         self.set_pearl_hop_aim(aim);
                     }
@@ -476,14 +476,14 @@ impl Game {
             }
             DemoStep::Watching => {
                 let back = {
-                    let s = &self.active_pearl_hop.as_ref().unwrap().session;
+                    let s = &self.activity.pearl_hop.as_ref().unwrap().session;
                     s.phase == HopPhase::Aiming && s.toss.is_some()
                 };
                 if !back {
                     self.tick_pearl_hop(dt);
                     return;
                 }
-                let a = self.active_pearl_hop.as_mut().unwrap();
+                let a = self.activity.pearl_hop.as_mut().unwrap();
                 let d = a.demo.as_mut().unwrap();
                 d.step = DemoStep::HandShows;
                 d.clock = 0.0;
@@ -496,7 +496,7 @@ impl Game {
             DemoStep::HandShows => {
                 let (u, _, _) = hand_timeline(clock);
                 let pull = (u > 0.0).then(|| toward(show_aim, u));
-                self.active_pearl_hop.as_mut().unwrap().pull_to = pull;
+                self.activity.pearl_hop.as_mut().unwrap().pull_to = pull;
                 if let Some(aim) = pull.and_then(|p| g.aim_for_pointer(p)) {
                     self.set_pearl_hop_aim(aim);
                 }
@@ -510,7 +510,7 @@ impl Game {
     /// Demo over (or skipped): forget her show-off toss so the kid's first
     /// real toss is their first try, and remember not to show it again.
     fn finish_pearl_hop_demo(&mut self) {
-        let a = self.active_pearl_hop.as_mut().unwrap();
+        let a = self.activity.pearl_hop.as_mut().unwrap();
         a.demo = None;
         a.pull_to = None;
         a.session = hop_reducer(a.session.clone(), HopAction::Reset);
@@ -527,7 +527,7 @@ impl Game {
 
     /// The art extras for this frame: the live pull, and the demo's hand.
     pub(super) fn pearl_hop_art(&self, l: &ui::pearl_hop::PearlHopLayout) -> HopArt {
-        let Some(a) = self.active_pearl_hop.as_ref() else { return HopArt::default() };
+        let Some(a) = self.activity.pearl_hop.as_ref() else { return HopArt::default() };
         let mut art = HopArt { pull_to: a.pull_to, hand: None, hand_alpha: 0.0 };
         if let Some(d) = a.demo.as_ref().filter(|d| d.step == DemoStep::HandShows) {
             let (u, pressed, alpha) = hand_timeline(d.clock);
