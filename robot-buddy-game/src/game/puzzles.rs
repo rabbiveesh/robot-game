@@ -9,7 +9,7 @@ impl Game {
         // step. Only on completion do we fire the profile event so this never
         // fires again.
         let mut intro_finished = false;
-        if let Some(ref mut ak) = self.active_kenken {
+        if let Some(ref mut ak) = self.activity.kenken {
             if let Some(step) = ak.intro_step {
                 if input.mouse_clicked || input.pressed(KeyCode::Space) || input.pressed(KeyCode::Enter) {
                     let next = step + 1;
@@ -33,7 +33,7 @@ impl Game {
         }
 
         let mut dismiss = false;
-        if let Some(ref mut ak) = self.active_kenken {
+        if let Some(ref mut ak) = self.activity.kenken {
             // Auto-dismiss timer once solved.
             if ak.session.phase == KenKenPhase::Complete {
                 ak.complete_timer += dt;
@@ -68,7 +68,7 @@ impl Game {
         }
 
         if dismiss {
-            if let Some(ak) = self.active_kenken.take() {
+            if let Some(ak) = self.activity.kenken.take() {
                 let was_correct = ak.session.phase == KenKenPhase::Complete;
                 let response_ms = self.elapsed_ms(ak.start_time, 120000.0);
                 let grid_size = ak.session.puzzle.grid_size;
@@ -123,7 +123,7 @@ impl Game {
 
     pub(super) fn step_pattern(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         let mut dismiss = false;
-        if let Some(ref mut ap) = self.active_pattern {
+        if let Some(ref mut ap) = self.activity.pattern {
             if ap.session.phase == PatternPhase::Complete {
                 // Celebrate, then auto-dismiss — or let any input move on.
                 ap.complete_timer += dt;
@@ -151,7 +151,7 @@ impl Game {
         }
 
         if dismiss {
-            if let Some(ap) = self.active_pattern.take() {
+            if let Some(ap) = self.activity.pattern.take() {
                 let was_correct = ap.session.phase == PatternPhase::Complete;
                 let response_ms = self.elapsed_ms(ap.start_time, 120000.0);
                 let level = self.profile.pattern_level;
@@ -179,7 +179,7 @@ impl Game {
 
     pub(super) fn step_balance(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         let mut dismiss = false;
-        if let Some(ref mut ab) = self.active_balance {
+        if let Some(ref mut ab) = self.activity.balance {
             if ab.session.phase == BalancePhase::Complete {
                 ab.complete_timer += dt;
                 if ab.complete_timer >= 2.0 {
@@ -206,7 +206,7 @@ impl Game {
         }
 
         if dismiss {
-            if let Some(ab) = self.active_balance.take() {
+            if let Some(ab) = self.activity.balance.take() {
                 let was_correct = ab.session.phase == BalancePhase::Complete;
                 let response_ms = self.elapsed_ms(ab.start_time, 120000.0);
                 let level = balance::balance_level_for_band(self.profile.math_band);
@@ -227,7 +227,7 @@ impl Game {
 
     pub(super) fn step_sudoku(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         let mut dismiss = false;
-        if let Some(ref mut asd) = self.active_sudoku {
+        if let Some(ref mut asd) = self.activity.sudoku {
             if asd.session.phase == SudokuPhase::Complete {
                 asd.complete_timer += dt;
                 if asd.complete_timer >= 2.5 {
@@ -251,7 +251,7 @@ impl Game {
         }
 
         if dismiss {
-            if let Some(asd) = self.active_sudoku.take() {
+            if let Some(asd) = self.activity.sudoku.take() {
                 let was_correct = asd.session.phase == SudokuPhase::Complete;
                 let response_ms = self.elapsed_ms(asd.start_time, 120000.0);
                 let grid_size = asd.session.puzzle.grid_size;

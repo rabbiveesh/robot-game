@@ -188,6 +188,12 @@ pub fn feature_toggle_center(screen: (f32, f32), feature: Feature) -> (f32, f32)
     center_of(screen, true, SettingsId::Feature(feature))
 }
 
+/// Center of the "Back to title screen" button, with the parent panel open
+/// (P) or closed (T).
+pub fn back_to_title_center(screen: (f32, f32), parent_open: bool) -> (f32, f32) {
+    center_of(screen, parent_open, SettingsId::BackToTitle)
+}
+
 pub fn draw(screen: (f32, f32), m: SettingsModel) {
     let f = layout(screen, m);
     paint::dim(f.bounds, 0.75);
