@@ -18,19 +18,7 @@ use crate::input::FrameInput;
 
 // ─── Layout types ───────────────────────────────────────
 
-#[derive(Debug, Clone, Copy)]
-pub struct UiRect {
-    pub x: f32,
-    pub y: f32,
-    pub w: f32,
-    pub h: f32,
-}
-
-impl UiRect {
-    pub fn contains(&self, mx: f32, my: f32) -> bool {
-        mx >= self.x && mx <= self.x + self.w && my >= self.y && my <= self.y + self.h
-    }
-}
+pub use crate::ui::layout::UiRect;
 
 pub struct ChoiceBound {
     pub rect: UiRect,

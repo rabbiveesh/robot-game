@@ -287,7 +287,9 @@ dependencies = [
 name = "robot-buddy-game"
 version = "0.1.0"
 dependencies = [
+ "fontdue",
  "macroquad",
+ "proc-macro2",
  "rand",
  "robot-buddy-domain",
  "serde",

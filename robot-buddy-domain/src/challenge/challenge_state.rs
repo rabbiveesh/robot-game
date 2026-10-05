@@ -86,7 +86,9 @@ pub fn challenge_reducer(state: ChallengeState, action: ChallengeAction) -> Chal
                     phase: Phase::Complete,
                     correct: Some(true),
                     attempts,
-                    reward: determine_reward(true),
+                    // Pays only on a first-try solve; a right answer reached by
+                    // burning wrong guesses still celebrates but earns nothing.
+                    reward: determine_reward(true, attempts - 1),
                     feedback: Some(DisplaySpeech {
                         display: "Amazing! You got it!".into(),
                         speech: "Amazing! You got it!".into(),
@@ -280,6 +282,18 @@ mod tests {
         let s = challenge_reducer(state(), ChallengeAction::AnswerSubmitted { answer: 5 });
         assert_eq!(s.phase, Phase::Feedback);
         assert!(s.reward.is_none());
+    }
+
+    #[test]
+    fn second_try_correct_completes_but_pays_nothing() {
+        // Wrong then right: full celebration, no currency — otherwise cycling
+        // the choices farms Dum Dums.
+        let s = challenge_reducer(state(), ChallengeAction::AnswerSubmitted { answer: 5 });
+        let s = challenge_reducer(s, ChallengeAction::Retry);
+        let s = challenge_reducer(s, ChallengeAction::AnswerSubmitted { answer: 7 });
+        assert_eq!(s.phase, Phase::Complete);
+        assert_eq!(s.correct, Some(true));
+        assert!(s.reward.is_none(), "a guessed-down quiz must not pay");
     }
 
     #[test]

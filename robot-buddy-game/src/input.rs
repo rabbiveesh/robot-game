@@ -19,6 +19,7 @@ const TRACKED_KEYS: &[KeyCode] = &[
     KeyCode::Backspace, KeyCode::Tab, KeyCode::Escape,
     KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4,
     KeyCode::P, KeyCode::T, KeyCode::E,
+    KeyCode::GraveAccent, // backtick — toggles the dev debug/export overlay
 ];
 
 #[derive(Default, Clone)]

@@ -48,13 +48,20 @@ Cargo.toml                       # workspace root
 robot-buddy-domain/              # Pure Rust domain (no browser deps)
   src/
     lib.rs                       # pub mod types/learning/challenge/economy/logic/world/text/quest
-    types.rs                     # Shared enums (Operation, SubSkill, CraStage, Phase)
+    types.rs                     # Shared enums (Operation, SubSkill, CraStage, Phase,
+                                 #   GamePace — parent-set arcade speed)
     learning/                    # Profile reducer, challenge gen, frustration, intake
     challenge/                   # Lifecycle state machine
-    economy/                     # Rewards, gifts, interaction options, shop
+    economy/                     # Rewards, gifts, interaction options, shop, wardrobe
+                                 #   (wardrobe = who wears which shop swag; swag given to a
+                                 #    buddy leaves the kid and stays with that buddy)
+                                 #   (shop = two counters: Bolt takes Dum Dums, Hermie in the
+                                 #    trench takes pearls + runs a 3:1 trade desk)
     logic/                       # Puzzle + manipulative reducers (see ADR-003):
-                                 #   kenken, patterns, balance, sudoku,
-                                 #   manipulate_concrete, number_line, base_ten
+                                 #   kenken, patterns, balance, sudoku, shooter,
+                                 #   manipulate_concrete, number_line, base_ten,
+                                 #   descent (the dive shaft that gates the trench),
+                                 #   leap (Shelly's pearl stones — skip-counting)
     quest/                       # Quest data model + step reducer + micro-quest gen
     world/                       # movement resolver, random encounters
     text/                        # voice_parser (spoken-number → integer)
@@ -71,14 +78,19 @@ robot-buddy-game/                # Macroquad game (depends on domain)
     input.rs                     # FrameInput — single input boundary
     save.rs                      # SaveBackend trait + LocalStorageBackend (prod) + InMemoryBackend (tests)
     tilemap.rs, npc.rs, session.rs, settings.rs
-    sprites/                     # player, robot, npcs
-    ui/                          # challenge, dialogue, hud, interaction_menu, title_screen, settings_overlay, visuals
+    sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit)
+    ui/                          # challenge, descent, dialogue, hud, interaction_menu, leap, shop, swag, swatches, title_screen, settings_overlay, visuals
+      layout/                    # declarative layout (ADR-004): node tree → LayoutEngine → Frame
+                                 #   (placed text + hit targets) read by BOTH draw and click;
+                                 #   FontMetrics (headless, real font), paging, assert_sane, painter
     visuals/                     # math visualization renderers
     audio/                       # TTS via miniquad plugin
     net/                         # AI dialogue fetch
   tests/                         # headless integration tests — plain `cargo test`, no window
     common/mod.rs                # Harness + story helpers (walk_to_npc, interact, answer_correctly)
     headless.rs, story.rs        # 7 player-flow tests; assertions read GameEvent log
+    layout_sweep.rs, sweep/      # assert_sane over migrated panels × 5 screens (360×640 phone up) × awkward data
+    layout_discipline.rs         # migrated panels may not call raw draw/measure fns or hand-make rects
   www/                           # build output (gitignored except index.html)
 ```
 
@@ -89,6 +101,7 @@ ADRs document key design decisions, their context, and consequences. Read these 
 - **[ADR-001: Band Blending](docs/adr/001-band-blending.md)** — Bands are distribution centers, not hard levels. Accuracy-based promotion replaces streaks. Spread width tightens on frustration, widens on confidence. Streak is display-only.
 - **[ADR-002: Headless Test Harness](docs/adr/002-headless-test-harness.md)** — `Game::step` (pure) / `Game::render` (macroquad) split, `FrameInput` boundary, `SaveBackend` trait with `InMemoryBackend` for tests, `GameEvent` log as the assertion surface. Story-style integration tests run as plain `cargo test` with no window.
 - **[ADR-003: Logic-Puzzle, Manipulative & Quest Domain Layer](docs/adr/003-logic-puzzle-and-manipulative-domain-layer.md)** — Every new feature (extra logic puzzles, CRA manipulatives, quests, shop, encounters, voice parser) is built as a pure, headlessly-tested domain module first; the conflict-prone `game.rs` wiring is the only serial step. The ADR lists what's wired end-to-end vs. domain-only and gives the turnkey wiring recipe.
+- **[ADR-004: UI Layout](docs/adr/004-ui-layout.md)** — Panels describe a flexbox-shaped node tree; a swappable `LayoutEngine` (in-house `FlowEngine`, exact CSS flexbox, checked against taffy) produces a `Frame` that both drawing and hit-testing read, so overlap and hit-rect drift are impossible by construction. Overflow overflows (then clips): panels fit with `.w_pct(1.0).max_w(W)` and `min_h(0.0)`, never by relying on the engine to squeeze. Text needs an explicit `Fit` policy; `assert_sane` sweeps panels × screens; migrated panels paint only through `ui::layout::paint`. The ADR lists exactly what each check catches and misses, and the taffy swap recipe.
 
 ## Key Domain Concepts
 
@@ -112,6 +125,9 @@ cargo build --target wasm32-unknown-unknown --release
 
 # Serve locally
 cd robot-buddy-game/www && npx serve .
+
+# Screenshot every migrated UI panel natively (real draw code, real game state)
+SHOT_W=960 SHOT_H=720 SHOT_DIR=/tmp/shots cargo run -p robot-buddy-game --example screenshots
 
 # Simulate adaptive learning
 cargo run -p robot-buddy-domain --bin simulate -- --profile gifted

@@ -1,20 +1,30 @@
-//! Embodied number line — ambient stepping-stones laid into the world as
-//! terrain the kid hops across. The avatar IS the token; walking the stones IS
-//! counting. This module is just the *data* (which tiles form a numbered path
-//! on which map, and which stone is the goal); the game drives feedback off the
-//! player's index along it, and the render draws the stones.
+//! Embodied number line — Shelly's pearl stones, laid into the world as
+//! terrain the kid *leaps* across. The avatar IS the token; the leaping IS the
+//! skip-counting. This module is just the *data* (which tiles are stones on
+//! which map, and what a pearl there is worth); the rules live in
+//! `robot_buddy_domain::logic::leap`, and the game drives both off the
+//! player's stone index.
 //!
-//! Spike-1: one ambient path in the reef. Gated dive-gauges (the deliberate
-//! number-line challenge) come later and reuse the `number_line` domain reducer.
+//! The stones sit every other tile with a rip current in the gaps, so walking
+//! the path is impossible — the only way along it is a leap of the size the
+//! kid commits to before launching. That's the whole point: a pearl can't be
+//! stumbled onto.
 
-/// A numbered path of tiles. `tiles[i]` is the stone for mark `i` (so they must
-/// be listed in order and each adjacent to the next). `target` is the index of
-/// the goal stone — hop there and the path gives a little cheer.
+/// A chain of numbered stones. `tiles[i]` is the stone for mark `i`, in order,
+/// spaced `STONE_SPACING` tiles apart with current between them. `clam` is
+/// where Shelly perches and calls out the trip; `payout` is what one of her
+/// pearls is worth here — the deeper path pays better, which is the reward for
+/// making the descent.
 pub struct NumberTrack {
     pub id: &'static str,
     pub tiles: &'static [(usize, usize)],
-    pub target: usize,
+    pub clam: (usize, usize),
+    pub payout: u32,
 }
+
+/// Tiles between consecutive stones. One gap is enough to make the path
+/// unwalkable, and keeps the whole chain inside a reasonable map width.
+pub const STONE_SPACING: usize = 2;
 
 impl NumberTrack {
     /// Mark (index) of `tile` on this path, or `None` if it isn't a stone.
@@ -22,64 +32,51 @@ impl NumberTrack {
         self.tiles.iter().position(|&t| t == tile)
     }
 
-    /// The goal stone's tile.
-    pub fn target_tile(&self) -> (usize, usize) {
-        self.tiles[self.target]
+    /// The highest mark on the path — the ceiling any generated trip fits in.
+    pub fn max_mark(&self) -> u8 {
+        (self.tiles.len().saturating_sub(1)) as u8
+    }
+
+    /// The tiles between the stones, which the map paints as rip current.
+    /// Derived from the stones themselves so the terrain can never drift out
+    /// of step with the path.
+    pub fn current_tiles(&self) -> Vec<(usize, usize)> {
+        let mut gaps = Vec::new();
+        for pair in self.tiles.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            let (lo, hi) = if a.0 <= b.0 { (a.0, b.0) } else { (b.0, a.0) };
+            for x in (lo + 1)..hi {
+                gaps.push((x, a.1));
+            }
+        }
+        gaps
     }
 }
 
-/// A vertical "dive gauge": numbered depth-stones the kid counts *down* to
-/// descend. Stepping onto `tiles[target]` (the deepest, glowing stone) sits on
-/// a portal to the deeper zone — so walking the gauge to the bottom IS the
-/// descent. Bail = just walk off; nothing happens unless you reach the door.
-pub struct DiveTrack {
-    pub tiles: &'static [(usize, usize)],
-    pub target: usize,
-}
-
-impl DiveTrack {
-    pub fn target_tile(&self) -> (usize, usize) {
-        self.tiles[self.target]
-    }
-}
-
-/// The dive-gauge shaft for `map_id`, if it has one.
-pub fn dive_track_for_map(map_id: &str) -> Option<DiveTrack> {
-    match map_id {
-        // A vertical shaft in the reef's quiet east corner (col 24): hop DOWN
-        // the depth-stones 0..5; the deepest (depth 5, (24,13)) is the trench
-        // door. Inkwell the octopus loiters at the top.
-        "reef" => Some(DiveTrack {
-            tiles: &[(24, 8), (24, 9), (24, 10), (24, 11), (24, 12), (24, 13)],
-            target: 5,
-        }),
-        _ => None,
-    }
-}
-
-/// The ambient number path for `map_id`, if it has one.
+/// Shelly's pearl path for `map_id`, if it has one.
 pub fn track_for_map(map_id: &str) -> Option<NumberTrack> {
     match map_id {
-        // Reef row 13 is a long clear stretch of the lower basin — stepping-
-        // stones the kid hops along (marks 0..11). `target` is the *initial*
-        // goal; the game moves the pearl to a new stone after each collection.
+        // Reef row 13 is a long clear stretch of the middle basin — thirteen
+        // stones (marks 0..12) every other tile, currents between. Shelly
+        // perches two tiles west of the launch stone and calls the trip.
         "reef" => Some(NumberTrack {
             id: "reef_path_1",
             tiles: &[
-                (5, 13), (6, 13), (7, 13), (8, 13), (9, 13), (10, 13),
-                (11, 13), (12, 13), (13, 13), (14, 13), (15, 13), (16, 13),
+                (5, 13), (7, 13), (9, 13), (11, 13), (13, 13), (15, 13), (17, 13),
+                (19, 13), (21, 13), (23, 13), (25, 13), (27, 13), (29, 13),
             ],
-            target: 6,
+            clam: (3, 13),
+            payout: 1,
         }),
-        // The trench (deeper zone) has its own, richer pearl path — the payoff
-        // for descending. Row 6, marks 0..9; pearl starts on 4.
+        // The trench's path is shorter — the canyon walls don't leave room —
+        // but a deep pearl is worth double. That's the payoff for the descent.
         "trench" => Some(NumberTrack {
             id: "trench_path_1",
             tiles: &[
-                (3, 6), (4, 6), (5, 6), (6, 6), (7, 6),
-                (8, 6), (9, 6), (10, 6), (11, 6), (12, 6),
+                (4, 8), (6, 8), (8, 8), (10, 8), (12, 8), (14, 8), (16, 8), (18, 8),
             ],
-            target: 4,
+            clam: (2, 8),
+            payout: 2,
         }),
         _ => None,
     }
@@ -90,22 +87,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reef_track_is_ordered_and_adjacent() {
-        let t = track_for_map("reef").unwrap();
-        for pair in t.tiles.windows(2) {
-            let (a, b) = (pair[0], pair[1]);
-            let dist = (a.0 as i32 - b.0 as i32).abs() + (a.1 as i32 - b.1 as i32).abs();
-            assert_eq!(dist, 1, "stones {a:?} and {b:?} must be adjacent");
+    fn stones_are_evenly_spaced_with_the_clam_off_the_path() {
+        for map_id in ["reef", "trench"] {
+            let t = track_for_map(map_id).unwrap();
+            for pair in t.tiles.windows(2) {
+                let (a, b) = (pair[0], pair[1]);
+                assert_eq!(a.1, b.1, "{map_id}: the path runs along one row");
+                assert_eq!(b.0 - a.0, STONE_SPACING,
+                    "{map_id}: stones {a:?} and {b:?} must be a leap apart, not a step");
+            }
+            assert!(
+                t.index_of(t.clam).is_none(),
+                "{map_id}: Shelly's perch must not sit on a stone (she'd block the launch)",
+            );
+            assert!(t.max_mark() >= 4, "{map_id}: a path needs room for a real trip");
         }
-        assert!(t.target < t.tiles.len(), "target index in range");
     }
 
     #[test]
-    fn index_and_target_tile_round_trip() {
+    fn the_gaps_between_stones_are_current() {
         let t = track_for_map("reef").unwrap();
-        assert_eq!(t.index_of((7, 13)), Some(2));
-        assert_eq!(t.index_of((0, 0)), None);
-        assert_eq!(t.index_of(t.target_tile()), Some(t.target));
+        let gaps = t.current_tiles();
+        assert_eq!(gaps.len(), t.tiles.len() - 1, "one gap between each pair of stones");
+        assert!(gaps.contains(&(6, 13)), "the tile between stones 0 and 1: {gaps:?}");
+        for g in &gaps {
+            assert!(t.index_of(*g).is_none(), "a gap must never be a stone: {g:?}");
+        }
+    }
+
+    #[test]
+    fn index_and_max_round_trip() {
+        let t = track_for_map("reef").unwrap();
+        assert_eq!(t.index_of((9, 13)), Some(2));
+        assert_eq!(t.index_of((10, 13)), None, "the current between stones isn't a mark");
+        assert_eq!(t.max_mark() as usize, t.tiles.len() - 1);
+    }
+
+    #[test]
+    fn the_deep_path_pays_better() {
+        assert!(
+            track_for_map("trench").unwrap().payout > track_for_map("reef").unwrap().payout,
+            "diving to the trench should be worth the trip",
+        );
     }
 
     #[test]

@@ -67,7 +67,7 @@ Refactor the game crate around a single `Game` struct with a pure step/render sp
 ### Risks
 - **Render-only state mutation.** The split assumes `render(&self)` is read-only. If a per-frame counter (animation phase, particle state) ever moves into `Game` and is mutated during draw, it diverges silently between production and tests. Currently clean.
 - **Wall-clock leakage.** `get_time()` is used cosmetically in two cursor-blink renderers (`ui/challenge.rs`, `ui/dialogue.rs`). Both are inside `render`. If logic ever calls `get_time()` from `step`, tests break determinism. Flag in review.
-- **Save backend semantics drift.** `LocalStorageBackend` and `InMemoryBackend` must agree on edge cases (`slot >= 3` ignored, missing slot returns `None`). No automated cross-impl test today; the current behavior is simple enough that drift is unlikely.
+- **Save backend semantics drift.** Resolved: both backends are thin `RawStorage` shims over one slot codec in `save.rs` (per-slot decode, migration, unreadable-slot preservation and backup), so tests run the production load/save path. `tests/save_safety.rs` pins it against a fixture written by `main`.
 
 ## Alternatives Considered
 
