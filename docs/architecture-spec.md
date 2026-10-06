@@ -132,7 +132,7 @@ Single thread, single update loop. No async dispatch except for AI dialogue fetc
 ## Commands
 
 ```bash
-cargo test                                          # 62 domain tests
+cargo test                                          # domain + game tests
 cargo build --target wasm32-unknown-unknown --release
 ./build-wasm.sh                                     # build + assemble www/
 cd robot-buddy-game/www && npx serve .              # local dev
