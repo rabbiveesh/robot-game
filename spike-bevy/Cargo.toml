@@ -8,7 +8,9 @@ edition = "2021"
 
 [dependencies]
 robot-buddy-domain = { path = "../robot-buddy-domain" }
-bevy = { version = "=0.19.1", default-features = false, features = ["2d", "ui", "default_font", "png", "x11", "webgl2"] }
+bevy = { version = "=0.19.1", default-features = false, features = ["default_app", "std", "multi_threaded", "bevy_winit", "x11", "webgl2", "default_font", "2d_bevy_render", "ui_api", "ui_bevy_render", "bevy_picking", "ui_picking", "png"] }
+bevy_vector_shapes = { version = "=0.13.1", default-features = false }
+rand = { version = "0.8", default-features = false, features = ["small_rng"] }
 
 [profile.dev.package."*"]
 opt-level = 2
