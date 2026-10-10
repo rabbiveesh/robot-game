@@ -12,8 +12,8 @@ const VIEW_W: f32 = MAP_W as f32 * TILE;
 const VIEW_H: f32 = MAP_H as f32 * TILE;
 
 fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Robot Buddy (Bevy spike)".into(),
                 resolution: (VIEW_W as u32, VIEW_H as u32).into(),
@@ -23,7 +23,13 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins(Shape2dPlugin::default())
+        ;
+    // The game's bundled Unifont becomes Bevy's default font, so every Text
+    // gets −, ×, ÷, ★ and emoji without naming a font anywhere.
+    app.world_mut().resource_mut::<Assets<Font>>()
+        .insert(AssetId::default(), Font::from_bytes(include_bytes!("../../robot-buddy-game/assets/unifont-subset.ttf").to_vec()))
+        .unwrap();
+    app.add_plugins(Shape2dPlugin::default())
         .add_plugins(SpikeLogicPlugin { seed: 42 })
         .add_systems(Startup, setup)
         .add_systems(Update, (sync_tiles, draw_sparky))
