@@ -363,13 +363,13 @@ impl Game {
         audio::tts::speak("Shelly", said);
     }
 
-    /// Stealth assessment: every toss is a data point for the adaptive
-    /// system and the parent log. The kid never sees any of it.
+    /// Stealth assessment: every toss is a data point on skip counting, for
+    /// the profile and the parent log. The kid never sees any of it.
     ///
-    /// Counting → Add/AddSingle (counting on from zero), concrete stones.
-    /// Skip counting → Multiply (hop × hops), on the number path.
-    /// X hops → Divide (the pearl split into X equal hops); abstract from
-    /// band 5, where the numbers outgrow counting stones one by one.
+    /// The record still names the arithmetic each stage leans on, for the
+    /// parent log's detail: counting → Add/AddSingle, skip counting →
+    /// Multiply (hop × hops), X hops → Divide (the pearl split into X equal
+    /// hops). The report files them all under skip counting.
     fn log_pearl_hop_toss(&mut self, round: &HopRound, toss: &Toss, ms: f64) {
         let correct = toss.landing == Landing::Pearl;
         let band = self.profile.math_band;
@@ -386,20 +386,12 @@ impl Game {
                 ("divide", Operation::Divide, classify_division(pearl, round.hops.max(1) as i32), cra)
             }
         };
-        {
-            self.profile = learner_reducer(self.profile.clone(), LearnerEvent::PuzzleAttempted {
-                correct,
-                operation,
-                sub_skill: Some(sub_skill),
-                band,
-                center_band: None,
-                response_time_ms: Some(ms),
-                hint_used: false,
-                told_me: false,
-                cra_level_shown: Some(cra),
-                timestamp: Some(self.game_time as f64 * 1000.0),
-            });
-        }
+        // Every toss, guesses included, is skip-counting evidence, and only
+        // that: it never moves the math band or another operation's stats.
+        self.profile = learner_reducer(self.profile.clone(), LearnerEvent::SkipCountAttempted {
+            correct,
+            response_time_ms: Some(ms),
+        });
         // One record per toss in the parent log and the saved attempt log:
         // the toss's answer is where she came down (counting, skip counting)
         // or the hop size picked (X hops).

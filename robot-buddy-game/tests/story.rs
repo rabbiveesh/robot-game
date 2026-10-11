@@ -2137,6 +2137,27 @@ fn every_stage_pays_a_pearl_and_a_first_try_bonus() {
     }
 }
 
+/// Guessing hop sizes is what not-yet-skip-counting looks like. It counts
+/// against skip counting and nothing else: Bolt's and Sparky's challenges
+/// stay at the kid's band.
+#[test]
+fn guessing_at_pearl_hop_counts_against_skip_counting_only() {
+    let mut h = on_the_reef(41, 3);
+    h.open_pearl_hop();
+    h.skip_shelly_demo();
+    let confidence = h.game.profile.skip_count_confidence;
+    for _ in 0..5 {
+        let miss = h.missing_aim(true);
+        h.toss_shelly(miss);
+    }
+    let aim = h.winning_aim();
+    h.toss_shelly(aim);
+
+    assert_eq!(h.game.profile.math_band, 3, "five guesses and a find leave the band alone");
+    assert!(h.game.profile.rolling_window.entries.is_empty(), "nor reach the window the band is judged by");
+    assert!(h.game.profile.skip_count_confidence < confidence, "they do say skip counting isn't there yet");
+}
+
 /// A miss is a funny beat, never a fail: she splashes (or shrugs on a stone)
 /// and is right back on her rock with the pull remembered, no lives lost.
 #[test]
@@ -2165,22 +2186,21 @@ fn a_miss_is_harmless_and_she_is_right_back_for_another_go() {
     assert_eq!(h.game.pearls, 1, "the retry works: the pearl, minus the first-try bonus");
 }
 
-/// Every toss is logged as a learner attempt under the stage's arithmetic —
-/// counting as addition, skip counting as multiplication, K hops as division.
+/// Every toss reaches the parent's attempt log, at every stage, filed under
+/// skip counting and kept out of the arithmetic the band is judged by.
 #[test]
 fn each_toss_feeds_the_adaptive_system_silently() {
-    use robot_buddy_domain::types::Operation;
-    for (band, op) in [(1u8, Operation::Add), (2, Operation::Multiply), (3, Operation::Divide)] {
+    for band in [1u8, 2, 3] {
         let mut h = on_the_reef(7, band);
         h.open_pearl_hop();
         h.skip_shelly_demo();
-        let before = h.game.profile.operation_stats.get_coarse(op).attempts;
         let miss = h.missing_aim(true);
         h.toss_shelly(miss);
         let aim = h.winning_aim();
         h.toss_shelly(aim);
-        let after = h.game.profile.operation_stats.get_coarse(op).attempts;
-        assert_eq!(after, before + 2, "band {band}: both tosses logged under {op:?}");
+        let tosses: Vec<_> = h.game.attempt_log.records().iter().filter(|r| r.is_skip_counting()).collect();
+        assert_eq!(tosses.len(), 2, "band {band}: both tosses logged");
+        assert_eq!(tosses.iter().filter(|r| r.correct).count(), 1, "band {band}: one miss, one find");
     }
 }
 

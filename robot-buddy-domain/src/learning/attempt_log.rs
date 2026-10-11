@@ -125,6 +125,12 @@ impl AttemptRecord {
         self.answers.iter().find(|a| a.ms >= from)
     }
 
+    /// A toss in Shelly's Pearl Hop. Those measure skip counting, their own
+    /// skill, so the report keeps them out of the arithmetic lines.
+    pub fn is_skip_counting(&self) -> bool {
+        self.format.starts_with("pearl_hop")
+    }
+
     /// Identity for de-duplicating records that appear in several exports.
     pub fn key(&self) -> (u64, u32, i32, i32) {
         (self.at.to_bits(), self.play_secs.to_bits(), self.a, self.b)
