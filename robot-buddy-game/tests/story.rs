@@ -2068,6 +2068,8 @@ fn talking_to_shelly_opens_pearl_hop_and_she_shows_off_once() {
     h.open_pearl_hop();
     let a = h.game.active_pearl_hop().unwrap();
     assert!(a.demo.is_some(), "the first-ever round opens with Shelly's show-off");
+    let window_before = h.game.profile.rolling_window.entries.len();
+    let mark = h.mark();
 
     // Let the show-off play right through: she flings herself, misses, and a
     // hand shows the pull. None of it costs or earns the kid anything.
@@ -2076,6 +2078,9 @@ fn talking_to_shelly_opens_pearl_hop_and_she_shows_off_once() {
     assert_eq!(s.tosses, 0, "her show-off toss never counts against the kid");
     assert_eq!(h.game.pearls, 0);
     assert!(h.game.has_seen_demo(robot_buddy_game::game::PEARL_HOP_DEMO));
+    assert!(h.game.attempt_log.records().is_empty(), "her deliberate miss isn't logged as the kid's");
+    assert_eq!(h.game.profile.rolling_window.entries.len(), window_before, "nor does it reach the learner profile");
+    assert!(!h.events_since(mark).iter().any(|e| matches!(e, GameEvent::PearlHopTossed { .. })));
 
     h.leave_pearl_hop_by_tap();
     h.open_pearl_hop();

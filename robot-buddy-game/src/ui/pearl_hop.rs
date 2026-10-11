@@ -243,13 +243,29 @@ impl SceneGeom {
     ///   the stone under it. This is also how a native Linux touchscreen
     ///   plays, where a held finger reports no motion: press Shelly, then tap
     ///   where she should land.
+    ///
+    /// Which one is read from where the pointer is, not how far it is from
+    /// her: a slingshot pull always goes back (left of her or straight
+    /// down), so anything out in front of her, at stone height or above, is
+    /// pointing. On a phone the near stones sit inside her grab radius, so
+    /// distance alone would read a tap on stone 2 as a pull.
     pub fn aim_for_pointer(&self, p: (f32, f32)) -> Option<u16> {
         let (hx, hy) = self.home();
-        if p.0 > hx + self.reach() {
+        let d = ((p.0 - hx).powi(2) + (p.1 - hy).powi(2)).sqrt();
+        if d < DEAD_PULL {
+            return None; // a tap on Shelly herself
+        }
+        if self.points_at_path(p) {
             let stone = ((p.0 - self.x0) / self.unit).round().max(0.0) as u32;
             return Some(stone.clamp(self.min_aim as u32, self.max_aim as u32) as u16);
         }
-        self.aim_for_pull(((p.0 - hx).powi(2) + (p.1 - hy).powi(2)).sqrt())
+        self.aim_for_pull(d)
+    }
+
+    /// Is the pointer out over the path (pointing at a stone) rather than
+    /// behind her (drawing the slingshot)?
+    pub fn points_at_path(&self, p: (f32, f32)) -> bool {
+        p.0 > self.home().0 + self.unit * 0.5 && p.1 <= self.surface_y + self.stone_r
     }
 
     /// Inverse of [`aim_for_pull`]: the pull (pixels) in the middle of
@@ -267,8 +283,7 @@ impl SceneGeom {
         (hx + self.drag_dir.0 * pull, hy + self.drag_dir.1 * pull)
     }
 
-    /// Where to tap to point the first hop at stone `aim`. (Only meaningful
-    /// for stones out past Shelly's reach.)
+    /// Where to tap to point the first hop at stone `aim`.
     pub fn tap_point_for(&self, aim: u16) -> (f32, f32) {
         (self.x0 + aim as f32 * self.unit, self.stone_top())
     }
@@ -823,7 +838,7 @@ fn shelly_pose(g: &SceneGeom, s: &HopSession, art: &HopArt, time: f32) -> Pose {
                 p.lift = 1.3;
                 let (dx, dy) = (ptr.0 - hx, ptr.1 - hy);
                 let d = (dx * dx + dy * dy).sqrt().max(0.001);
-                let behind = ptr.0 <= hx + g.reach();
+                let behind = !g.points_at_path(ptr);
                 if behind {
                     let give = d.min(g.r * 1.6);
                     let t = (d / g.max_pull).clamp(0.0, 1.0);
@@ -1143,7 +1158,7 @@ mod tests {
                 let g = &l.scene;
                 for aim in s.round.min_aim..=s.round.max_aim {
                     let p = g.tap_point_for(aim);
-                    if p.0 > g.home().0 + g.reach() && p.0 < g.rect.right() {
+                    if p.0 < g.rect.right() {
                         assert_eq!(g.aim_for_pointer(p), Some(aim), "band {band} {screen:?} aim {aim}");
                     }
                 }

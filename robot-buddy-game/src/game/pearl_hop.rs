@@ -312,6 +312,11 @@ impl Game {
 
     /// She came down. Log the toss; pay for the pearl, or react to the miss.
     fn pearl_hop_landed(&mut self) {
+        // Her first-time show-off misses on purpose. It's her toss, not the
+        // kid's, so it never reaches the profile or the attempt log.
+        if self.activity.pearl_hop.as_ref().unwrap().demo.is_some() {
+            return;
+        }
         let (stage, toss, tosses, ms, base, clean) = {
             let a = self.activity.pearl_hop.as_ref().unwrap();
             let s = &a.session;
