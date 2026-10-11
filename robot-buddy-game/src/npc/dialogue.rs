@@ -92,9 +92,9 @@ pub(crate) fn npc_dialogue_lines(npc: &Npc, rng: &mut SmallRng) -> Vec<DialogueL
             "Mind the rock ledges — you can't rest on those. Eight arms and I still bonk them.",
         ],
         Clam => &[
-            "Brrbl! My pearl hides under a stone — but the current's too strong to walk. You LEAP!",
-            "Pick how big your leaps are BEFORE you jump. Every leap the same size, that's the trick!",
-            "Too big and you'll sail right over it. Swim back and try a different size — I don't mind!",
+            "Brrbl! Pull me back and let go — I'll FLY to my pearl! Wheee!",
+            "Too far? Sploosh! I don't mind a swim. Too short? I'll just hop back!",
+            "I always hop the same size. Three, six, nine... that's MY kind of counting!",
             "Every time you find my pearl, I hide it again. It's my favorite game!",
         ],
         Anglerfish => &[

@@ -38,6 +38,11 @@ pub struct LearnerProfile {
     pub pattern_confidence: f64,
     #[serde(default)]
     pub kenken_intro_seen: bool,
+    /// Running confidence in skip counting, from Shelly's Pearl Hop. Its own
+    /// axis like the logic puzzles': a guessing toss says the kid can't skip
+    /// count yet, and says nothing about their adding or their band.
+    #[serde(default = "default_logic_confidence")]
+    pub skip_count_confidence: f64,
 }
 
 fn default_kenken_level() -> u8 { 2 }
@@ -74,6 +79,7 @@ impl LearnerProfile {
             logic_confidence: default_logic_confidence(),
             pattern_confidence: default_logic_confidence(),
             kenken_intro_seen: false,
+            skip_count_confidence: default_logic_confidence(),
         }
     }
 }
@@ -133,6 +139,14 @@ pub enum LearnerEvent {
         level: u8,
         /// Number of picks the kid made before getting it right (1 = first try).
         attempts: u8,
+        #[serde(default)]
+        response_time_ms: Option<f64>,
+    },
+    /// One toss in Pearl Hop: did Shelly land on her pearl? Every toss counts,
+    /// guesses included, since guessing is what not-yet-skip-counting looks like.
+    #[serde(rename = "SKIP_COUNT_ATTEMPTED")]
+    SkipCountAttempted {
+        correct: bool,
         #[serde(default)]
         response_time_ms: Option<f64>,
     },
@@ -417,6 +431,16 @@ pub fn learner_reducer(state: LearnerProfile, event: LearnerEvent) -> LearnerPro
                 ..state
             }
         }
+
+        // Skip counting is its own skill: it never touches the math band, the
+        // rolling window or the per-operation stats the band is judged by.
+        LearnerEvent::SkipCountAttempted { correct, response_time_ms: _ } => {
+            let step = if correct { 0.05 } else { -0.05 };
+            LearnerProfile {
+                skip_count_confidence: (state.skip_count_confidence + step).clamp(0.0, 1.0),
+                ..state
+            }
+        }
     }
 }
 
@@ -566,5 +590,27 @@ mod tests {
         let s2 = learner_reducer(s1.clone(), attempt(true));
         assert_eq!(s1.streak, 0);
         assert_eq!(s2.streak, 1);
+    }
+
+    #[test]
+    fn guessing_at_skip_counting_lowers_only_skip_counting() {
+        let mut s = LearnerProfile::new();
+        s.math_band = 3;
+        let before = s.clone();
+        for _ in 0..6 {
+            s = learner_reducer(s, LearnerEvent::SkipCountAttempted { correct: false, response_time_ms: None });
+        }
+        assert!(s.skip_count_confidence < before.skip_count_confidence);
+        assert_eq!(s.math_band, 3, "a run of guesses never drops the band");
+        assert!(s.rolling_window.entries.is_empty(), "nor enters the window the band is judged by");
+        assert_eq!(serde_json::to_value(&s.operation_stats).unwrap(), serde_json::to_value(&before.operation_stats).unwrap());
+    }
+
+    #[test]
+    fn old_saves_without_skip_counting_load() {
+        let mut v = serde_json::to_value(LearnerProfile::new()).unwrap();
+        v.as_object_mut().unwrap().remove("skip_count_confidence");
+        let p: LearnerProfile = serde_json::from_value(v).unwrap();
+        assert_eq!(p.skip_count_confidence, 0.5);
     }
 }

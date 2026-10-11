@@ -45,6 +45,15 @@ pub struct Report {
     /// …and in the first half, once there's enough to split.
     pub strategy_earlier: Option<StrategyLine>,
     pub workspace: WorkspaceLine,
+    /// Shelly's Pearl Hop, one toss per record: first half → second half.
+    pub skip_counting: SkipCountLine,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SkipCountLine {
+    pub tosses: usize,
+    pub early: Half,
+    pub late: Half,
 }
 
 /// One calendar day (UTC) of play.
@@ -128,9 +137,12 @@ pub struct WorkspaceLine {
 
 /// Build the report. `records` in any order; they're sorted by time here.
 pub fn analyze(records: &[AttemptRecord]) -> Report {
-    let mut rs: Vec<&AttemptRecord> = records.iter().collect();
-    rs.sort_by(|x, y| x.at.total_cmp(&y.at).then(x.play_secs.total_cmp(&y.play_secs)));
+    let mut all: Vec<&AttemptRecord> = records.iter().collect();
+    all.sort_by(|x, y| x.at.total_cmp(&y.at).then(x.play_secs.total_cmp(&y.play_secs)));
+    let (hops, rs): (Vec<&AttemptRecord>, Vec<&AttemptRecord>) = all.into_iter().partition(|r| r.is_skip_counting());
+    let mid = hops.len() / 2;
     Report {
+        skip_counting: SkipCountLine { tosses: hops.len(), early: half(&hops[..mid]), late: half(&hops[mid..]) },
         attempts: rs.len(),
         days: days(&rs),
         operations: operations(&rs),
@@ -362,7 +374,7 @@ fn write_strategy(f: &mut fmt::Formatter<'_>, when: &str, s: &StrategyLine) -> f
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{} challenges", self.attempts)?;
-        if self.attempts == 0 {
+        if self.attempts == 0 && self.skip_counting.tosses == 0 {
             return Ok(());
         }
 
@@ -397,6 +409,19 @@ impl fmt::Display for Report {
             write_strategy(f, "earlier", earlier)?;
         }
         write_strategy(f, "lately", &self.strategy)?;
+
+        let k = &self.skip_counting;
+        writeln!(f, "\nSkip counting (Shelly's Pearl Hop, every toss), first half → second half")?;
+        if k.tosses < MIN_FOR_TREND {
+            writeln!(f, "  {} tosses, not enough yet", k.tosses)?;
+        } else {
+            writeln!(
+                f,
+                "  {} tosses   on the pearl {} → {}   time {} → {}",
+                k.tosses, pct(k.early.unaided_accuracy), pct(k.late.unaided_accuracy),
+                secs(k.early.unaided_median_ms), secs(k.late.unaided_median_ms),
+            )?;
+        }
 
         let w = &self.workspace;
         writeln!(f, "\nHands-on workspace")?;
@@ -533,6 +558,19 @@ mod tests {
         let w = analyze(&[r]).workspace;
         assert_eq!(w.answered_before_built, 0, "the answer after building came after it was built");
         assert_eq!(w.first_try_accuracy, Some(1.0), "right first time once it was open");
+    }
+
+    #[test]
+    fn pearl_hop_tosses_report_as_skip_counting_not_arithmetic() {
+        let mut toss = attempt(4, 3, 12, 5000);
+        toss.operation = Operation::Multiply;
+        toss.format = "pearl_hop_skip_count".into();
+        toss.answers[0].value = 10; // a guess that missed
+        let rep = analyze(&[toss.clone(), toss, attempt(2, 3, 5, 3000)]);
+        assert_eq!(rep.attempts, 1, "only the real challenge counts as a challenge");
+        assert!(rep.operations.iter().all(|o| o.operation != Operation::Multiply));
+        assert_eq!(rep.skip_counting.tosses, 2);
+        assert!(rep.to_string().contains("Skip counting"));
     }
 
     #[test]

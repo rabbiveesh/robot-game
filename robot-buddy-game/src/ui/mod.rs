@@ -4,7 +4,7 @@ pub mod challenge;
 pub mod concrete;
 pub mod balance;
 pub mod kenken;
-pub mod leap;
+pub mod pearl_hop;
 pub mod patterns;
 pub mod quest;
 pub mod shooter;

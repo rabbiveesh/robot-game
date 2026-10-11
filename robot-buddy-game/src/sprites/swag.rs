@@ -54,6 +54,9 @@ impl SwagFit {
     pub const CRAB: SwagFit = SwagFit { head: 25.0, chest: 33.0, ground: 45.0, scale: 0.7 };
     /// Shelly, who is mostly shell.
     pub const CLAM: SwagFit = SwagFit { head: 26.0, chest: 32.0, ground: 45.0, scale: 0.7 };
+    /// Pearl Hop's cartoon Shelly (`npcs::draw_clam_cartoon`): her eyes stand
+    /// up over the lid, so the hat rides on top of them.
+    pub const CLAM_CARTOON: SwagFit = SwagFit { head: 13.0, chest: 31.0, ground: 41.0, scale: 0.75 };
     /// Hermie, wearing a shop on his back.
     pub const HERMIT: SwagFit = SwagFit { head: 14.0, chest: 31.0, ground: 45.0, scale: 0.75 };
 }
