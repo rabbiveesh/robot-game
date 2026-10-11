@@ -203,6 +203,9 @@ struct ActiveChallenge {
     /// The learner's CRA stage for this operation when it was asked (Show me
     /// lowers the one on `state`).
     stage_asked: CraStage,
+    /// Opened from the dev bench to show off a manipulative, not the kid's
+    /// own play: kept out of the profile and the attempt log.
+    practice: bool,
 }
 
 pub struct ActiveKenKen {
@@ -2073,42 +2076,44 @@ impl Game {
                 let was_correct = ac.state.correct == Some(true);
                 let response_ms = ((self.game_time - ac.start_time) as f64 * 1000.0).min(30000.0);
 
-                let record = attempt_record(&ac, was_correct, input.now, self.play_time, &self.menu_target_id);
-                self.session_log.record_challenge(record.clone());
-                self.attempt_log = std::mem::take(&mut self.attempt_log).record(record);
+                if !ac.practice {
+                    let record = attempt_record(&ac, was_correct, input.now, self.play_time, &self.menu_target_id);
+                    self.session_log.record_challenge(record.clone());
+                    self.attempt_log = std::mem::take(&mut self.attempt_log).record(record);
 
-                let event = LearnerEvent::PuzzleAttempted {
-                    correct: was_correct,
-                    operation: ac.challenge.operation,
-                    sub_skill: ac.challenge.sub_skill,
-                    band: ac.challenge.sampled_band,
-                    center_band: Some(ac.challenge.center_band),
-                    response_time_ms: Some(response_ms),
-                    hint_used: ac.state.hint_used,
-                    told_me: ac.state.told_me,
-                    cra_level_shown: Some(ac.state.render_hint.cra_stage),
-                    timestamp: Some(self.game_time as f64 * 1000.0),
-                };
-                self.profile = learner_reducer(self.profile.clone(), event);
-
-                if response_ms < 1000.0 && !was_correct {
-                    let sig = BehaviorSignal {
-                        signal: "rapid_clicking".into(),
+                    let event = LearnerEvent::PuzzleAttempted {
+                        correct: was_correct,
+                        operation: ac.challenge.operation,
+                        sub_skill: ac.challenge.sub_skill,
+                        band: ac.challenge.sampled_band,
+                        center_band: Some(ac.challenge.center_band),
+                        response_time_ms: Some(response_ms),
+                        hint_used: ac.state.hint_used,
+                        told_me: ac.state.told_me,
+                        cra_level_shown: Some(ac.state.render_hint.cra_stage),
                         timestamp: Some(self.game_time as f64 * 1000.0),
                     };
-                    self.behavior_signals.push(sig);
-                    self.profile = learner_reducer(self.profile.clone(), LearnerEvent::Behavior {
-                        signal: "rapid_clicking".into(),
-                    });
-                }
+                    self.profile = learner_reducer(self.profile.clone(), event);
 
-                let frustration = detect_frustration(
-                    &self.profile.rolling_window, &self.behavior_signals,
-                );
-                if frustration.level == FrustrationLevel::High {
-                    self.profile = learner_reducer(self.profile.clone(), LearnerEvent::FrustrationDetected {
-                        level: "high".into(),
-                    });
+                    if response_ms < 1000.0 && !was_correct {
+                        let sig = BehaviorSignal {
+                            signal: "rapid_clicking".into(),
+                            timestamp: Some(self.game_time as f64 * 1000.0),
+                        };
+                        self.behavior_signals.push(sig);
+                        self.profile = learner_reducer(self.profile.clone(), LearnerEvent::Behavior {
+                            signal: "rapid_clicking".into(),
+                        });
+                    }
+
+                    let frustration = detect_frustration(
+                        &self.profile.rolling_window, &self.behavior_signals,
+                    );
+                    if frustration.level == FrustrationLevel::High {
+                        self.profile = learner_reducer(self.profile.clone(), LearnerEvent::FrustrationDetected {
+                            level: "high".into(),
+                        });
+                    }
                 }
 
                 if let Some(ref reward) = ac.state.reward {
@@ -2256,6 +2261,7 @@ impl Game {
                 }
                 let mut ac = active_challenge_for(challenge, &self.profile, self.game_time);
                 ac.state.render_hint.cra_stage = CraStage::Concrete;
+                ac.practice = true;
                 note_action(&mut ac, &ChallengeAction::ShowMe, self.game_time);
                 ac.state = challenge_reducer(ac.state, ChallengeAction::ShowMe);
                 let buddy = self.current_buddy_name();
@@ -4021,6 +4027,7 @@ fn active_challenge_for(challenge: Challenge, profile: &LearnerProfile, game_tim
         answers: Vec::new(),
         help_at: None,
         stage_asked: cra,
+        practice: false,
     }
 }
 
@@ -4058,6 +4065,7 @@ fn start_intake_challenge(challenge: Challenge, _band: u8, game_time: f32) -> Ac
         answers: Vec::new(),
         help_at: None,
         stage_asked: CraStage::Abstract,
+        practice: false,
     }
 }
 
@@ -4252,10 +4260,6 @@ fn display_name_for_buddy_id(id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
-/// "Show me" landed on the Concrete stage: swap the static picture for the
-/// hands-on workspace, and have the buddy say what to do (the only
-/// instructions a pre-reader gets). Returns false — leaving the static
-/// picture — when the problem doesn't fit the ten-frames.
 /// Note what the attempt log needs from an action before it's applied: an
 /// answer and when, or when Show me was first pressed.
 fn note_action(ac: &mut ActiveChallenge, action: &ChallengeAction, game_time: f32) {
@@ -4297,6 +4301,10 @@ fn attempt_record(ac: &ActiveChallenge, correct: bool, now: f64, play_secs: f32,
     }
 }
 
+/// "Show me" landed on the Concrete stage: swap the static picture for the
+/// hands-on workspace, and have the buddy say what to do (the only
+/// instructions a pre-reader gets). Returns false — leaving the static
+/// picture — when the problem doesn't fit the ten-frames.
 fn open_concrete_workspace(
     ac: &mut ActiveChallenge,
     rng: &mut SmallRng,

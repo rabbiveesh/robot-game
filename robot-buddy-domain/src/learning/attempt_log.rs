@@ -117,6 +117,14 @@ impl AttemptRecord {
         self.answers.first().map(|a| a.ms)
     }
 
+    /// The first answer given once Show me was open — what the help could
+    /// have informed. A guess before pressing Show me doesn't count against
+    /// the help. Without Show me, simply the first answer.
+    pub fn first_answer_after_help(&self) -> Option<&AnswerAt> {
+        let from = self.help_ms.unwrap_or(0);
+        self.answers.iter().find(|a| a.ms >= from)
+    }
+
     /// Identity for de-duplicating records that appear in several exports.
     pub fn key(&self) -> (u64, u32, i32, i32) {
         (self.at.to_bits(), self.play_secs.to_bits(), self.a, self.b)
