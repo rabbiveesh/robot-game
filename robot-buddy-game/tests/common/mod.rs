@@ -305,6 +305,66 @@ impl Harness {
         self.answer_challenge_correctly();
     }
 
+    // ─── Concrete "Show me" workspace ────────────────────
+
+    /// Press down at `from`, carry to `to`, let go — three frames, like a finger.
+    pub fn drag(&mut self, from: (f32, f32), to: (f32, f32)) {
+        self.step(&FrameInput::empty().with_mouse_click(from.0, from.1));
+        self.step(&FrameInput::empty().with_mouse_held(to.0, to.1));
+        self.step(&FrameInput::empty().with_mouse_release(to.0, to.1));
+    }
+
+    /// Tap the active challenge's "Show me" button.
+    pub fn press_show_me(&mut self) {
+        let (x, y) = self.game.challenge_layout(SCREEN)
+            .and_then(|l| l.show_me())
+            .expect("press_show_me: no Show me button")
+            .center();
+        self.click(x, y);
+    }
+
+    fn workspace_layout(&self) -> ui::concrete::Layout {
+        let ws = self.game.challenge_workspace().expect("no hands-on workspace open");
+        let area = self.game.challenge_layout(SCREEN)
+            .and_then(|l| l.workspace())
+            .expect("the workspace should be laid out");
+        ui::concrete::layout(ws, area)
+    }
+
+    /// Where a counter the kid could pick up right now sits.
+    pub fn a_grabbable_counter(&self) -> (f32, f32) {
+        self.workspace_layout().grabbable.first().expect("nothing left to pick up").center
+    }
+
+    /// The middle of where counters have to land (frames or basket).
+    pub fn drop_target(&self) -> (f32, f32) {
+        self.workspace_layout().drop_zone.center()
+    }
+
+    /// Drag counters to their target, one at a time, until the model is built.
+    pub fn build_the_model(&mut self) {
+        for _ in 0..40 {
+            if self.game.challenge_workspace().map_or(true, |ws| ws.is_built()) {
+                return;
+            }
+            let (from, to) = (self.a_grabbable_counter(), self.drop_target());
+            self.drag(from, to);
+        }
+        panic!("build_the_model: still not built after 40 drags");
+    }
+
+    /// From the dev map, go to the control room and use the manipulatives
+    /// bench. Lands in a challenge with the workspace open.
+    pub fn open_manipulatives_bench(&mut self) {
+        if self.game.map.id != "control" {
+            self.walk_to(2, 9);
+            self.step_through_portal(KeyCode::Left, "control");
+        }
+        self.walk_to_npc(NpcKind::CtrlManipulatives);
+        self.interact();
+        self.wait_until(|g| g.state == GameState::Challenge);
+    }
+
     /// Hold a direction key until the player's current map id changes to
     /// `dest_map`. Use when stepping onto a portal tile — `walk_to` panics
     /// in that case because the player lands on the destination map (so the

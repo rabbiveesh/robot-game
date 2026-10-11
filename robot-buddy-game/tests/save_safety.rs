@@ -393,3 +393,44 @@ fn a_hidden_tab_saves_once_not_every_frame() {
     h.advance(10);
     assert_eq!(backend.writes() - before, 2, "and one more the next time it hides");
 }
+
+// ─── The attempt log ────────────────────────────────────
+
+#[test]
+fn the_attempt_log_survives_a_save_and_old_saves_start_with_none() {
+    use robot_buddy_domain::learning::attempt_log::{AnswerAt, AttemptRecord, Help};
+    use robot_buddy_domain::types::{CraStage, Operation};
+
+    let backend = InMemoryBackend::with_raw_saves(MAIN_SAVES);
+    let mut ari = backend.load_all()[0].clone().unwrap();
+    assert!(ari.attempt_log.is_empty(), "a save from before the log loads with an empty one");
+
+    let record = AttemptRecord {
+        at: 1_790_000_000.0,
+        play_secs: 120.0,
+        source: "sparky".into(),
+        operation: Operation::Add,
+        sub_skill: None,
+        a: 8,
+        b: 5,
+        format: "standard".into(),
+        band: 4,
+        center_band: 4,
+        cra_stage: CraStage::Concrete,
+        correct_answer: 13,
+        answers: vec![AnswerAt { value: 13, ms: 6400 }],
+        correct: true,
+        help: Help::None,
+        help_ms: None,
+        told_me: false,
+        workspace: None,
+    };
+    ari.attempt_log = std::mem::take(&mut ari.attempt_log).record(record.clone());
+    backend.save_to(0, &ari);
+
+    let again = backend.load_all()[0].clone().unwrap();
+    assert_eq!(again.attempt_log.records(), &[record]);
+    let on_main: [Option<MainSaveData>; 3] = serde_json::from_str(&stored(&backend))
+        .expect("main still reads a save that carries the log");
+    assert!(on_main[0].is_some());
+}

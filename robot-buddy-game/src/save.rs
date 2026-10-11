@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::{BTreeMap, HashMap};
 use crate::sprites::Dir;
+use robot_buddy_domain::learning::attempt_log::AttemptLog;
 use robot_buddy_domain::learning::learner_profile::LearnerProfile;
 use robot_buddy_domain::economy::shop::COLOR_CHANGE;
 use robot_buddy_domain::economy::wardrobe::{self, Wardrobe};
@@ -12,6 +13,10 @@ use robot_buddy_domain::types::GamePace;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SaveData {
     pub version: u32,
+    /// Every challenge in detail, across sessions (bounded — see
+    /// `attempt_log::MAX_ATTEMPTS`). Older saves load with an empty log.
+    #[serde(default)]
+    pub attempt_log: AttemptLog,
     pub name: String,
     pub gender: Gender,
     pub map_id: String,

@@ -277,7 +277,7 @@ pub mod challenge_sweep {
             for c in &all {
                 for display in [c.display_text.as_str(), WORD_PROBLEM] {
                     for (name, cs) in phases(c, display) {
-                        let l = challenge::layout(&cs, c, screen);
+                        let l = challenge::layout(&cs, c, None, screen);
                         if let Err(e) = check_sane(&l.frame, screen_rect(screen)) {
                             let els: Vec<_> = l.frame.elements().iter().map(|e| (e.id, e.rect)).collect();
                             panic!(
@@ -303,6 +303,49 @@ pub mod challenge_sweep {
         }
     }
 
+    /// The hands-on workspace (Concrete-stage Show me) in every phase it can
+    /// share the panel with, for put-together and take-away, one frame and two,
+    /// under a plain and a wrapped question — on every screen, down to a phone.
+    pub fn the_hands_on_workspace_is_sane_everywhere() {
+        use robot_buddy_domain::learning::challenge_generator::generate_challenge_at;
+        use robot_buddy_domain::types::Operation;
+        use robot_buddy_game::ui::concrete::{self, Workspace};
+
+        let mut rng = SmallRng::seed_from_u64(7);
+        let mut cases: Vec<(Challenge, Workspace)> = Vec::new();
+        for band in [2u8, 4] {
+            for op in [Operation::Add, Operation::Sub] {
+                for _ in 0..4 {
+                    let c = generate_challenge_at(band, op, &mut rng);
+                    if let Some(ws) = Workspace::for_challenge(&c, &mut rng) {
+                        cases.push((c, ws));
+                    }
+                }
+            }
+        }
+        assert!(cases.iter().any(|(_, ws)| ws.session.puzzle.target > 10), "cover a two-frame case");
+
+        for &screen in &SWEEP_SCREENS {
+            for (c, ws) in &cases {
+                for display in [c.display_text.as_str(), WORD_PROBLEM] {
+                    for (name, cs) in phases(c, display).into_iter().filter(|(_, cs)| cs.hint_used) {
+                        let l = challenge::layout(&cs, c, Some(ws), screen);
+                        if let Err(e) = check_sane(&l.frame, screen_rect(screen)) {
+                            panic!("workspace {name} ({} {} {}) at {screen:?}:\n  - {}",
+                                c.numbers.a, c.numbers.op, c.numbers.b, e.join("\n  - "));
+                        }
+                        let area = l.workspace().expect("the workspace is laid out");
+                        let inner = concrete::layout(ws, area);
+                        for counter in inner.counters() {
+                            assert!(area.contains(counter.center.0, counter.center.1),
+                                "a counter spills out of the workspace at {screen:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// A miss shows "Hmm, not quite!" in a slot that was already there, so the
     /// answer buttons don't jump out from under the kid's finger.
     pub fn a_wrong_answer_does_not_move_the_answer_buttons() {
@@ -312,7 +355,7 @@ pub mod challenge_sweep {
                     let p = presented(c, display);
                     let fed = challenge_reducer(p.clone(), ChallengeAction::AnswerSubmitted { answer: wrong(c) });
                     assert_eq!(fed.phase, Phase::Feedback);
-                    let (before, after) = (challenge::layout(&p, c, screen), challenge::layout(&fed, c, screen));
+                    let (before, after) = (challenge::layout(&p, c, None, screen), challenge::layout(&fed, c, None, screen));
                     for i in 0..c.choices.len() {
                         assert_eq!(before.choice(i), after.choice(i), "button {i} moved at {screen:?} for {display:?}");
                     }
@@ -327,7 +370,7 @@ pub mod challenge_sweep {
     pub fn tapping_a_drawn_button_answers_it_even_under_a_wrapped_question() {
         let c = &challenges()[0];
         let cs = presented(c, WORD_PROBLEM);
-        let l = challenge::layout(&cs, c, (960.0, 720.0));
+        let l = challenge::layout(&cs, c, None, (960.0, 720.0));
         let q = l.frame.get(challenge::ChallengeId::Question).unwrap();
         let wrapped = match &q.kind {
             robot_buddy_game::ui::layout::Kind::Text(t) => t.lines.len(),
