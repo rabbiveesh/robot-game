@@ -3389,6 +3389,8 @@ fn the_dev_bench_cycles_through_each_manipulative() {
         h.wait_until(|g| g.state == GameState::Playing);
     }
     assert_eq!(kinds, vec![ConcreteKind::AddGroups, ConcreteKind::TakeAway]);
+    assert!(h.game.attempt_log.records().is_empty(),
+        "bench practice is the parent's demo, not the kid's play, so it stays out of the attempt log");
 }
 
 // ─── The attempt log: what a parent's export will show ─────

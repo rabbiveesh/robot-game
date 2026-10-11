@@ -283,7 +283,7 @@ fn workspace(rs: &[&AttemptRecord]) -> WorkspaceLine {
         // Answered while the model was unfinished: before it was built, or
         // it never was.
         let built_at = u.built_ms.zip(r.help_ms).map(|(b, h)| b + h);
-        let first = r.first_answer_ms();
+        let first = r.first_answer_after_help().map(|a| a.ms);
         if first.is_some() && built_at.map_or(true, |b| first.is_some_and(|f| f < b)) {
             w.answered_before_built += 1;
         }
@@ -296,7 +296,10 @@ fn workspace(rs: &[&AttemptRecord]) -> WorkspaceLine {
     }
     w.median_build_ms = median(build_times);
     if !used.is_empty() {
-        w.first_try_accuracy = Some(used.iter().filter(|r| r.first_try_correct()).count() as f64 / used.len() as f64);
+        let right = used.iter()
+            .filter(|r| r.first_answer_after_help().is_some_and(|a| a.value == r.correct_answer))
+            .count();
+        w.first_try_accuracy = Some(right as f64 / used.len() as f64);
     }
     w
 }
@@ -418,7 +421,7 @@ impl fmt::Display for Report {
 mod tests {
     use super::*;
     use crate::learning::attempt_log::tests::attempt;
-    use crate::learning::attempt_log::{WorkspaceKind, WorkspaceUse};
+    use crate::learning::attempt_log::{AnswerAt, WorkspaceKind, WorkspaceUse};
 
     fn additions(ms: impl Fn(i32, i32) -> u32) -> Vec<AttemptRecord> {
         let mut out = Vec::new();
@@ -517,6 +520,19 @@ mod tests {
         let w = &rep.workspace;
         assert_eq!((w.opened, w.built, w.answered_before_built), (2, 2, 1));
         assert_eq!((w.singles, w.rows, w.misses), (16, 2, 4));
+    }
+
+    #[test]
+    fn a_guess_before_show_me_does_not_count_against_the_workspace() {
+        // Wrong at 3s, Show me at 5s, model built 6s later (11s), right at 14s.
+        let mut r = attempt(8, 5, 13, 14000);
+        r.answers.insert(0, AnswerAt { value: 12, ms: 3000 });
+        r.help = Help::Workspace;
+        r.help_ms = Some(5000);
+        r.workspace = Some(WorkspaceUse { built_ms: Some(6000), ..Default::default() });
+        let w = analyze(&[r]).workspace;
+        assert_eq!(w.answered_before_built, 0, "the answer after building came after it was built");
+        assert_eq!(w.first_try_accuracy, Some(1.0), "right first time once it was open");
     }
 
     #[test]
