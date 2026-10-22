@@ -22,7 +22,9 @@ wasm-bindgen --target web --no-typescript --out-dir "$OUT" --out-name robot-budd
     target/wasm32-unknown-unknown/wasm-release/robot-buddy-game.wasm
 
 if command -v wasm-opt >/dev/null; then
+    # The features rustc enables by default for wasm32 (Rust 1.82+).
     wasm-opt -Oz --strip-debug --enable-bulk-memory --enable-nontrapping-float-to-int \
+        --enable-sign-ext --enable-mutable-globals --enable-multivalue --enable-reference-types \
         -o "$OUT/robot-buddy-game_bg.wasm" "$OUT/robot-buddy-game_bg.wasm"
 else
     echo "note: wasm-opt not found; skipping (the download is ~30% bigger)"

@@ -5,13 +5,16 @@ edition = "2021"
 
 [dependencies]
 robot-buddy-domain = { path = "../robot-buddy-domain" }
-# 2D + UI + picking only: no 3D, no audio, no gltf. Bevy UI is taffy flexbox,
-# picking does hit-testing (mouse and touch), so neither is hand-rolled here.
+# Only what the game uses: 2D rendering (vector shapes + Text2d), window/input,
+# assets, logging. No UI, picking, gizmos, post-processing, animation or image
+# formats; each costs download size in the WASM.
 bevy = { version = "=0.19.1", default-features = false, features = [
-    "default_app", "std", "multi_threaded",
-    "bevy_winit", "x11", "webgl2",
-    "2d_bevy_render", "ui_api", "ui_bevy_render",
-    "bevy_picking", "ui_picking",
+    "std", "multi_threaded", "async_executor",
+    "bevy_asset", "bevy_log", "bevy_state",
+    "bevy_winit", "x11", "webgl2", "bevy_window",
+    "bevy_render", "bevy_core_pipeline", "bevy_camera", "bevy_color",
+    "bevy_image", "bevy_mesh", "bevy_shader",
+    "bevy_sprite", "bevy_sprite_render", "bevy_text",
 ] }
 # Immediate-mode vector shapes: the sprites and tiles are drawn from
 # primitives every frame, exactly as they were under macroquad.
