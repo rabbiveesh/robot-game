@@ -4,7 +4,7 @@
 //!
 //! If this runs green, step() is genuinely pure — no macroquad context needed.
 
-use macroquad::prelude::KeyCode;
+use robot_buddy_game::input::KeyCode;
 use robot_buddy_game::game::{Game, GameState};
 use robot_buddy_game::input::FrameInput;
 

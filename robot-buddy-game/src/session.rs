@@ -134,7 +134,7 @@ pub fn build_export(
             dum_dums_at_export: dum_dums,
         },
         metadata: ExportMetadata {
-            game_version: "0.2.0-macroquad".into(),
+            game_version: "0.3.0-bevy".into(),
             total_play_time_secs: play_time,
             math_band: profile.math_band,
             spread_width: profile.spread_width,
@@ -159,21 +159,8 @@ pub fn download_json(json: &str, filename: &str) {
 // ─── PLATFORM ───────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
-extern "C" {
-    fn download_file(
-        data_ptr: *const u8, data_len: usize,
-        name_ptr: *const u8, name_len: usize,
-    );
-}
-
-#[cfg(target_arch = "wasm32")]
 fn platform_download(data: &str, filename: &str) {
-    unsafe {
-        download_file(
-            data.as_ptr(), data.len(),
-            filename.as_ptr(), filename.len(),
-        );
-    }
+    crate::web::download(data, filename, "application/json");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -187,8 +174,7 @@ fn platform_download(data: &str, filename: &str) {
 
 #[cfg(target_arch = "wasm32")]
 fn current_iso_date() -> String {
-    // Simple fallback — no js_sys date access without extra deps
-    "unknown".into()
+    crate::web::iso_date()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

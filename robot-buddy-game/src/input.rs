@@ -1,56 +1,79 @@
 //! Per-frame input snapshot.
 //!
-//! In production, `FrameInput::capture()` reads from macroquad once per frame.
-//! In tests, build one with the `with_*` builders. UI and game code only
-//! read from this struct — they never touch macroquad input directly.
+//! In production, `crate::app` fills a `FrameInput` from Bevy's input
+//! resources once per frame. In tests, build one with the `with_*` builders.
+//! UI and game code only read from this struct — they never touch Bevy input
+//! directly.
 
 use std::collections::HashSet;
-use macroquad::prelude::{
-    KeyCode, MouseButton,
-    get_char_pressed, is_key_down, is_key_pressed,
-    is_mouse_button_pressed, mouse_position,
-};
 
-/// Every key the game cares about. Capture polls macroquad for each.
-const TRACKED_KEYS: &[KeyCode] = &[
-    KeyCode::Up, KeyCode::Down, KeyCode::Left, KeyCode::Right,
-    KeyCode::W, KeyCode::A, KeyCode::S, KeyCode::D,
-    KeyCode::Space, KeyCode::Enter,
-    KeyCode::Backspace, KeyCode::Tab, KeyCode::Escape,
-    KeyCode::Key1, KeyCode::Key2, KeyCode::Key3, KeyCode::Key4,
-    KeyCode::P, KeyCode::T, KeyCode::E,
-    KeyCode::GraveAccent, // backtick — toggles the dev debug/export overlay
-];
+/// The keys the game reads. Names follow the physical key (`Key1` is the `1`
+/// key on the top row).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KeyCode {
+    Up, Down, Left, Right,
+    W, A, S, D, E, P, T,
+    Space, Enter, Backspace, Tab, Escape,
+    LeftShift, RightShift,
+    Key0, Key1, Key2, Key3, Key4, Key5, Key6, Key7, Key8, Key9,
+    /// Backtick: toggles the dev debug/export overlay.
+    GraveAccent,
+}
+
+impl KeyCode {
+    /// The game key for a Bevy key, if the game reads it. Numpad digits count
+    /// as digits and Numpad Enter as Enter.
+    pub fn from_bevy(k: bevy::input::keyboard::KeyCode) -> Option<KeyCode> {
+        use bevy::input::keyboard::KeyCode as B;
+        Some(match k {
+            B::ArrowUp => KeyCode::Up,
+            B::ArrowDown => KeyCode::Down,
+            B::ArrowLeft => KeyCode::Left,
+            B::ArrowRight => KeyCode::Right,
+            B::KeyW => KeyCode::W,
+            B::KeyA => KeyCode::A,
+            B::KeyS => KeyCode::S,
+            B::KeyD => KeyCode::D,
+            B::KeyE => KeyCode::E,
+            B::KeyP => KeyCode::P,
+            B::KeyT => KeyCode::T,
+            B::Space => KeyCode::Space,
+            B::Enter | B::NumpadEnter => KeyCode::Enter,
+            B::Backspace => KeyCode::Backspace,
+            B::Tab => KeyCode::Tab,
+            B::Escape => KeyCode::Escape,
+            B::ShiftLeft => KeyCode::LeftShift,
+            B::ShiftRight => KeyCode::RightShift,
+            B::Digit0 | B::Numpad0 => KeyCode::Key0,
+            B::Digit1 | B::Numpad1 => KeyCode::Key1,
+            B::Digit2 | B::Numpad2 => KeyCode::Key2,
+            B::Digit3 | B::Numpad3 => KeyCode::Key3,
+            B::Digit4 | B::Numpad4 => KeyCode::Key4,
+            B::Digit5 | B::Numpad5 => KeyCode::Key5,
+            B::Digit6 | B::Numpad6 => KeyCode::Key6,
+            B::Digit7 | B::Numpad7 => KeyCode::Key7,
+            B::Digit8 | B::Numpad8 => KeyCode::Key8,
+            B::Digit9 | B::Numpad9 => KeyCode::Key9,
+            B::Backquote => KeyCode::GraveAccent,
+            _ => return None,
+        })
+    }
+}
 
 #[derive(Default, Clone)]
 pub struct FrameInput {
     keys_pressed: HashSet<KeyCode>,
     keys_down: HashSet<KeyCode>,
     pub mouse_pos: (f32, f32),
+    /// A mouse press or a finger landing this frame, at `mouse_pos`.
     pub mouse_clicked: bool,
     pub chars_typed: Vec<char>,
 }
 
-#[allow(dead_code)] // builders are for the upcoming test harness
 impl FrameInput {
     /// Empty frame — no keys, no clicks. Default starting point for tests.
     pub fn empty() -> Self {
         Self::default()
-    }
-
-    /// Snapshot all input from macroquad for the current frame.
-    pub fn capture() -> Self {
-        let mut input = FrameInput::default();
-        for &k in TRACKED_KEYS {
-            if is_key_pressed(k) { input.keys_pressed.insert(k); }
-            if is_key_down(k) { input.keys_down.insert(k); }
-        }
-        input.mouse_pos = mouse_position();
-        input.mouse_clicked = is_mouse_button_pressed(MouseButton::Left);
-        while let Some(c) = get_char_pressed() {
-            input.chars_typed.push(c);
-        }
-        input
     }
 
     pub fn pressed(&self, k: KeyCode) -> bool {
@@ -61,7 +84,7 @@ impl FrameInput {
         self.keys_down.contains(&k)
     }
 
-    // ─── Test builders ──────────────────────────────────────
+    // ─── Builders (capture + tests) ─────────────────────────
 
     pub fn with_key_pressed(mut self, k: KeyCode) -> Self {
         self.keys_pressed.insert(k);

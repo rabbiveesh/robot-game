@@ -7,102 +7,41 @@
     <style>
         * { margin: 0; padding: 0; }
         html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a1a; }
-        canvas { width: 100vw; height: 100vh; display: block; }
+        canvas { width: 100vw; height: 100vh; display: block; outline: none; touch-action: none; }
+        #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+                   color: #90caf9; font: 24px sans-serif; pointer-events: none; }
     </style>
 </head>
 <body>
-    <canvas id="glcanvas" tabindex="0" width="960" height="720"></canvas>
-    <script src="mq_js_bundle.js"></script>
-    <script>
-        // localStorage plugin — called via extern "C" from Rust
-        miniquad_add_plugin({
-            register_plugin: function(importObject) {
-                importObject.env.ls_get_len = function(key_ptr, key_len) {
-                    var key = UTF8ToString(key_ptr, key_len);
-                    var val = localStorage.getItem(key);
-                    return val === null ? -1 : (new TextEncoder()).encode(val).length;
-                };
-                importObject.env.ls_get = function(key_ptr, key_len, buf_ptr, buf_len) {
-                    var key = UTF8ToString(key_ptr, key_len);
-                    var val = localStorage.getItem(key);
-                    if (val === null) return;
-                    var encoded = (new TextEncoder()).encode(val);
-                    var dst = new Uint8Array(wasm_memory.buffer, buf_ptr, buf_len);
-                    dst.set(encoded.subarray(0, buf_len));
-                };
-                importObject.env.ls_set = function(key_ptr, key_len, val_ptr, val_len) {
-                    var key = UTF8ToString(key_ptr, key_len);
-                    var val = UTF8ToString(val_ptr, val_len);
-                    localStorage.setItem(key, val);
-                };
-                importObject.env.page_is_hidden = function() {
-                    return (document.hidden || document.visibilityState === "hidden") ? 1 : 0;
-                };
-            },
-            name: "localStorage",
-            version: 1,
-        });
-
-        // TTS plugin — browser SpeechSynthesis
-        miniquad_add_plugin({
-            register_plugin: function(importObject) {
-                importObject.env.tts_speak = function(text_ptr, text_len, pitch100, rate100) {
-                    if (!window.speechSynthesis) return;
-                    window.speechSynthesis.cancel();
-                    var text = UTF8ToString(text_ptr, text_len);
-                    var u = new SpeechSynthesisUtterance(text);
-                    u.pitch = pitch100 / 100.0;
-                    u.rate = rate100 / 100.0;
-                    u.volume = 0.8;
-                    window.speechSynthesis.speak(u);
-                };
-                importObject.env.tts_cancel = function() {
-                    if (window.speechSynthesis) window.speechSynthesis.cancel();
-                };
-            },
-            name: "tts",
-            version: 1,
-        });
-
-        // File download plugin — triggered from Rust for session export
-        miniquad_add_plugin({
-            register_plugin: function(importObject) {
-                importObject.env.download_file = function(data_ptr, data_len, name_ptr, name_len) {
-                    var data = UTF8ToString(data_ptr, data_len);
-                    var name = UTF8ToString(name_ptr, name_len);
-                    var blob = new Blob([data], { type: 'application/json' });
-                    var url = URL.createObjectURL(blob);
-                    var a = document.createElement('a');
-                    a.href = url;
-                    a.download = name;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                };
-            },
-            name: "download",
-            version: 1,
-        });
-
-        // Preflight: miniquad's init_webgl throws an opaque TypeError when no
-        // WebGL context is available (e.g. Chrome with GPU acceleration
-        // unavailable — its software-WebGL fallback now hides behind
-        // chrome://flags/#enable-unsafe-swiftshader). Show a readable message
-        // instead of a black canvas.
-        var probe = document.createElement("canvas");
-        if (!probe.getContext("webgl") && !probe.getContext("webgl2")) {
+    <canvas id="bevy" tabindex="0"></canvas>
+    <div id="loading">Waking up Sparky…</div>
+    <script type="module">
+        // WebGL2 preflight: without it the game can't start, so say why
+        // instead of showing a black canvas.
+        if (!document.createElement("canvas").getContext("webgl2")) {
             document.body.innerHTML =
                 '<div style="color:#eee;font-family:sans-serif;max-width:34em;margin:4em auto;line-height:1.5">' +
-                '<h1>Robot Buddy needs WebGL</h1>' +
-                '<p>Your browser could not create a WebGL context, so the game cannot start.</p>' +
+                '<h1>Robot Buddy needs WebGL2</h1>' +
+                '<p>Your browser could not create a WebGL2 context, so the game cannot start.</p>' +
                 '<p>Usually this means graphics acceleration is off or unavailable. Try:</p>' +
                 '<ul style="padding-left:1.5em">' +
                 '<li>Chrome: check <code>chrome://gpu</code>, enable "Use graphics acceleration" in settings, or enable <code>chrome://flags/#enable-unsafe-swiftshader</code></li>' +
                 '<li>Or open this page in Firefox</li>' +
                 '</ul></div>';
         } else {
-            load("robot-buddy-game.wasm");
-            document.getElementById("glcanvas").focus();
-            document.addEventListener("click", () => document.getElementById("glcanvas").focus());
+            const canvas = document.getElementById("bevy");
+            canvas.focus();
+            document.addEventListener("click", () => canvas.focus());
+            import("./robot-buddy-game.js")
+                .then((m) => m.default())
+                .catch((e) => {
+                    // Bevy's winit loop exits by throwing a control-flow
+                    // "exception" that isn't an error.
+                    if (!String(e).includes("Using exceptions for control flow")) throw e;
+                });
+            // Hide the loading line once the game has drawn a frame.
+            const hide = () => document.getElementById("loading")?.remove();
+            new MutationObserver(hide).observe(canvas, { attributes: true });
         }
     </script>
 </body>

@@ -1,38 +1,34 @@
 #!/bin/bash
 set -euo pipefail
 
-# Build the game for WASM
-cargo build --target wasm32-unknown-unknown --release -p robot-buddy-game
+# Build the game for the browser:
+#   1. cargo → raw wasm (size-optimized `wasm-release` profile)
+#   2. wasm-bindgen → robot-buddy-game.js + robot-buddy-game_bg.wasm
+#      (its version must match the wasm-bindgen crate in Cargo.lock)
+#   3. wasm-opt -Oz, if installed (binaryen) — roughly a third smaller
+cargo build --target wasm32-unknown-unknown --profile wasm-release -p robot-buddy-game
 
-# The JS glue must match the miniquad version the wasm was compiled against.
-# While miniquad is pinned to a git rev (see Cargo.toml), use gl.js from that
-# exact checkout — macroquad's prebuilt mq_js_bundle.js ships the older
-# crates.io miniquad's gl.js, whose GL shims don't match and fail at
-# init_webgl. We don't need the rest of the bundle: no audio/jsutils/net
-# plugin crates are in Cargo.lock, and our plugins live in index.html.
-MQ_SOURCE=$(grep -A2 'name = "miniquad"' Cargo.lock | grep '^source = ')
-if [[ "$MQ_SOURCE" == *"git+"* ]]; then
-    REV="${MQ_SOURCE##*#}"
-    REV="${REV%\"}"
-    MQ_JS=$(find "${CARGO_HOME:-$HOME/.cargo}/git/checkouts" -path "*/miniquad-*/${REV:0:7}/js/gl.js" | head -1)
-    if [ -z "$MQ_JS" ]; then
-        echo "ERROR: gl.js for pinned miniquad rev $REV not found in cargo git checkouts."
-        exit 1
-    fi
-else
-    MQ_JS=$(find "${CARGO_HOME:-$HOME/.cargo}/registry/src" -path "*/macroquad-*/js/mq_js_bundle.js" | head -1)
-    if [ -z "$MQ_JS" ]; then
-        echo "ERROR: macroquad JS bundle not found. Run 'cargo build' first to download deps."
-        exit 1
-    fi
+WANT=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+HAVE=$(wasm-bindgen --version 2>/dev/null | awk '{print $2}' || true)
+if [ "$WANT" != "$HAVE" ]; then
+    echo "ERROR: need wasm-bindgen-cli $WANT (have '${HAVE:-none}'):"
+    echo "  cargo install wasm-bindgen-cli --version $WANT"
+    exit 1
 fi
 
-# Assemble www directory
-mkdir -p robot-buddy-game/www
-cp target/wasm32-unknown-unknown/release/robot-buddy-game.wasm robot-buddy-game/www/
-cp "$MQ_JS" robot-buddy-game/www/mq_js_bundle.js
-cp robot-buddy-game/index.html robot-buddy-game/www/
+OUT=robot-buddy-game/www
+mkdir -p "$OUT"
+wasm-bindgen --target web --no-typescript --out-dir "$OUT" --out-name robot-buddy-game \
+    target/wasm32-unknown-unknown/wasm-release/robot-buddy-game.wasm
 
-echo "Built! Serve with: cd robot-buddy-game/www && npx serve ."
-echo "JS bundle: $MQ_JS"
-echo "WASM size: $(wc -c < robot-buddy-game/www/robot-buddy-game.wasm | tr -d ' ') bytes"
+if command -v wasm-opt >/dev/null; then
+    wasm-opt -Oz --strip-debug --enable-bulk-memory --enable-nontrapping-float-to-int \
+        -o "$OUT/robot-buddy-game_bg.wasm" "$OUT/robot-buddy-game_bg.wasm"
+else
+    echo "note: wasm-opt not found; skipping (the download is ~30% bigger)"
+fi
+
+cp robot-buddy-game/index.html "$OUT/"
+
+echo "Built! Serve with: cd $OUT && npx serve ."
+echo "WASM size: $(wc -c < "$OUT/robot-buddy-game_bg.wasm" | tr -d ' ') bytes ($(gzip -9 -c "$OUT/robot-buddy-game_bg.wasm" | wc -c | tr -d ' ') gzipped)"

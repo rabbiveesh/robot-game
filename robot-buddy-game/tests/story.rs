@@ -47,7 +47,7 @@ fn full_intake_lands_in_playing_with_completed_profile() {
 
 #[test]
 fn give_to_sparky_records_gift_and_decrements_dum_dums() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     let mut h = Harness::new(42);
     h.start_dev_game();
@@ -75,7 +75,7 @@ fn give_to_sparky_records_gift_and_decrements_dum_dums() {
 
 #[test]
 fn talking_to_sparky_can_roll_a_challenge_and_award_dum_dums() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // Seed 0 is hand-picked: on the dev map, talking to Sparky rolls a challenge
     // (50% chance per RNG draw at game.rs handle_interaction_menu "talk" branch).
@@ -524,7 +524,7 @@ fn new_colour_is_offered_to_a_buddy_in_color_change_and_recolours_only_them() {
 fn a_mount_can_be_dressed_up_from_its_own_saddle() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     let mut h = Harness::new(13);
     h.start_dev_game();
@@ -710,7 +710,7 @@ fn a_relaxed_arcade_is_slower_but_asks_the_same_maths() {
 
 #[test]
 fn dev_toggle_flips_the_quest_flag() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     let mut h = Harness::new(7);
     h.start_dev_game();
     assert!(!h.game.features.quest, "quests default OFF");
@@ -724,7 +724,7 @@ fn dev_toggle_flips_the_quest_flag() {
 
 #[test]
 fn dev_quest_runs_to_completion_with_embedded_math() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     let mut h = Harness::new(7);
     h.start_dev_game();
     h.walk_to(2, 9);
@@ -750,7 +750,7 @@ fn dev_quest_runs_to_completion_with_embedded_math() {
 
 #[test]
 fn dev_toggle_flips_the_encounters_flag() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     let mut h = Harness::new(7);
     h.start_dev_game();
     assert!(!h.game.features.encounters, "encounters default OFF (suite + normal play unaffected)");
@@ -765,7 +765,7 @@ fn dev_toggle_flips_the_encounters_flag() {
 
 #[test]
 fn dev_trigger_fires_and_routes_an_encounter() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     let mut h = Harness::new(7);
     h.start_dev_game();
     h.walk_to(2, 9);
@@ -841,7 +841,7 @@ fn kenken_hint_marks_resolution_as_hint_used() {
 
 #[test]
 fn control_room_band_knob_cycles_math_band() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     let mut h = Harness::new(7);
     h.start_dev_game();
 
@@ -884,7 +884,7 @@ fn control_room_intro_reset_replays_kenken_intro() {
 
     // Walk to control room and reset the intro flag.
     h.walk_to(2, 9);
-    h.step_through_portal(macroquad::prelude::KeyCode::Left, "control");
+    h.step_through_portal(robot_buddy_game::input::KeyCode::Left, "control");
     h.walk_to_npc(NpcKind::CtrlIntroReset);
     h.interact();
     h.wait_until(|g| g.state == GameState::Dialogue);
@@ -980,7 +980,7 @@ fn wandering_npc_walking_onto_portal_transfers_to_destination_map() {
 fn player_portaling_onto_offstage_npc_displaces_them() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // Realistic block-prevention scenario: a wanderer walks through a portal
     // and lingers on its arrival tile. Later the player follows through that
@@ -1048,7 +1048,7 @@ fn player_portaling_onto_offstage_npc_displaces_them() {
 fn pushing_a_wandering_kid_shoves_them_one_tile_and_player_takes_their_spot() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // Wandering NPCs are tagged `Solidity::PushableAfter(0.18)` in the
     // resolver snapshot. Holding direction into one for ~0.18s should pop
@@ -1193,7 +1193,7 @@ fn npc_mid_slide_does_not_overshoot_when_a_huge_dt_arrives() {
 fn pushing_a_wandering_kid_onto_a_portal_transfers_them() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // Push and the NPC-portal handler need to compose. Pushing a kid onto a
     // portal tile should transfer them to the destination map's stash, same
@@ -1282,7 +1282,7 @@ fn pushing_a_wandering_kid_onto_a_portal_transfers_them() {
 fn pressing_into_a_kid_with_no_room_to_go_blocks_player() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // If the kid's would-be destination is a wall, push fails and the player
     // stays blocked — same outcome as walking into any solid NPC.
@@ -1574,7 +1574,7 @@ fn gifting_parked_sparky_brings_him_back_and_sends_the_npc_home() {
 
     // Face Sparky (he's to the left) by holding Left for one frame — that
     // sets player.dir without moving since Sparky soft-blocks.
-    h.hold(macroquad::prelude::KeyCode::Left);
+    h.hold(robot_buddy_game::input::KeyCode::Left);
 
     let mark = h.mark();
     h.interact();
@@ -1605,7 +1605,7 @@ fn gifting_parked_sparky_brings_him_back_and_sends_the_npc_home() {
 fn riding_a_sea_buddy_keeps_the_mount_on_the_players_tile() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // Chompy the shark and Echo the dolphin are mounts, not trailing followers:
     // while one is the buddy the kid rides it, so it should sit on the player's
@@ -1650,7 +1650,7 @@ fn riding_a_sea_buddy_keeps_the_mount_on_the_players_tile() {
 fn secret_map_intro_plays_only_on_the_first_visit() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     let mut h = Harness::new(7);
     h.start_dev_game();
@@ -1687,7 +1687,7 @@ fn secret_map_intro_plays_only_on_the_first_visit() {
 fn goyish_map_shooter_launches_plays_and_pays_out() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     use robot_buddy_domain::logic::shooter::ShooterPhase;
 
     let mut h = Harness::new(7);
@@ -1767,7 +1767,7 @@ fn goyish_map_shooter_launches_plays_and_pays_out() {
 fn goyish_shooter_click_aims_and_fires() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     use robot_buddy_domain::logic::shooter::FIELD_W;
 
     let mut h = Harness::new(9);
@@ -1809,7 +1809,7 @@ fn goyish_shooter_can_be_left_with_a_tap() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
     use robot_buddy_game::ui::shooter::{footer, FooterId};
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     let mut h = Harness::new(9);
     h.start_dev_game();
@@ -1834,7 +1834,7 @@ fn goyish_shooter_can_be_left_with_a_tap() {
 fn enter_shooter(h: &mut Harness) {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     h.game.map = Map::goyish_map();
     h.game.npcs = npc_mod::npcs_for_map("goyish_map");
@@ -1908,7 +1908,7 @@ fn shooter_payout_since(h: &Harness, mark: usize) -> (u32, u8) {
 /// pairs, and every wave cheers and pays its extra Dum Dum on top of the run.
 #[test]
 fn goyish_shooter_clean_keyboard_run_pays_a_bonus_per_wave() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     use robot_buddy_domain::economy::rewards::determine_reward;
     use robot_buddy_domain::logic::shooter::{ShotSource, TOTAL_WAVES};
 
@@ -1939,7 +1939,7 @@ fn goyish_shooter_clean_keyboard_run_pays_a_bonus_per_wave() {
 /// that wave just doesn't earn the extra Dum Dum (and gets no cheer).
 #[test]
 fn goyish_shooter_a_wrong_pair_forfeits_only_that_waves_bonus() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     use robot_buddy_domain::economy::rewards::determine_reward;
     use robot_buddy_domain::logic::shooter::TOTAL_WAVES;
 
@@ -1974,7 +1974,7 @@ fn goyish_shooter_a_wrong_pair_forfeits_only_that_waves_bonus() {
 /// tagged, or popped as part of a completed pair). Returns early if the alien
 /// is already gone.
 fn aim_and_fire(h: &mut Harness, id: u32) {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // Hop to the alien's lane: one press, one alien.
     let mut fired = false;
@@ -2487,7 +2487,7 @@ fn talking_to_inkwell_opens_the_dive_and_landing_descends() {
 fn a_dive_can_be_abandoned_or_taken_the_long_way_round() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     let mut h = Harness::new(4);
     h.start_dev_game();
@@ -2595,7 +2595,7 @@ fn diving_again_inside_the_dogfish_house_still_leads_home() {
 
 #[test]
 fn quitting_inside_the_dogfish_house_does_not_strand_the_kid() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     use robot_buddy_game::save::InMemoryBackend;
 
     let backend = InMemoryBackend::default();
@@ -2623,7 +2623,7 @@ fn quitting_inside_the_dogfish_house_does_not_strand_the_kid() {
 
 #[test]
 fn an_old_save_inside_the_dogfish_house_still_has_a_way_out() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     use robot_buddy_game::save::{InMemoryBackend, STORAGE_KEY};
 
     // Make a save down there, then strip the return point — as if it came
@@ -2722,14 +2722,14 @@ fn the_trench_is_explorable_end_to_end() {
     h.walk_to(16, 8);  // far end of the pearl path, mid-basin
     h.walk_to(23, 14); // the chest's doorstep, deep in the vent field
     h.walk_to(11, 2);  // back up to the arrival ledge, beside the rise spot...
-    h.step_through_portal(macroquad::prelude::KeyCode::Left, "reef"); // ...and up we go
+    h.step_through_portal(robot_buddy_game::input::KeyCode::Left, "reef"); // ...and up we go
 }
 
 #[test]
 fn myrtles_cottage_door_leads_inside_and_back() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // The reef village's one open cottage: walk in the front door, meet
     // Grandma Myrtle, walk back out.
@@ -2760,7 +2760,7 @@ fn myrtles_cottage_door_leads_inside_and_back() {
 fn companion_snaps_to_the_player_after_a_portal_warp() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // A swapped-in NPC companion used to keep its old-map coordinates and stale
     // path trail across a warp — landing it in some random spot on the new map,
@@ -2810,7 +2810,7 @@ fn companion_snaps_to_the_player_after_a_portal_warp() {
 fn swapping_npc_companions_voices_each_line_by_the_right_character() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // Bug: when an NPC handed off to another NPC (e.g. Mommy → Bolt), Sparky
     // narrated both the "joined" and "left" lines — even though he's parked off
@@ -2898,7 +2898,7 @@ fn wandering_npc_on_the_dream_portal_crosses_into_the_dream() {
 fn pushing_an_npc_onto_the_dream_portal_sends_them_into_the_dream() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // The player can also deliberately shove a wandering kid through the secret
     // dream portal: push composes with the NPC-portal handler the same way it
@@ -2956,7 +2956,7 @@ fn pushing_an_npc_onto_the_dream_portal_sends_them_into_the_dream() {
 
 #[test]
 fn a_brand_new_map_supports_portals_companions_and_warp_snap() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     let mut h = Harness::new(8);
     h.start_dev_game();
@@ -3020,7 +3020,7 @@ fn a_brand_new_map_supports_portals_companions_and_warp_snap() {
 fn pushing_an_npc_through_a_new_maps_portal_transfers_them() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // The NPC-portal handler is map-agnostic: shoving Pip onto the Annex's exit
     // door carries her to the dev map's offstage roster, no annex-specific code.
@@ -3091,7 +3091,7 @@ fn snap_player(h: &mut Harness, tx: usize, ty: usize) {
 
 #[test]
 fn diving_into_the_reef_costs_dum_dums() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
 
@@ -3140,7 +3140,7 @@ fn diving_into_the_reef_costs_dum_dums() {
 
 #[test]
 fn solving_the_reef_shark_opens_the_passage() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
 
@@ -3190,7 +3190,7 @@ fn solving_the_reef_shark_opens_the_passage() {
 fn pushing_an_npc_into_an_unvisited_map_keeps_its_regular_residents() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
 
     // Regression: shoving an NPC into a map whose roster was never stashed must
     // NOT replace that map's residents with just the intruder. Push Pip
@@ -3238,7 +3238,7 @@ fn pushing_an_npc_into_an_unvisited_map_keeps_its_regular_residents() {
 
 #[test]
 fn launching_from_the_lab_reaches_the_orbital_hub() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
 
@@ -3267,7 +3267,7 @@ fn launching_from_the_lab_reaches_the_orbital_hub() {
 
 #[test]
 fn rocket_jumps_burn_fuel_and_the_depot_refills() {
-    use macroquad::prelude::KeyCode;
+    use robot_buddy_game::input::KeyCode;
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
 

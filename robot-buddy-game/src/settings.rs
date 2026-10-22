@@ -1,5 +1,5 @@
 /// Global game settings — read by TTS and dialogue, edited by the settings overlay.
-/// Single-threaded macroquad; atomics keep access lock-free and thread-safe anyway.
+/// Atomics keep access lock-free from any system.
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 static TTS_ENABLED: AtomicBool = AtomicBool::new(true);

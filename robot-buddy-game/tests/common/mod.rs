@@ -6,7 +6,7 @@
 
 #![allow(dead_code)] // helpers are added as tests need them
 
-use macroquad::prelude::KeyCode;
+use robot_buddy_game::input::KeyCode;
 use robot_buddy_game::game::{Game, GameEvent, GameState};
 use robot_buddy_game::input::FrameInput;
 use robot_buddy_game::npc::NpcKind;
@@ -368,7 +368,7 @@ impl Harness {
             if !still_in_intro {
                 return;
             }
-            self.press(macroquad::prelude::KeyCode::Space);
+            self.press(robot_buddy_game::input::KeyCode::Space);
         }
         panic!("kenken intro never finished after enough advances");
     }

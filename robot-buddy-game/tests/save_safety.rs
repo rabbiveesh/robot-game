@@ -131,7 +131,7 @@ fn a_kid_on_the_title_screen_cannot_start_over_a_napping_save() {
     let mut h = common::Harness::with_backend(3, backend.clone());
     assert_eq!(h.game.state, robot_buddy_game::game::GameState::Title);
     for _ in 0..3 {
-        h.press(macroquad::prelude::KeyCode::Key2);
+        h.press(robot_buddy_game::input::KeyCode::Key2);
     }
     assert_eq!(h.game.state, robot_buddy_game::game::GameState::Title,
         "the napping slot must not open the new-game form");
@@ -164,7 +164,7 @@ fn the_title_screen_never_offers_an_unreadable_slot_as_new() {
     assert!(layout.slots[1].delete_btn.is_none(), "nothing to click that could bury it");
     assert_eq!(layout.slots[2].primary_action, TitleActionKind::LoadGame);
 
-    let press_2 = FrameInput::empty().with_key_pressed(macroquad::prelude::KeyCode::Key2);
+    let press_2 = FrameInput::empty().with_key_pressed(robot_buddy_game::input::KeyCode::Key2);
     assert!(title_screen::handle_title_input(&layout, &press_2).is_none(),
         "pressing 2 on a resting slot does nothing");
     let (bx, by, _, _) = layout.slots[1].primary_btn;

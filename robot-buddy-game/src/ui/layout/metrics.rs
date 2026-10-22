@@ -1,18 +1,9 @@
 //! Text measurement, the one thing a layout engine needs from the font.
 //!
-//! Two implementations of [`TextMetrics`]:
-//!
-//! * [`FontMetrics`] — the **default everywhere** (step, render, tests). It
-//!   parses the exact bytes `crate::text` hands macroquad
-//!   (`assets/unifont-subset.ttf`) with fontdue — the rasterizer macroquad
-//!   itself uses — and sums advances the way `macroquad::text::measure_text`
-//!   does. So widths are identical to what gets drawn, and no GL context is
-//!   needed: `Game::step` (and the headless tests) lay out with the same
-//!   numbers `Game::render` paints with. That is what keeps hit rects from
-//!   drifting away from drawn rects.
-//! * [`MacroquadMetrics`] — asks macroquad directly. Needs a live GL context,
-//!   so it can only run inside `render`; debug builds use it to cross-check
-//!   `FontMetrics` against the real renderer (see `paint::debug_check_width`).
+//! [`FontMetrics`] is used everywhere (step, render, tests). It parses the
+//! bundled font (`assets/unifont-subset.ttf`, the one Bevy draws with) with
+//! fontdue and sums advances, so no window is needed: `Game::step` and the
+//! headless tests lay out with the same numbers `Game::render` paints with.
 
 use std::sync::OnceLock;
 
@@ -29,8 +20,7 @@ pub trait TextMetrics {
     }
 }
 
-/// fontdue over the bundled game font. Headless, deterministic, and
-/// byte-for-byte the font macroquad draws with.
+/// fontdue over the bundled game font. Headless and deterministic.
 pub struct FontMetrics {
     font: fontdue::Font,
     /// Ascent / descent per px of font size (Unifont: 14/16 and 2/16).
@@ -39,6 +29,24 @@ pub struct FontMetrics {
 }
 
 impl FontMetrics {
+    /// macroquad-style [`crate::draw::TextDimensions`]: advance width, plus
+    /// the union of the glyph boxes (height, and its top's distance above the
+    /// baseline). Panels center labels on these.
+    pub fn dimensions(&self, text: &str, size: u16) -> crate::draw::TextDimensions {
+        let px = size as f32;
+        let (mut width, mut top, mut bottom) = (0.0f32, f32::MIN, f32::MAX);
+        for c in text.chars() {
+            let m = self.font.metrics(c, px);
+            width += m.advance_width;
+            top = top.max(m.ymin as f32 + m.height as f32);
+            bottom = bottom.min(m.ymin as f32);
+        }
+        if text.is_empty() {
+            return crate::draw::TextDimensions::default();
+        }
+        crate::draw::TextDimensions { width, height: top - bottom, offset_y: top }
+    }
+
     fn load() -> Self {
         let font = fontdue::Font::from_bytes(crate::text::FONT_BYTES, fontdue::FontSettings::default())
             .expect("bundled font parses");
@@ -55,8 +63,7 @@ impl FontMetrics {
 
 impl TextMetrics for FontMetrics {
     fn width(&self, text: &str, size: u16) -> f32 {
-        // Same sum macroquad's Font::measure_text does: advance per char at
-        // the integer pixel size, no kerning.
+        // Advance per char at the integer pixel size; Unifont has no kerning.
         let px = size as f32;
         text.chars().map(|c| self.font.metrics(c, px).advance_width).sum()
     }
@@ -66,53 +73,6 @@ impl TextMetrics for FontMetrics {
     fn descent(&self, size: u16) -> f32 {
         (self.descent_per_px * size as f32).round()
     }
-}
-
-/// Measures through macroquad (`crate::text::measure_text`). Render-only.
-pub struct MacroquadMetrics;
-
-impl TextMetrics for MacroquadMetrics {
-    fn width(&self, text: &str, size: u16) -> f32 {
-        crate::text::measure_text(text, None, size, 1.0).width
-    }
-    fn ascent(&self, size: u16) -> f32 {
-        FontMetrics::bundled().ascent(size)
-    }
-    fn descent(&self, size: u16) -> f32 {
-        FontMetrics::bundled().descent(size)
-    }
-}
-
-/// Strings and sizes [`renderer_drift`] probes: every glyph class we draw
-/// (ASCII, digits, math operators, the star) across the sizes panels use.
-const PROBE: &str = "Sparky has 12 Dum Dums! 7 + 5 = ? 3\u{00d7}4 8\u{00f7}2 9\u{2212}1 \u{2605}";
-const PROBE_SIZES: [u16; 8] = [11, 14, 16, 18, 22, 28, 42, 54];
-
-/// Compare [`FontMetrics`] (what layout measured, headless) with
-/// [`MacroquadMetrics`] (what macroquad will render) on a probe string.
-/// `None` if they agree to within half a pixel at every probed size; else a
-/// description of the worst disagreement. Needs a live GL context.
-///
-/// They disagree when the bundled font didn't load (macroquad measures its
-/// default font) or when a fractional DPI scale makes macroquad rasterize at
-/// `ceil(size × dpi)` and divide back — advances then no longer match the
-/// integer-size advances layout summed.
-pub fn renderer_drift() -> Option<String> {
-    let ours = FontMetrics::bundled();
-    PROBE_SIZES
-        .iter()
-        .map(|&size| (size, ours.width(PROBE, size), MacroquadMetrics.width(PROBE, size)))
-        .filter(|(_, a, b)| (a - b).abs() > 0.5)
-        .max_by(|x, y| (x.1 - x.2).abs().total_cmp(&(y.1 - y.2).abs()))
-        .map(|(size, a, b)| {
-            format!(
-                "a {}-char probe at {size}px is {}px wide to layout but {}px rendered (dpi scale {}%)",
-                PROBE.chars().count(),
-                a.round() as i32,
-                b.round() as i32,
-                (macroquad::miniquad::window::dpi_scale() * 100.0).round() as i32
-            )
-        })
 }
 
 #[cfg(test)]

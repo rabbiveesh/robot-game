@@ -1,11 +1,11 @@
 //! The painter: the ONLY place migrated panels' pixels come from.
 //!
 //! Migrated panels (`tests/layout_discipline.rs` lists them) may not call
-//! macroquad's raw-coordinate drawing or measuring functions. They paint by
+//! the raw-coordinate drawing or measuring functions. They paint by
 //! handing this module rects and placed texts taken from their `Frame`, plus
 //! style (colors, radii, stroke widths). Custom art inside a `Region` goes
-//! through a [`Canvas`] bound to that region's rect. macroquad-only: never
-//! called from `step` or the headless tests.
+//! through a [`Canvas`] bound to that region's rect. Render-only: never
+//! called from `step`.
 
 use crate::prelude::*;
 
@@ -16,7 +16,6 @@ use super::text::fit_size_by;
 /// Draw every line of a placed text in `color`.
 pub fn text(t: &PlacedText, color: Color) {
     for l in &t.lines {
-        debug_check_width(&l.text, t.size);
         draw_text(&l.text, l.rect.x, l.baseline, t.size as f32, color);
     }
 }
@@ -128,7 +127,6 @@ impl Canvas {
         use super::metrics::{FontMetrics, TextMetrics};
         let m = FontMetrics::bundled();
         self.check(x, baseline - m.ascent(size), x + m.width(s, size), baseline + m.descent(size));
-        debug_check_width(s, size);
         draw_text(s, x, baseline, size as f32, color);
     }
 }
@@ -151,22 +149,7 @@ fn warn_once(msg: &str) {
     use std::cell::Cell;
     thread_local!(static WARNED: Cell<bool> = const { Cell::new(false) });
     if !WARNED.with(|w| w.replace(true)) {
-        macroquad::logging::warn!("{msg}");
+        bevy::log::warn!("{msg}");
     }
 }
 
-/// Debug builds: warn (once) if the headless metrics used for layout ever
-/// disagree with what macroquad actually renders.
-fn debug_check_width(s: &str, size: u16) {
-    #[cfg(debug_assertions)]
-    {
-        use super::metrics::{FontMetrics, MacroquadMetrics, TextMetrics};
-        let ours = FontMetrics::bundled().width(s, size);
-        let theirs = MacroquadMetrics.width(s, size);
-        if (ours - theirs).abs() > 1.0 {
-            warn_once(&format!("layout metrics drift: {s:?} at {size}px is {ours} headless vs {theirs} rendered"));
-        }
-    }
-    #[cfg(not(debug_assertions))]
-    let _ = (s, size);
-}
