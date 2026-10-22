@@ -59,7 +59,9 @@ impl Plugin for DrawPlugin {
             .insert_resource(ClearColor(Color::srgb_u8(10, 10, 26)))
             .init_resource::<DrawList>()
             .add_systems(Startup, spawn_camera)
-            .add_systems(PostUpdate, paint);
+            // Before Bevy lays out Text2d (PostUpdate), so a pooled text
+            // that moves and changes words does both in the same frame.
+            .add_systems(Update, paint.after(PanelSystems));
     }
 }
 
@@ -189,9 +191,10 @@ fn paint(
     art: Res<ArtSizes>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut pool: Query<
-        (&mut Text2d, &mut TextFont, &mut TextColor, &mut Transform, &mut Visibility, &mut RenderLayers),
+        (Entity, &mut Text2d, &mut TextFont, &mut TextColor, &mut Transform, &mut Visibility, &mut RenderLayers),
         With<PooledText>,
     >,
+    mut retouch: Local<Vec<Entity>>,
 ) {
     let Ok(window) = window.single() else { return };
     let screen = screen_of(window);
@@ -200,6 +203,11 @@ fn paint(
     let mut size = screen;
     let metrics = FontMetrics::bundled();
 
+    // Bevy lays a Text2d out only for a camera that saw sprites last frame,
+    // and drops the change otherwise: a slot that just moved into an art
+    // slot's layer (or came back from hidden) would keep its old words. So
+    // whatever changed this frame is marked changed again next frame.
+    let last = std::mem::take(&mut *retouch);
     let cmds = std::mem::take(&mut list.0);
     let mut slots = pool.iter_mut();
     let mut z = Z_START;
@@ -274,11 +282,18 @@ fn paint(
                 let tf = Transform::from_translation(top.extend(z));
                 let layers = RenderLayers::layer(layer as usize);
                 match slots.next() {
-                    Some((mut t, mut f, mut c, mut transform, mut vis, mut rl)) => {
-                        if t.0 != *text {
+                    Some((e, mut t, mut f, mut c, mut transform, mut vis, mut rl)) => {
+                        let mut touched = t.0 != *text;
+                        if touched {
                             t.0.clone_from(text);
+                        } else if last.contains(&e) {
+                            t.set_changed();
                         }
-                        rl.set_if_neq(layers);
+                        touched |= rl.set_if_neq(layers);
+                        touched |= *vis == Visibility::Hidden;
+                        if touched {
+                            retouch.push(e);
+                        }
                         f.set_if_neq(font);
                         c.set_if_neq(TextColor(bevy_color(*color)));
                         transform.set_if_neq(tf);
@@ -300,7 +315,7 @@ fn paint(
             }
         }
     }
-    for (_, _, _, _, mut vis, _) in slots {
+    for (_, _, _, _, _, mut vis, _) in slots {
         vis.set_if_neq(Visibility::Hidden);
     }
 }

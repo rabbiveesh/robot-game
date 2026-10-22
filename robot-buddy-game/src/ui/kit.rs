@@ -146,6 +146,9 @@ fn tint(mut q: Query<(&Interaction, &Tint, &mut BackgroundColor), Changed<Intera
 pub struct Shrink {
     pub max: f32,
     pub min: f32,
+    /// With `wrap`: a line too wide at this size wraps rather than shrinking
+    /// further (only `squeeze` takes it on down to `min`).
+    pub wrap_at: f32,
     pub wrap: bool,
     /// Wraps from the start, rather than shrinking a line first.
     pub starts_wrapped: bool,
@@ -190,8 +193,9 @@ fn shrink_text(
         }
         // Across: a line too wide for its box.
         if layout.linebreak == LineBreak::NoWrap && need.x > have.x + 0.5 {
-            if size > s.min {
-                set(&mut font, (size * have.x / need.x).floor().max(s.min));
+            let floor = if s.wrap { s.wrap_at } else { s.min };
+            if size > floor {
+                set(&mut font, (size * have.x / need.x).floor().max(floor));
                 continue;
             }
             if s.wrap {
@@ -448,7 +452,7 @@ pub fn text_centered(s: impl Into<String>, size: f32, c: draw::Color) -> impl Bu
 /// One line that shrinks (to `min`) to fit its box rather than overflow.
 /// `wrap`: once at `min`, wrap instead.
 pub fn fitted(s: impl Into<String>, size: f32, min: f32, wrap: bool, c: draw::Color, justify: Justify) -> impl Bundle {
-    fitted_by(s, c, justify, Shrink { max: size, min, wrap, starts_wrapped: false, squeeze: false })
+    fitted_by(s, c, justify, Shrink { max: size, min, wrap_at: min, wrap, starts_wrapped: false, squeeze: false })
 }
 
 fn fitted_by(s: impl Into<String>, c: draw::Color, justify: Justify, shrink: Shrink) -> impl Bundle {
@@ -476,9 +480,12 @@ fn fitted_by(s: impl Into<String>, c: draw::Color, justify: Justify, shrink: Shr
 }
 
 /// Like [`fitted`] with `wrap`, and it also shrinks while the box holding
-/// it spills out of the bottom (give that box a max height).
+/// it spills out of the bottom (give that box a max height). A short line
+/// ("125 + 378 = ?") shrinks a little to stay on one line; a word problem
+/// wraps at a readable size first and only shrinks if it then spills.
 pub fn fitted_squeezed(s: impl Into<String>, size: f32, min: f32, c: draw::Color, justify: Justify) -> impl Bundle {
-    fitted_by(s, c, justify, Shrink { max: size, min, wrap: true, starts_wrapped: false, squeeze: true })
+    let wrap_at = (size * 0.6).round().max(min);
+    fitted_by(s, c, justify, Shrink { max: size, min, wrap_at, wrap: true, starts_wrapped: false, squeeze: true })
 }
 
 /// Wrapped text that shrinks (to `min`) until the box holding it stops
@@ -490,7 +497,7 @@ pub fn filled(s: impl Into<String>, size: f32, min: f32, c: draw::Color, justify
         TextColor(color(c)),
         LineHeight::RelativeToFont(1.15),
         TextLayout::new(justify, LineBreak::WordBoundary),
-        Shrink { max: size, min, wrap: true, starts_wrapped: true, squeeze: true },
+        Shrink { max: size, min, wrap_at: min, wrap: true, starts_wrapped: true, squeeze: true },
         Node { width: percent(100), min_width: px(0), ..default() },
         Visibility::Hidden,
         Pickable::IGNORE,
