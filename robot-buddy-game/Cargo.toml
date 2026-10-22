@@ -22,6 +22,8 @@ rand = { version = "0.8", default-features = false, features = ["small_rng"] }
 # Headless text metrics for world-space text (centering a label over a pad)
 # without a GPU: the same bundled font Bevy renders with.
 fontdue = "0.9"
+# UI layout engine (the same taffy Bevy UI is built on, so no extra copy).
+taffy = { version = "0.10", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Browser APIs (localStorage, speech, downloads, tab visibility) straight

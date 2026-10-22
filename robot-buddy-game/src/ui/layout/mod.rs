@@ -5,7 +5,7 @@
 //!  panel code                       this module                      panel code
 //!  ──────────                       ───────────                      ──────────
 //!  build Node tree ──► LayoutEngine::compute ──► Frame::resolve ──► draw: loop over Frame
-//!  (col/row/text/…)    (DefaultEngine = Flow)    (text fit, ids)    click: frame.hit_at(x, y)
+//!  (col/row/text/…)    (DefaultEngine = taffy)    (text fit, ids)    click: frame.hit_at(x, y)
 //!                            ▲                         ▲
 //!                            └──── TextMetrics ────────┘  (FontMetrics: bundled font via fontdue)
 //! ```
@@ -14,13 +14,14 @@
 //! * [`node`] — the panel-facing vocabulary. Flexbox-only, taffy-shaped.
 //! * [`engine`] — the seam: `LayoutEngine::compute(tree, bounds, metrics) -> rects`
 //!   (exact CSS flexbox, overflow allowed), then the shared `round_edges` + `clip`.
-//! * [`flow`] — the in-house engine (`FlowEngine`).
+//! * [`taffy_engine`] — the engine (`TaffyEngine`): taffy, the flexbox
+//!   implementation Bevy UI uses.
 //! * [`text`] — fit/wrap/measure for text leaves; shared by every engine.
 //! * [`frame`] — the resolved output (texts with lines + baselines, boxes,
 //!   regions, hit targets keyed by panel-defined ids).
 //! * [`page`] — list paging policy, above the engine (reads `Frame::clipped`).
 //! * [`sane`] — `assert_sane`, the generic no-overlap test.
-//! * [`paint`] — macroquad helpers for drawing a frame (render-only).
+//! * [`paint`] — helpers for drawing a frame (render-only).
 //!
 //! ## Vocabulary → taffy mapping
 //!
@@ -40,11 +41,9 @@
 //! | whole pixels           | `disable_rounding()`; the shared `engine::round_edges` rounds |
 //! | overflow → clipped     | `overflow: Visible` (default); the shared `engine::clip` post-pass |
 //!
-//! `tests/layout_taffy.rs` holds a working `TaffyEngine` built on this table
-//! and checks `FlowEngine` against it over the whole sweep.
+//! [`taffy_engine`] implements exactly this table.
 
 pub mod engine;
-pub mod flow;
 pub mod frame;
 pub mod metrics;
 pub mod node;
@@ -52,6 +51,7 @@ pub mod page;
 pub mod paint;
 pub mod rect;
 pub mod sane;
+pub mod taffy_engine;
 pub mod text;
 
 use std::fmt::Debug;
@@ -68,7 +68,7 @@ pub use rect::UiRect;
 pub use sane::{assert_sane, check_sane};
 
 /// The engine every panel uses. Swapping engines = change this alias.
-pub type DefaultEngine = flow::FlowEngine;
+pub type DefaultEngine = taffy_engine::TaffyEngine;
 
 /// Lay `root` out inside `bounds` with the default engine and the bundled
 /// font's metrics. Pure: safe to call from `Game::step` and headless tests.

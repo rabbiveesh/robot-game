@@ -3,9 +3,9 @@
 //! An engine only answers "where does every box go". It knows nothing about
 //! ids, hit targets, painting, or how a text leaf's lines are broken — that is
 //! [`Frame::resolve`](super::frame::Frame::resolve)'s job, shared by all
-//! engines. Swapping the in-house [`FlowEngine`](super::flow::FlowEngine) for
-//! a taffy-backed one is therefore one new impl of this trait plus flipping
-//! the `DefaultEngine` alias in `layout/mod.rs`.
+//! engines. The engine is [`TaffyEngine`](super::taffy_engine::TaffyEngine);
+//! another one is a new impl of this trait plus flipping the `DefaultEngine`
+//! alias in `layout/mod.rs`.
 
 use super::metrics::TextMetrics;
 use super::node::{Content, Node, Style, TextSpec};
@@ -67,9 +67,7 @@ impl<'a> LayoutTree<'a> {
 pub trait LayoutEngine {
     /// Lay the tree out with the root filling `bounds` (node 0 is the root;
     /// its own size style is ignored). Returns one absolute, **unrounded**
-    /// rect per node, in pre-order. The contract every engine keeps (a
-    /// differential test held `FlowEngine` to taffy within 0.01px before it
-    /// was retired; see ADR-004):
+    /// rect per node, in pre-order. The contract every engine keeps:
     ///
     /// * **CSS flexbox semantics** for the vocabulary in `node.rs`, including
     ///   overflow: a child that doesn't fit is *not* capped or dropped here;

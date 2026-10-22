@@ -332,6 +332,9 @@ fn record() -> Shots {
 const SETTLE: u32 = 4;
 /// Frames between shots.
 const PER_SHOT: u32 = 8;
+/// Frames before the first shot, while the renderer builds its pipelines
+/// (the first few frames come out black).
+const WARMUP: u32 = 30;
 
 fn main() {
     let shots = record();
@@ -359,9 +362,10 @@ fn show_shots(
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
-    let i = (*frame / PER_SHOT) as usize;
-    let phase = *frame % PER_SHOT;
     *frame += 1;
+    let Some(f) = frame.checked_sub(WARMUP) else { return };
+    let i = (f / PER_SHOT) as usize;
+    let phase = f % PER_SHOT;
     let Some((name, cmds)) = shots.0.get(i) else {
         if phase == PER_SHOT - 1 {
             exit.write(AppExit::Success);
