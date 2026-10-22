@@ -190,7 +190,7 @@ mod tests {
 
     /// Shelly's call is a full sentence; on a narrow window it has to shrink
     /// rather than run off the edge. Measured with the bundled game font
-    /// (headless, the same widths macroquad renders).
+    /// (headless, the same widths Bevy renders).
     #[test]
     fn a_long_call_shrinks_to_fit_the_panel() {
         let call = "My pearl's under stone 9! You get there in 3 leaps - how big is each one?";

@@ -5,7 +5,7 @@
 //! become `Granted` moves. The game crate then applies the granted moves by
 //! calling `Entity::start_move` (or equivalent).
 //!
-//! This module is pure Rust with no game-crate or macroquad dependencies, so
+//! This module is pure Rust with no game-crate or engine dependencies, so
 //! every collision rule is unit-testable as a plain `cargo test`.
 
 use std::collections::{HashMap, HashSet};

@@ -242,7 +242,7 @@ impl DebugOverlay {
     }
 
     /// True iff the export button was clicked this frame (using last frame's rect).
-    /// step() can call this without touching macroquad.
+    /// step() can call this without rendering.
     pub fn is_export_clicked(&self, input: &FrameInput) -> bool {
         if !self.visible || !input.mouse_clicked { return false; }
         let Some((x, y, w, h)) = self.last_export_rect else { return false; };

@@ -1,8 +1,8 @@
 //! The Game struct: all state, all logic, all rendering.
 //!
-//! Production: `main()` captures input from macroquad, calls `step()`, awaits next_frame.
-//! Tests: build a `FrameInput` synthetically and call `step()` directly. (Tests still need
-//! a macroquad window today because draw calls run unconditionally — Phase 4 will split.)
+//! Production: `crate::app` captures input from Bevy, calls `step()`, then `render()`
+//! records draw calls that Bevy paints.
+//! Tests: build a `FrameInput` synthetically and call `step()` directly; no window.
 
 use crate::prelude::*;
 use ::rand::{Rng, SeedableRng};
@@ -903,7 +903,7 @@ impl Game {
         self.dialogue.start(lines);
     }
 
-    /// Run one frame of pure logic — no rendering, no macroquad calls. Tests
+    /// Run one frame of pure logic — no rendering, no engine calls. Tests
     /// can call this without a window. Production main calls step() then render().
     pub fn step(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         self.game_time += dt;
@@ -3562,8 +3562,8 @@ impl Game {
         );
     }
 
-    /// Draw everything for the current frame. Only called in production — tests
-    /// skip this so they don't need a macroquad context.
+    /// Record everything drawn this frame (see `crate::draw`). Only called in
+    /// production and by the screenshots example.
     pub fn render(&mut self, screen: (f32, f32), input: &FrameInput) {
         match self.state {
             GameState::Title => {

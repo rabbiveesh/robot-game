@@ -2,7 +2,7 @@
 //!
 //! Wraps Game with primitive frame-driving helpers (press, type_chars,
 //! advance, run_until) and a few story-level helpers built on top.
-//! Render is never called, so no macroquad context is needed.
+//! Render is never called, so no window is needed.
 
 #![allow(dead_code)] // helpers are added as tests need them
 

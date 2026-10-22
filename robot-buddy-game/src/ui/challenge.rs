@@ -60,7 +60,8 @@ const PANEL_W: f32 = 760.0;
 const MARGIN: f32 = 20.0;
 const PRAISES: [&str; 6] = ["AMAZING!", "WOW!", "GENIUS!", "SO SMART!", "INCREDIBLE!", "YOU GOT IT!"];
 
-/// Replace Unicode math symbols with ASCII equivalents that render in macroquad's default font.
+/// Replace Unicode math symbols with ASCII equivalents (a holdover from
+/// before the bundled font; the font has −, × and ÷ now).
 fn sanitize_math_text(text: &str) -> String {
     text.replace('\u{2212}', "-") // minus sign → hyphen-minus
         .replace('\u{00d7}', "x") // multiplication sign → letter x

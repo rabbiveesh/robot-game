@@ -4,7 +4,7 @@
 //! every pixel from `ui::layout::paint`. This test parses each migrated
 //! panel's source (syn) and fails if it:
 //!
-//! * calls macroquad's raw drawing / measuring / camera functions, reads the
+//! * calls the raw drawing / measuring / camera functions, reads the
 //!   screen size or the clock — including through a `use … as alias`, as a
 //!   function value (`.map(draw_text)`), or inside a macro's tokens;
 //! * calls ANY `draw_*` / `gl_*` function that isn't the panel's own (defined
@@ -35,7 +35,7 @@ const MIGRATED: &[&str] = &[
     "visuals.rs",
 ];
 
-/// Raw macroquad calls a migrated panel must not make (besides every
+/// Raw drawing calls a migrated panel must not make (besides every
 /// `draw_*` / `gl_*`, which are caught by prefix).
 const FORBIDDEN: &[&str] = &[
     // text measuring (layout measures; paint draws)
@@ -337,22 +337,22 @@ fn the_scanner_catches_a_raw_draw() {
 
 #[test]
 fn the_scanner_sees_through_aliases() {
-    let src = "use macroquad::prelude::draw_rectangle as rect; use macroquad::shapes as sh;
-               fn f() { rect(0.0, 0.0, 1.0, 1.0, RED); sh::draw_hexagon(0.0, 0.0, 1.0, 1.0, true, RED, RED); }";
-    assert_eq!(calls(src), vec!["macroquad::prelude::draw_rectangle", "macroquad::shapes::draw_hexagon"]);
+    let src = "use crate::draw::draw_rectangle as rect; use crate::draw as sh;
+               fn f() { rect(0.0, 0.0, 1.0, 1.0, RED); sh::draw_poly(0.0, 0.0, 6, 1.0, 0.0, RED); }";
+    assert_eq!(calls(src), vec!["crate::draw::draw_poly", "crate::draw::draw_rectangle"]);
 }
 
 #[test]
 fn the_scanner_looks_inside_macros() {
     let src = "fn f() { let v = vec![measure_text(\"a\", None, 1, 1.0)]; my_macro!(xs.iter().for_each(draw_text));
-               log!(\"{}\", macroquad::text::draw_multiline_text_ex(t, 0.0, 0.0, None, p)); }";
-    assert_eq!(calls(src), vec!["draw_text", "macroquad::text::draw_multiline_text_ex", "measure_text"]);
+               log!(\"{}\", crate::draw::draw_text(t, 0.0, 0.0, 1.0, p)); }";
+    assert_eq!(calls(src), vec!["crate::draw::draw_text", "draw_text", "measure_text"]);
 }
 
 #[test]
 fn the_scanner_catches_every_draw_fn_by_prefix() {
-    let src = "fn f() { draw_rectangle_lines_ex(0.0, 0.0, 1.0, 1.0, 1.0, p); draw_texture(t, 0.0, 0.0, WHITE); gl_use_material(m); }";
-    assert_eq!(calls(src), vec!["draw_rectangle_lines_ex", "draw_texture", "gl_use_material"]);
+    let src = "fn f() { draw_rectangle_lines(0.0, 0.0, 1.0, 1.0, 1.0, p); draw_triangle(a, b, c, WHITE); gl_use_material(m); }";
+    assert_eq!(calls(src), vec!["draw_rectangle_lines", "draw_triangle", "gl_use_material"]);
 }
 
 #[test]

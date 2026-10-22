@@ -1138,7 +1138,7 @@ fn npc_mid_slide_does_not_overshoot_when_a_huge_dt_arrives() {
     use robot_buddy_game::npc as npc_mod;
 
     // In the browser, a backgrounded tab can pause requestAnimationFrame for
-    // seconds; when it resumes, macroquad reports a single huge dt for that
+    // seconds; when it resumes, the engine reports a single huge dt for that
     // frame. `move_toward_target` advances pixels by MOVE_SPEED * dt — without
     // a clamp, an NPC mid-slide flies hundreds of tiles past their target and
     // then "ghost walks" back at normal speed on subsequent normal-dt frames.

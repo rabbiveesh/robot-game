@@ -6,7 +6,7 @@ One language: Rust. One binary: WASM. Two crates in a workspace.
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│                  PRESENTATION (Macroquad)                  │
+│                    PRESENTATION (Bevy)                     │
 │  Tilemap, sprites, UI, input, audio, save, AI dialogue.    │
 │  robot-buddy-game/src/                                     │
 └────────────────────────┬───────────────────────────────────┘
@@ -29,7 +29,7 @@ The domain crate has zero rendering or browser deps. The game crate consumes dom
 
 ```
 Cargo.toml                          # workspace root
-build-wasm.sh                       # cargo build + assemble www/
+build-wasm.sh                       # cargo build + wasm-bindgen + wasm-opt → www/
 
 robot-buddy-domain/
   Cargo.toml
@@ -53,13 +53,17 @@ robot-buddy-domain/
       simulate.rs                   # CLI learning simulator
 
 robot-buddy-game/
-  Cargo.toml                        # depends on robot-buddy-domain + macroquad
+  Cargo.toml                        # depends on robot-buddy-domain + bevy
   index.html                        # WASM loader (source — copied into www/ by build)
   src/
-    main.rs                         # game loop, GameState, input dispatch
+    main.rs                         # starts the Bevy app
+    app.rs                          # Bevy plugins: input → Game::step → render → paint
+    draw.rs                         # immediate-mode draw calls, recorded for Bevy to paint
+    game/                           # Game struct, GameState, step/render
+    web.rs                          # browser APIs via web-sys
     tilemap.rs                      # map data + rendering
     npc.rs                          # NPC data, facing/adjacency, give handlers
-    save.rs                         # localStorage via miniquad plugin
+    save.rs                         # save slots (localStorage via web.rs)
     session.rs                      # session log, JSON export
     settings.rs                     # AI provider, voice, TTS toggle
     sprites/
@@ -75,25 +79,32 @@ robot-buddy-game/
       settings_overlay.rs           # in-game settings (ESC)
       visuals.rs                    # math visualizations (dots, ten-frames, base-10 blocks)
     audio/
-      tts.rs                        # SpeechSynthesis via miniquad plugin
+      tts.rs                        # SpeechSynthesis via web.rs
 
 robot-buddy-game/www/                # build output (gitignored, except index.html)
   index.html
-  mq_js_bundle.js                   # macroquad runtime (from cargo registry)
-  robot-buddy-game.wasm
+  robot-buddy-game.js               # wasm-bindgen glue (generated)
+  robot-buddy-game_bg.wasm
 ```
 
 ## Browser interop
 
-Macroquad uses miniquad, not wasm-bindgen. Browser APIs that the engine doesn't expose are reached through miniquad plugins — small JS shims registered in `robot-buddy-game/index.html` and called from Rust via `extern "C"`. Today there are three:
+The game is built with wasm-bindgen, so browser APIs are called from Rust directly
+through `web-sys`, all in `robot-buddy-game/src/web.rs` (WASM-only; native builds
+have stand-ins at each call site). There is no hand-written JS beyond the loader in
+`index.html`.
 
-| Plugin       | Purpose                                          | Rust caller        |
-|--------------|--------------------------------------------------|--------------------|
-| localStorage | `ls_get`, `ls_set` for save slots                | `save.rs`          |
-| tts          | `tts_speak`, `tts_cancel` for dialogue voice     | `audio/tts.rs`     |
-| download     | `download_file` for session export blob          | `session.rs`       |
+| API                 | Purpose                                     | Rust caller    |
+|---------------------|---------------------------------------------|----------------|
+| localStorage        | save slots (+ backups of unreadable saves)  | `save.rs`      |
+| document visibility | don't autosave from a hidden tab            | `save.rs`      |
+| speechSynthesis     | dialogue voice                              | `audio/tts.rs` |
+| Blob + `<a download>` | session export                            | `session.rs`   |
+| Date                | save timestamps, export date                | `save.rs`, `session.rs` |
 
-Adding a new browser API means: (1) add the JS shim in `index.html` under `miniquad_add_plugin`, (2) declare the `extern "C"` function in the Rust caller, (3) call it.
+Adding a new browser API means: enable its `web-sys` feature in
+`robot-buddy-game/Cargo.toml`, wrap it in `web.rs`, and call it under
+`#[cfg(target_arch = "wasm32")]`.
 
 ## Type-safety guarantees
 
