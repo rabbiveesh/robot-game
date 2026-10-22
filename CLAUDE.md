@@ -33,7 +33,7 @@ These are NOT optional. Every PR must respect these:
 
 ## Tech Stack
 
-- **One language: Rust.** Domain crate + game crate on **Bevy 0.19** (`bevy_vector_shapes` for the procedural art, taffy for UI layout), single WASM binary. Browser APIs go through `web-sys`.
+- **One language: Rust.** Domain crate + game crate on **Bevy 0.19** (`bevy_vector_shapes` for the procedural art, Bevy UI for panels), single WASM binary. Browser APIs go through `web-sys`.
 - **Tests**: `cargo test` runs the domain unit tests and the headless story-style game integration tests (see ADR-002). Don't write test counts into docs; they go stale on the next PR.
 - **Build**: `./build-wasm.sh` → cargo (`wasm-release` profile) + `wasm-bindgen` (version must match Cargo.lock) + `wasm-opt` → `robot-buddy-game/www/`. Bevy's cold build is slow (~10+ min); incremental builds are seconds.
 - **CI**: GitHub Actions: `cargo test` + WASM build + deploy to Pages, with a cargo cache. No Node, no npm.
@@ -74,7 +74,8 @@ robot-buddy-game/                # Bevy game (depends on domain)
     main.rs                      # starts the Bevy app with a Game
     app.rs                       # Bevy plugins: capture FrameInput → Game::step → Game::render → paint
     draw.rs                      # immediate-mode drawing (draw_rectangle, draw_text…) recorded as a
-                                 #   Cmd list; app.rs paints it (ShapePainter + pooled Text2d)
+                                 #   Cmd list; app.rs paints it (ShapePainter + pooled Text2d);
+                                 #   draw::art paints into a panel's art slot
     game/                        # Game struct + step (pure logic) + render (records draws) + GameEvent
     input.rs                     # FrameInput — single input boundary (+ the game's KeyCode)
     web.rs                       # browser APIs via web-sys: localStorage, speech, download, clock
@@ -82,17 +83,18 @@ robot-buddy-game/                # Bevy game (depends on domain)
     tilemap.rs, npc.rs, session.rs, settings.rs
     sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit)
     ui/                          # challenge, descent, dialogue, hud, interaction_menu, leap, shop, swag, swatches, title_screen, settings_overlay, visuals
-      layout/                    # declarative layout (ADR-004): node tree → taffy → Frame
-                                 #   (placed text + hit targets) read by BOTH draw and click;
-                                 #   FontMetrics (headless, real font), paging, assert_sane, painter
+                                 #   Panels are Bevy UI (ADR-006): Game::ui_views → UiViews (views.rs)
+                                 #   → each panel's bundle; taps come back as UiAction in FrameInput
+      kit.rs                     # Panel trait, taps, Shrink (text that fits), art slots, scroll lists
+      probe.rs                   # UiProbe: headless Bevy layout of the panels + Snapshot::problems
+      metrics.rs, rect.rs        # headless font widths; UiRect for the hand-drawn boards
     visuals/                     # math visualization renderers
     audio/                       # TTS (browser speechSynthesis via web.rs)
     net/                         # AI dialogue fetch
   tests/                         # headless integration tests — plain `cargo test`, no window
-    common/mod.rs                # Harness + story helpers (walk_to_npc, interact, answer_correctly)
+    common/mod.rs                # Harness + story helpers (walk_to_npc, interact, tap(UiAction))
     headless.rs, story.rs        # player-flow tests; assertions read GameEvent log
-    layout_sweep.rs, sweep/      # assert_sane over migrated panels × 5 screens (360×640 phone up) × awkward data
-    layout_discipline.rs         # migrated panels may not call raw draw/measure fns or hand-make rects
+    panels.rs                    # every panel × 5 screens (360×640 phone up) × awkward data, via UiProbe
   www/                           # build output (gitignored except index.html)
 ```
 
@@ -103,8 +105,9 @@ ADRs document key design decisions, their context, and consequences. Read these 
 - **[ADR-001: Band Blending](docs/adr/001-band-blending.md)** — Bands are distribution centers, not hard levels. Accuracy-based promotion replaces streaks. Spread width tightens on frustration, widens on confidence. Streak is display-only.
 - **[ADR-002: Headless Test Harness](docs/adr/002-headless-test-harness.md)** — `Game::step` (pure) / `Game::render` (records draw calls) split, `FrameInput` boundary, `SaveBackend` trait with `InMemoryBackend` for tests, `GameEvent` log as the assertion surface. Story-style integration tests run as plain `cargo test` with no window.
 - **[ADR-003: Logic-Puzzle, Manipulative & Quest Domain Layer](docs/adr/003-logic-puzzle-and-manipulative-domain-layer.md)** — Every new feature (extra logic puzzles, CRA manipulatives, quests, shop, encounters, voice parser) is built as a pure, headlessly-tested domain module first; the conflict-prone `game.rs` wiring is the only serial step. The ADR lists what's wired end-to-end vs. domain-only and gives the turnkey wiring recipe.
-- **[ADR-004: UI Layout](docs/adr/004-ui-layout.md)** — Panels describe a flexbox-shaped node tree; a swappable `LayoutEngine` (taffy, the flexbox engine inside Bevy UI) produces a `Frame` that both drawing and hit-testing read, so overlap and hit-rect drift are impossible by construction. Overflow overflows (then clips): panels fit with `.w_pct(1.0).max_w(W)` and `min_h(0.0)`, never by relying on the engine to squeeze. Text needs an explicit `Fit` policy; `assert_sane` sweeps panels × screens; migrated panels paint only through `ui::layout::paint`. The ADR lists exactly what each check catches and misses.
-- **[ADR-005: Bevy Port](docs/adr/005-bevy-port.md)** — The game runs on Bevy, keeping `Game` as a pure core: `step` stays headless, `render` records macroquad-shaped draw calls that Bevy paints, browser APIs go through `web-sys`. Panels keep ADR-004's layout (on taffy) rather than Bevy UI entities; the ADR says why, and what moving them would take.
+- **[ADR-004: UI Layout](docs/adr/004-ui-layout.md)** — *Superseded by ADR-006.* Our own declarative layout (node tree → taffy → `Frame` read by draw and click) with `assert_sane` sweeps. Its Alternatives section still explains why hit rects must come from the same layout as the drawing.
+- **[ADR-005: Bevy Port](docs/adr/005-bevy-port.md)** — The game runs on Bevy, keeping `Game` as a pure core: `step` stays headless, `render` records macroquad-shaped draw calls that Bevy paints, browser APIs go through `web-sys`.
+- **[ADR-006: Panels on Bevy UI](docs/adr/006-bevy-ui-panels.md)** — Panels are Bevy UI built from plain views; taps come back as named `UiAction`s, never coordinates; panel art draws into per-panel art slots. Our layout engine is gone; `UiProbe` lays panels out headlessly so story-test taps and a 5-screen sweep catch off-screen, overlapping and spilling layouts. Supersedes ADR-004.
 
 ## Key Domain Concepts
 

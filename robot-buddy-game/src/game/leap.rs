@@ -60,7 +60,7 @@ impl Game {
     /// Turn a keyboard/tap intent into a leap while the kid is on the stones.
     /// Returns true when the input was spent on the pearl path, so the normal
     /// walk resolver leaves it alone.
-    pub(super) fn handle_leap_input(&mut self, input: &FrameInput, screen: (f32, f32)) -> bool {
+    pub(super) fn handle_leap_input(&mut self, input: &FrameInput) -> bool {
         let Some(track) = number_track::track_for_map(self.map.id) else { return false };
         if self.leap_session.is_none() || self.player.moving {
             return false;
@@ -68,16 +68,8 @@ impl Game {
 
         // Taps on Shelly's panel do the same three things the keys do — and a
         // tap that lands on the panel is never also a click-to-walk.
-        let (tap, on_panel) = {
-            let s = self.leap_session.as_ref().unwrap();
-            let layout = ui::leap::layout(s, screen);
-            let (mx, my) = input.mouse_pos;
-            if input.mouse_clicked {
-                (ui::leap::handle_click(mx, my, &layout), ui::leap::absorbs_click(mx, my, &layout))
-            } else {
-                (None, false)
-            }
-        };
+        let tap = ui::leap::handle_click(input);
+        let on_panel = input.click_on_ui;
 
         // Pick a leap size: the number keys line up with Shelly's offered
         // sizes, cheapest first, same as every other menu in the game.

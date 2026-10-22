@@ -4,13 +4,15 @@
 //!  PreUpdate (after Bevy's input)   Update                         PostUpdate
 //!  ──────────────────────────────   ──────                         ──────────
 //!  capture: Bevy input ──► FrameInput ──► Game::step(input, dt, screen)
-//!                                         Game::render ──► draw::Cmd list ──► paint: ShapePainter
-//!                                                                              + pooled Text2d
+//!   + the panel tapped                    Game::render ──► draw::Cmd list ──► paint: ShapePainter
+//!   + art slot sizes                                                             + pooled Text2d
+//!                                         Game::ui_views ──► UiViews ──► panels (Bevy UI, ui::kit)
 //! ```
 //!
 //! `Game` holds `Rc`s (the save backend), so it lives as a non-send
 //! resource and every system touching it runs on the main thread.
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::camera::ScalingMode;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::touch::Touches;
@@ -23,7 +25,10 @@ use bevy_vector_shapes::prelude::*;
 use crate::draw::{self, Cmd};
 use crate::game::{Game, GAME_H, GAME_W};
 use crate::input::{FrameInput, KeyCode as GameKey};
-use crate::ui::layout::{FontMetrics, TextMetrics};
+use crate::ui::kit::{ArtSizes, PanelSystems, Pressed};
+use crate::ui::metrics::{FontMetrics, TextMetrics};
+use crate::ui::views::UiViews;
+use crate::ui::{self, ArtId};
 
 /// The input `capture` built this frame, read by `run_frame`.
 #[derive(Resource, Default)]
@@ -50,7 +55,7 @@ impl Plugin for DrawPlugin {
             .resource_mut::<Assets<Font>>()
             .insert(AssetId::default(), Font::from_bytes(crate::text::FONT_BYTES.to_vec()))
             .expect("default font slot");
-        app.add_plugins(Shape2dPlugin::default())
+        app.add_plugins((Shape2dPlugin::default(), ui::PanelsPlugin))
             .insert_resource(ClearColor(Color::srgb_u8(10, 10, 26)))
             .init_resource::<DrawList>()
             .add_systems(Startup, spawn_camera)
@@ -67,7 +72,7 @@ impl Plugin for GamePlugin {
         app.add_plugins(DrawPlugin)
             .init_resource::<CurrentInput>()
             .add_systems(PreUpdate, capture.after(bevy::input::InputSystems))
-            .add_systems(Update, run_frame);
+            .add_systems(Update, run_frame.before(PanelSystems));
     }
 }
 
@@ -101,6 +106,7 @@ pub fn clock_seed() -> u64 {
 fn spawn_camera(mut commands: Commands) {
     commands.spawn((
         Camera2d,
+        IsDefaultUiCamera,
         Projection::Orthographic(OrthographicProjection {
             scaling_mode: ScalingMode::WindowSize,
             ..OrthographicProjection::default_2d()
@@ -119,9 +125,14 @@ fn capture(
     touches: Res<Touches>,
     mut typed: MessageReader<KeyboardInput>,
     window: Query<&Window, With<PrimaryWindow>>,
+    mut pressed: ResMut<Pressed>,
+    art: Res<ArtSizes>,
     mut out: ResMut<CurrentInput>,
 ) {
     let mut input = FrameInput::empty();
+    input.ui_press = pressed.action.take();
+    input.click_on_ui = std::mem::take(&mut pressed.on_ui);
+    input.art.clone_from(&art.0);
     for k in keys.get_just_pressed().filter_map(|&k| GameKey::from_bevy(k)) {
         input = input.with_key_pressed(k);
     }
@@ -155,12 +166,15 @@ fn run_frame(
     time: Res<Time>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut list: ResMut<DrawList>,
+    mut views: ResMut<UiViews>,
 ) {
     let Ok(window) = window.single() else { return };
     let screen = screen_of(window);
     game.step(&input.0, time.delta_secs(), screen);
     draw::begin_frame(screen, time.elapsed_secs_f64());
     game.render(screen, &input.0);
+    *views = game.ui_views(screen);
+    views.draw_all_art(&input.0.art);
     list.0 = draw::take_commands();
 }
 
@@ -172,26 +186,40 @@ fn paint(
     mut commands: Commands,
     mut painter: ShapePainter,
     mut list: ResMut<DrawList>,
+    art: Res<ArtSizes>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut pool: Query<
-        (&mut Text2d, &mut TextFont, &mut TextColor, &mut Transform, &mut Visibility),
+        (&mut Text2d, &mut TextFont, &mut TextColor, &mut Transform, &mut Visibility, &mut RenderLayers),
         With<PooledText>,
     >,
 ) {
     let Ok(window) = window.single() else { return };
-    let (sw, sh) = screen_of(window);
-    // Top-left, y-down pixels → Bevy world (origin at the screen's center, y up).
-    let to_world = |x: f32, y: f32| Vec2::new(x - sw / 2.0, sh / 2.0 - y);
+    let screen = screen_of(window);
+    // Which surface commands go to: the screen (layer 0), or an art slot.
+    let mut layer = 0u8;
+    let mut size = screen;
     let metrics = FontMetrics::bundled();
 
     let cmds = std::mem::take(&mut list.0);
     let mut slots = pool.iter_mut();
     let mut z = Z_START;
     for cmd in &cmds {
+        // Top-left, y-down pixels → Bevy world (origin at the surface's
+        // center, y up).
+        let (sw, sh) = size;
+        let to_world = |x: f32, y: f32| Vec2::new(x - sw / 2.0, sh / 2.0 - y);
         z += Z_STEP;
         painter.reset();
         painter.cap = Cap::None;
+        painter.render_layers = (layer > 0).then(|| RenderLayers::layer(layer as usize));
         match cmd {
+            Cmd::Layer(n) => {
+                layer = *n;
+                size = match ArtId::ALL.iter().find(|a| a.layer() == layer) {
+                    Some(&id) => art.0.iter().find(|(a, ..)| *a == id).map_or((1.0, 1.0), |&(_, w, h)| (w, h)),
+                    None => screen,
+                };
+            }
             Cmd::Rect { x, y, w, h, color } => {
                 painter.set_translation(to_world(x + w / 2.0, y + h / 2.0).extend(z));
                 painter.set_color(bevy_color(*color));
@@ -244,11 +272,13 @@ fn paint(
                 let top = to_world(*x, y - metrics.ascent(*size));
                 let font = TextFont::from_font_size(*size as f32).with_font_smoothing(FontSmoothing::AntiAliased);
                 let tf = Transform::from_translation(top.extend(z));
+                let layers = RenderLayers::layer(layer as usize);
                 match slots.next() {
-                    Some((mut t, mut f, mut c, mut transform, mut vis)) => {
+                    Some((mut t, mut f, mut c, mut transform, mut vis, mut rl)) => {
                         if t.0 != *text {
                             t.0.clone_from(text);
                         }
+                        rl.set_if_neq(layers);
                         f.set_if_neq(font);
                         c.set_if_neq(TextColor(bevy_color(*color)));
                         transform.set_if_neq(tf);
@@ -263,13 +293,14 @@ fn paint(
                             TextColor(bevy_color(*color)),
                             Anchor::TOP_LEFT,
                             tf,
+                            layers,
                         ));
                     }
                 }
             }
         }
     }
-    for (.., mut vis) in slots {
+    for (_, _, _, _, mut vis, _) in slots {
         vis.set_if_neq(Visibility::Hidden);
     }
 }

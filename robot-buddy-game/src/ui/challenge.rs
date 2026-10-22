@@ -1,59 +1,38 @@
 //! The challenge overlay: question, answer buttons, Show me / Tell me, the
 //! celebration, and the teaching walkthrough.
 //!
-//! Layout is declarative (see `ui::layout`): [`layout`] is pure and returns a
-//! `Frame` that `Game::step` hit-tests and `Game::render` paints, so the
-//! buttons you see are exactly the buttons you can tap — a long wrapped word
-//! problem pushes both down together.
+//! [`ChallengeView`] is what the game shows; [`ChallengePanel`] turns it into
+//! Bevy UI. Taps come back as [`ChallengeId`]s, so the buttons you see are
+//! exactly the buttons you can tap — a long wrapped word problem pushes both
+//! down together.
+
+use std::sync::Arc;
+
+use bevy::ecs::spawn::SpawnWith;
+use bevy::prelude::{
+    default, AlignItems, ChildSpawner, Children, JustifyContent, Node, PositionType, Spawn, SpawnRelated,
+    UiRect as Edges,
+};
+use bevy::text::Justify;
+use bevy::ui::{percent, px, BackgroundColor, BorderColor, BorderRadius};
 
 use crate::prelude::*;
 use robot_buddy_domain::challenge::challenge_state::{ChallengeAction, ChallengeState};
 use robot_buddy_domain::learning::challenge_generator::Challenge;
 use robot_buddy_domain::types::Phase;
 
-use super::visuals;
+use super::kit::{self, backdrop, button, col, fitted, text_centered, Art, Blink, HeightFor, Panel};
+use super::views::UiViews;
+use super::{visuals, ArtId, UiAction};
 use crate::input::FrameInput;
-use crate::ui::layout::{self, col, paint, region, row, text, Align, Fit, Frame, Justify, Kind, Node};
-pub use crate::ui::layout::UiRect;
+pub use crate::ui::rect::UiRect;
 
+/// The challenge's buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChallengeId {
-    Panel,
-    /// Teaching-screen header ("Let's figure it out!").
-    Header,
-    Question,
-    /// The CRA visual (Show me / teaching).
-    Visual,
-    Feedback,
     Choice(usize),
-    ChoiceKey(usize),
-    ChoiceLabel(usize),
     ShowMe,
-    ShowMeLabel,
     TellMe,
-    TellMeLabel,
-    /// Room for the praise and its star burst.
-    Celebrate,
-    Praise,
-    /// Teaching: "= 12".
-    Answer,
-    Dismiss,
-}
-
-pub struct ChallengeLayout {
-    pub frame: Frame<ChallengeId>,
-}
-
-impl ChallengeLayout {
-    pub fn choice(&self, index: usize) -> Option<UiRect> {
-        self.frame.rect(ChallengeId::Choice(index))
-    }
-    pub fn show_me(&self) -> Option<UiRect> {
-        self.frame.rect(ChallengeId::ShowMe)
-    }
-    pub fn tell_me(&self) -> Option<UiRect> {
-        self.frame.rect(ChallengeId::TellMe)
-    }
 }
 
 const PANEL_W: f32 = 760.0;
@@ -67,129 +46,6 @@ fn sanitize_math_text(text: &str) -> String {
         .replace('\u{00d7}', "x") // multiplication sign → letter x
         .replace('\u{00f7}', "/") // division sign → slash
 }
-
-/// The CRA visual's slot: the panel's full inner width (stretched), `h` tall.
-/// [`layout`] measures the width first, then asks the visual how tall it is
-/// at that width — the same `visuals::plan` that draws it.
-fn visual(h: f32) -> Node<ChallengeId> {
-    region(0.0, h).auto_w().id(ChallengeId::Visual).fixed()
-}
-
-/// A labelled scaffold button ("Show me" / "Tell me").
-fn scaffold(id: ChallengeId, label_id: ChallengeId, label: &str) -> Node<ChallengeId> {
-    // Preferred 150 wide; squeezes (never clips) on a narrow phone.
-    layout::button(id, label_id, label, 22, Fit::shrink(14)).w(150.0).min_w(96.0).shrink(1.0)
-}
-
-fn answer_button(i: usize, label: &str) -> Node<ChallengeId> {
-    col()
-        .id(ChallengeId::Choice(i))
-        .hit()
-        .w(200.0)
-        .min_w(64.0)
-        .pad_xy(10.0, 4.0)
-        // Key hint (1, 2, 3) top-left; the answer centered between it and a
-        // matching bottom gap.
-        .child(text(format!("{}", i + 1), 20, Fit::shrink(12)).id(ChallengeId::ChoiceKey(i)).fixed())
-        .child(text(label, 40, Fit::shrink(18)).id(ChallengeId::ChoiceLabel(i)).center_text().grow(1.0))
-        // Balances the key hint; gives way first when a short screen squeezes the button.
-        .child(region(0.0, 20.0).min_h(0.0))
-}
-
-/// Lay the overlay out for `screen`. Pure.
-pub fn layout(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) -> ChallengeLayout {
-    let bounds = layout::screen_rect(screen);
-    let build = |visual_h: f32| tree(cs, challenge, screen, visual_h);
-    let mut frame = layout::layout(&build(0.0), bounds);
-    // Two passes: the first finds how wide the visual's slot is (the panel's
-    // width doesn't depend on its content), the second reserves its height
-    // at that width.
-    if let Some(slot) = frame.rect(ChallengeId::Visual) {
-        frame = layout::layout(&build(visuals::extent(challenge, slot.w).h), bounds);
-    }
-    ChallengeLayout { frame }
-}
-
-fn tree(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32), visual_h: f32) -> Node<ChallengeId> {
-    let sh = screen.1;
-    // Short windows (640x480) get tighter spacing so a wrapped word problem,
-    // the visual and feedback all fit above the buttons.
-    let compact = sh < 600.0;
-    let (gap, pad_top): (f32, f32) = if compact { (8.0, 18.0) } else { (14.0, 28.0) };
-    let q_text = sanitize_math_text(&cs.question.display);
-
-    let panel = if cs.phase == Phase::Teaching {
-        let header = if cs.told_me { "Here's how it works!" } else { "Let's figure it out!" };
-        col()
-            .gap(gap.min(10.0))
-            .child(text(header, 28, Fit::shrink(18)).id(ChallengeId::Header).center_text().fixed())
-            .child(text(q_text, 34, Fit::shrink_then_wrap(20, 6)).id(ChallengeId::Question).center_text())
-            .child(visual(visual_h))
-            .child(text(format!("= {}", challenge.correct_answer), 54, Fit::shrink(28)).id(ChallengeId::Answer).center_text())
-            .maybe(cs.feedback.as_ref().map(|fb| {
-                text(fb.display.clone(), 24, Fit::wrap_lines(14, 2)).id(ChallengeId::Feedback).center_text()
-            }))
-            .child(text("Press SPACE or click to continue", 22, Fit::shrink(14)).id(ChallengeId::Dismiss).center_text().fixed())
-    } else {
-        let feedback = (cs.phase == Phase::Feedback).then_some(cs.feedback.as_ref()).flatten();
-        // While the kid is answering, the feedback line is always laid out —
-        // empty until they miss — so "Hmm, not quite!" appearing can't shove
-        // the answer buttons out from under their finger.
-        let answering = cs.phase == Phase::Presented || cs.phase == Phase::Feedback;
-        let feedback_slot = answering.then(|| {
-            let msg = feedback.map(|fb| fb.display.clone()).unwrap_or_default();
-            text(msg, 28, Fit::wrap_lines(16, 2)).id(ChallengeId::Feedback).center_text().reserve_lines(2)
-        });
-        let scaffolds = (cs.phase == Phase::Presented || cs.phase == Phase::Feedback).then(|| {
-            row()
-                .gap(12.0)
-                .justify(Justify::Center)
-                // The row gives up height on a short screen; the buttons stretch to it.
-                .align(Align::Stretch)
-                .h(46.0)
-                .min_h(38.0)
-                // Show me — available until the visual is displayed.
-                .maybe((!cs.hint_used).then(|| scaffold(ChallengeId::ShowMe, ChallengeId::ShowMeLabel, "Show me")))
-                .child(scaffold(ChallengeId::TellMe, ChallengeId::TellMeLabel, "Tell me"))
-        });
-        let complete = cs.phase == Phase::Complete;
-        let praise = (complete && cs.correct == Some(true)).then(|| {
-            let praise = PRAISES[(cs.correct_answer.unsigned_abs() as usize) % PRAISES.len()];
-            row()
-                .id(ChallengeId::Celebrate)
-                .h(100.0)
-                .min_h(30.0)
-                .justify(Justify::Center)
-                .child(text(praise, 44, Fit::shrink(24)).id(ChallengeId::Praise).center_text())
-        });
-        col()
-            .gap(gap)
-            .child(text(q_text, 42, Fit::shrink_then_wrap(22, 6)).id(ChallengeId::Question).center_text())
-            .maybe(cs.hint_used.then(|| visual(visual_h)))
-            .maybe(feedback_slot)
-            .child(
-                row()
-                    .gap(20.0)
-                    .justify(Justify::Center)
-                    .align(Align::Stretch)
-                    .h(88.0)
-                    .min_h(64.0)
-                    .children(challenge.choices.iter().enumerate().map(|(i, c)| answer_button(i, &c.text))),
-            )
-            .maybe(scaffolds)
-            .maybe(praise)
-            // Dismiss hint (for both correct and post-teaching).
-            .maybe(complete.then(|| text("Press SPACE to continue", 22, Fit::shrink(14)).id(ChallengeId::Dismiss).center_text().fixed()))
-    };
-
-    // PANEL_W wide, or the whole screen if that's narrower.
-    // min_h(0): the panel may be shorter than its children's preferred heights
-    // (their own min_h floors then apply) — the CSS "min-height: 0" rule.
-    let panel = panel.id(ChallengeId::Panel).w_pct(1.0).max_w(PANEL_W).min_h(0.0).pad_edges(24.0, pad_top, 24.0, 20.0);
-    layout::centered_on_screen(panel, MARGIN)
-}
-
-// ─── DRAWING ────────────────────────────────────────────
 
 const DARK_BG: Color = Color::new(0.078, 0.078, 0.180, 1.0); // #141430
 const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0); // #FFD54F
@@ -205,61 +61,240 @@ const PRAISE_COLOR: Color = Color::new(1.0, 0.835, 0.310, 1.0); // #FFD54F
 const GREEN_ANS: Color = Color::new(0.412, 0.941, 0.682, 1.0); // #69F0AE
 const HINT_GRAY: Color = Color::new(0.471, 0.565, 0.604, 1.0); // #78909C
 
-/// Paint the overlay from its frame.
-pub fn draw(layout: &ChallengeLayout, cs: &ChallengeState, challenge: &Challenge, time: f32) {
-    let f = &layout.frame;
-    paint::dim(f.bounds, 0.5);
-    let teaching = cs.phase == Phase::Teaching;
-    let solved = cs.phase == Phase::Complete && cs.correct == Some(true);
-    for el in f.elements() {
-        let Some(id) = el.id else { continue };
-        let r = el.rect;
-        if let Kind::Text(t) = &el.kind {
-            match id {
-                ChallengeId::Header => paint::text(t, ORANGE),
-                ChallengeId::Feedback if teaching => paint::text(t, GOLD),
-                ChallengeId::Feedback => paint::text(t, ORANGE),
-                ChallengeId::ChoiceKey(_) => paint::text(t, Color::new(1.0, 1.0, 1.0, 0.4)),
-                ChallengeId::ShowMeLabel => paint::text(t, SCAFFOLD_TXT),
-                ChallengeId::TellMeLabel => paint::text(t, SCAFFOLD_TXT_DIM),
-                ChallengeId::Praise => paint::text(t, PRAISE_COLOR),
-                ChallengeId::Answer => paint::text(t, GREEN_ANS),
-                ChallengeId::Dismiss if teaching => paint::text(t, HINT_GRAY),
-                ChallengeId::Dismiss => {
-                    if paint::blink(4.0) {
-                        paint::text(t, HINT_GRAY)
-                    }
-                }
-                _ => paint::text(t, WHITE),
-            }
-            continue;
+/// Everything the overlay shows, read off the challenge state.
+#[derive(Clone)]
+pub struct ChallengeView {
+    pub phase: Phase,
+    pub told_me: bool,
+    pub hint_used: bool,
+    pub correct: Option<bool>,
+    pub question: String,
+    pub feedback: Option<String>,
+    /// Answer labels, and which one is right.
+    pub choices: Vec<(String, bool)>,
+    pub correct_answer: i32,
+    /// A short window gets tighter spacing.
+    pub compact: bool,
+    /// For the visual (Show me / teaching), which is drawn as art.
+    pub challenge: Arc<Challenge>,
+}
+
+impl PartialEq for ChallengeView {
+    /// The visual is a function of the question, so it isn't compared.
+    fn eq(&self, o: &Self) -> bool {
+        (self.phase, self.told_me, self.hint_used, self.correct, &self.question, &self.feedback)
+            == (o.phase, o.told_me, o.hint_used, o.correct, &o.question, &o.feedback)
+            && (&self.choices, self.correct_answer, self.compact) == (&o.choices, o.correct_answer, o.compact)
+    }
+}
+
+impl ChallengeView {
+    pub fn new(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) -> Self {
+        ChallengeView {
+            phase: cs.phase,
+            told_me: cs.told_me,
+            hint_used: cs.hint_used,
+            correct: cs.correct,
+            question: sanitize_math_text(&cs.question.display),
+            feedback: cs.feedback.as_ref().map(|f| f.display.clone()),
+            choices: challenge.choices.iter().map(|c| (c.text.clone(), c.correct)).collect(),
+            correct_answer: challenge.correct_answer,
+            compact: screen.1 < 600.0,
+            challenge: Arc::new(challenge.clone()),
         }
-        match id {
-            ChallengeId::Panel => {
-                paint::round_rect(r, 16.0, DARK_BG);
-                paint::outline(r, 4.0, if teaching { ORANGE } else { GOLD });
-            }
-            ChallengeId::Visual => visuals::draw(challenge, r),
-            ChallengeId::Choice(i) => {
-                let correct = challenge.choices.get(i).is_some_and(|c| c.correct);
-                let color = if solved { if correct { GREEN_BTN } else { DIM_BTN } } else { BLUE_BTN };
-                paint::round_rect(r, 12.0, color);
-                paint::outline(r, 2.0, Color::new(1.0, 1.0, 1.0, 0.3));
-            }
-            ChallengeId::ShowMe => paint::round_rect(r, 6.0, SCAFFOLD_BG),
-            ChallengeId::TellMe => paint::round_rect(r, 6.0, SCAFFOLD_DIM),
-            ChallengeId::Celebrate => {
-                let praise = f.rect(ChallengeId::Praise).unwrap_or(r);
-                draw_star_burst(r, praise.center(), time);
-            }
-            _ => {}
+    }
+
+    fn teaching(&self) -> bool {
+        self.phase == Phase::Teaching
+    }
+
+    /// What the kid can tap right now.
+    pub fn buttons(&self) -> Vec<ChallengeId> {
+        if self.teaching() || self.phase == Phase::Complete {
+            return vec![];
         }
+        let mut b: Vec<_> = (0..self.choices.len()).map(ChallengeId::Choice).collect();
+        if !self.hint_used {
+            b.push(ChallengeId::ShowMe);
+        }
+        b.push(ChallengeId::TellMe);
+        b
+    }
+}
+
+/// The overlay as a Bevy UI panel.
+pub struct ChallengePanel;
+
+impl Panel for ChallengePanel {
+    type View = ChallengeView;
+    const Z: i32 = 30;
+    fn view(views: &UiViews) -> Option<&ChallengeView> {
+        views.challenge.as_ref()
+    }
+    fn bundle(v: &ChallengeView) -> impl bevy::prelude::Bundle {
+        let v = v.clone();
+        (backdrop(0.5, MARGIN), Children::spawn(SpawnWith(move |p: &mut ChildSpawner| spawn_panel(p, &v))))
+    }
+}
+
+fn spawn_panel(p: &mut ChildSpawner, v: &ChallengeView) {
+    // Short windows (640x480) get tighter spacing so a wrapped word problem,
+    // the visual and feedback all fit above the buttons.
+    let (gap, pad_top): (f32, f32) = if v.compact { (8.0, 18.0) } else { (14.0, 28.0) };
+    let teaching = v.teaching();
+    let panel = Node {
+        // PANEL_W wide, or the whole screen if that's narrower. min_height 0:
+        // the panel may be shorter than its children's preferred heights
+        // (their own minimums then apply) — the CSS "min-height: 0" rule.
+        width: percent(100),
+        max_width: px(PANEL_W),
+        max_height: percent(100),
+        min_height: px(0),
+        padding: Edges::new(px(24), px(24), px(pad_top), px(20)),
+        row_gap: px(if teaching { gap.min(10.0) } else { gap }),
+        border: Edges::all(px(4)),
+        border_radius: BorderRadius::all(px(16)),
+        ..col()
+    };
+    let outline = if teaching { ORANGE } else { GOLD };
+    p.spawn((panel, BackgroundColor(kit::color(DARK_BG)), BorderColor::all(kit::color(outline))))
+        .with_children(|p| if teaching { spawn_teaching(p, v) } else { spawn_answering(p, v) });
+}
+
+/// A wrapper that never gives up height to its neighbours.
+fn fixed() -> Node {
+    Node { flex_shrink: 0.0, ..col() }
+}
+
+/// The CRA visual's slot: the panel's full inner width, as tall as the
+/// visual needs at that width (the same `visuals::plan` that draws it).
+fn visual(p: &mut ChildSpawner, v: &ChallengeView) {
+    let challenge = v.challenge.clone();
+    p.spawn((Node { flex_shrink: 0.0, ..default() }, Art(ArtId::ChallengeVisual), HeightFor::new(move |w| visuals::extent(&challenge, w).h)));
+}
+
+fn spawn_teaching(p: &mut ChildSpawner, v: &ChallengeView) {
+    let header = if v.told_me { "Here's how it works!" } else { "Let's figure it out!" };
+    p.spawn(fixed()).with_child(fitted(header, 28.0, 18.0, false, ORANGE, Justify::Center));
+    p.spawn(kit::fitted_squeezed(v.question.clone(), 34.0, 16.0, WHITE, Justify::Center));
+    visual(p, v);
+    p.spawn(fitted(format!("= {}", v.correct_answer), 54.0, 28.0, false, GREEN_ANS, Justify::Center));
+    if let Some(fb) = &v.feedback {
+        p.spawn(text_centered(fb.clone(), 24.0, GOLD));
+    }
+    p.spawn(fixed()).with_child(fitted("Press SPACE or click to continue", 22.0, 14.0, false, HINT_GRAY, Justify::Center));
+}
+
+fn spawn_answering(p: &mut ChildSpawner, v: &ChallengeView) {
+    let answering = v.phase == Phase::Presented || v.phase == Phase::Feedback;
+    let complete = v.phase == Phase::Complete;
+    let solved = complete && v.correct == Some(true);
+
+    p.spawn(kit::fitted_squeezed(v.question.clone(), 42.0, 16.0, WHITE, Justify::Center));
+    if v.hint_used {
+        visual(p, v);
+    }
+    // While the kid is answering, the feedback line is always there — empty
+    // until they miss — so "Hmm, not quite!" appearing can't shove the answer
+    // buttons out from under their finger.
+    if answering {
+        let msg = if v.phase == Phase::Feedback { v.feedback.clone().unwrap_or_default() } else { String::new() };
+        p.spawn((Node { height: px(66), flex_shrink: 0.0, ..col() }, Children::spawn(Spawn(kit::filled(msg, 28.0, 14.0, ORANGE, Justify::Center)))));
+    }
+    // The answers: the row gives up height on a short screen (to 64) and the
+    // buttons stretch to it.
+    let choices = Node {
+        column_gap: px(20),
+        justify_content: JustifyContent::Center,
+        align_items: AlignItems::Stretch,
+        height: px(88),
+        min_height: px(64),
+        ..default()
+    };
+    p.spawn(choices).with_children(|p| {
+        for (i, (label, correct)) in v.choices.iter().enumerate() {
+            let fill = if solved { if *correct { GREEN_BTN } else { DIM_BTN } } else { BLUE_BTN };
+            let node = Node {
+                width: px(200),
+                min_width: px(64),
+                padding: Edges::axes(px(10), px(4)),
+                border_radius: BorderRadius::all(px(12)),
+                ..col()
+            };
+            p.spawn(button(UiAction::Challenge(ChallengeId::Choice(i)), node, fill, Color::new(1.0, 1.0, 1.0, 0.3)))
+                .with_children(|p| {
+                    // The answer, centred; the key hint (1, 2, 3) tucked in
+                    // the top-left corner, out of its way.
+                    p.spawn(Node { flex_grow: 1.0, ..kit::centered() })
+                        .with_child(fitted(label.clone(), 40.0, 18.0, false, WHITE, Justify::Center));
+                    p.spawn(Node { position_type: bevy::ui::PositionType::Absolute, left: px(8), top: px(2), ..default() })
+                        .with_child(fitted(format!("{}", i + 1), 20.0, 12.0, false, Color::new(1.0, 1.0, 1.0, 0.4), Justify::Left));
+                });
+        }
+    });
+    if answering {
+        let row = Node {
+            column_gap: px(12),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Stretch,
+            height: px(46),
+            min_height: px(38),
+            ..default()
+        };
+        p.spawn(row).with_children(|p| {
+            // Show me — available until the visual is displayed.
+            if !v.hint_used {
+                scaffold(p, ChallengeId::ShowMe, "Show me", SCAFFOLD_BG, SCAFFOLD_TXT);
+            }
+            scaffold(p, ChallengeId::TellMe, "Tell me", SCAFFOLD_DIM, SCAFFOLD_TXT_DIM);
+        });
+    }
+    if solved {
+        let praise = PRAISES[(v.correct_answer.unsigned_abs() as usize) % PRAISES.len()];
+        let row = Node { height: px(100), min_height: px(30), ..kit::centered() };
+        p.spawn(row).with_children(|p| {
+            // Stars circle the praise, drawn behind it.
+            p.spawn((
+                Node { position_type: PositionType::Absolute, width: percent(100), height: percent(100), ..default() },
+                Art(ArtId::ChallengeStars),
+            ));
+            p.spawn(fitted(praise, 44.0, 24.0, false, PRAISE_COLOR, Justify::Center));
+        });
+    }
+    if complete {
+        p.spawn((fixed(), Blink(4.0)))
+            .with_child(fitted("Press SPACE to continue", 22.0, 14.0, false, HINT_GRAY, Justify::Center));
+    }
+}
+
+/// A labelled scaffold button ("Show me" / "Tell me"): preferred 150 wide,
+/// squeezes (never clips) on a narrow phone.
+fn scaffold(p: &mut ChildSpawner, id: ChallengeId, label: &str, fill: Color, label_color: Color) {
+    let node = Node {
+        width: px(150),
+        min_width: px(96),
+        flex_shrink: 1.0,
+        border: Edges::ZERO,
+        border_radius: BorderRadius::all(px(6)),
+        ..kit::centered()
+    };
+    p.spawn(button(UiAction::Challenge(id), node, fill, fill))
+        .with_child(fitted(label, 22.0, 14.0, false, label_color, Justify::Center));
+}
+
+// ─── Art ────────────────────────────────────────────────
+
+/// Paint art slot `id` (`w`×`h`, local coordinates).
+pub fn draw_art(id: ArtId, challenge: &Challenge, w: f32, h: f32, time: f32) {
+    match id {
+        ArtId::ChallengeVisual => visuals::draw(challenge, UiRect::new(0.0, 0.0, w, h)),
+        ArtId::ChallengeStars => draw_star_burst(UiRect::new(0.0, 0.0, w, h), (w / 2.0, h / 2.0), time),
+        _ => {}
     }
 }
 
 /// Stars circling the praise, kept inside the celebration box.
 fn draw_star_burst(area: UiRect, (cx, cy): (f32, f32), time: f32) {
-    let c = paint::canvas(area);
     let room = ((area.h / 2.0).min(area.w / 2.0) - 8.0).max(0.0);
     let num_stars = 8;
     for i in 0..num_stars {
@@ -271,8 +306,8 @@ fn draw_star_burst(area: UiRect, (cx, cy): (f32, f32), time: f32) {
         let alpha = 0.5 + ((time * 4.0 + i as f32 * 0.7).sin().abs()) * 0.5;
         let color = Color::new(1.0, 0.835, 0.310, alpha);
         // A simple 4-point star.
-        c.line(sx - size, sy, sx + size, sy, 2.0, color);
-        c.line(sx, sy - size, sx, sy + size, 2.0, color);
+        draw_line(sx - size, sy, sx + size, sy, 2.0, color);
+        draw_line(sx, sy - size, sx, sy + size, 2.0, color);
     }
 }
 
@@ -305,13 +340,8 @@ pub fn handle_key(cs: &ChallengeState, challenge: &Challenge, input: &FrameInput
     None
 }
 
-pub fn handle_click(
-    mx: f32,
-    my: f32,
-    cs: &ChallengeState,
-    challenge: &Challenge,
-    layout: &ChallengeLayout,
-) -> Option<ChallengeAction> {
+/// A click this frame: on `press` (a challenge button), or elsewhere.
+pub fn handle_click(press: Option<UiAction>, cs: &ChallengeState, challenge: &Challenge) -> Option<ChallengeAction> {
     // Teaching/Complete: click anywhere to dismiss
     if cs.phase == Phase::Teaching {
         return Some(ChallengeAction::TeachingComplete);
@@ -319,13 +349,13 @@ pub fn handle_click(
     if cs.phase == Phase::Complete {
         return None; // Signal caller to dismiss
     }
-    match layout.frame.hit_at(mx, my)? {
+    let Some(UiAction::Challenge(id)) = press else { return None };
+    match id {
         ChallengeId::ShowMe => Some(ChallengeAction::ShowMe),
         ChallengeId::TellMe => Some(ChallengeAction::TellMe),
         ChallengeId::Choice(i) => {
             let answer: i32 = challenge.choices.get(i)?.text.parse().unwrap_or(0);
             Some(ChallengeAction::AnswerSubmitted { answer })
         }
-        _ => None,
     }
 }

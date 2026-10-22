@@ -1,6 +1,6 @@
 # ADR-004: Declarative UI Layout with a Swappable Engine
 
-**Status:** Accepted and implemented (shop, swag, quest, challenge + CRA visuals, dialogue, settings)
+**Status:** Superseded by [ADR-006](006-bevy-ui-panels.md) (panels on Bevy UI; `ui/layout` deleted)
 **Date:** 2026-09-23 (revised the same day: flexbox semantics, hardened checks, a taffy differential test run and retired). 2026-10-22: the engine is now taffy (the Bevy port, ADR-005); `FlowEngine` is deleted.
 **Deciders:** Veesh, Claude
 

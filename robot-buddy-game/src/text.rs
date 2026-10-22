@@ -7,7 +7,7 @@
 //!
 //! [`crate::app`] installs it as Bevy's default font, so every `Text` and
 //! `Text2d` uses it without naming a font. Layout measures the same bytes
-//! headlessly through `ui::layout::FontMetrics`.
+//! headlessly through `ui::metrics::FontMetrics`.
 
 /// GNU Unifont, merged BMP + upper planes and subset to the ranges we draw.
 /// Built from the system `unifont.otf` + `unifont_upper.otf` (see

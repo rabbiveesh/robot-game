@@ -1,13 +1,19 @@
 //! Settings overlay (T / the gear): read-aloud, text speed, and the
-//! parent-only experimental section. Laid out through `ui::layout`; the same
-//! `Frame` is painted and hit-tested, section labels included.
+//! parent-only experimental section, as a Bevy UI panel.
+
+use bevy::ecs::spawn::SpawnWith;
+use bevy::prelude::{default, AlignItems, Bundle, ChildSpawner, Children, Node, SpawnRelated, UiRect, Val};
+use bevy::text::Justify;
+use bevy::ui::{percent, px, BackgroundColor, BorderColor, BorderRadius};
 
 use crate::prelude::*;
 use crate::settings::{self, TextSpeed};
 use robot_buddy_domain::types::GamePace;
 use crate::game::FeatureFlags;
 use crate::input::FrameInput;
-use crate::ui::layout::{self, button, col, paint, row, spacer, text, Fit, Frame, Justify, Kind, Node};
+use super::kit::{self, backdrop, button, col, fitted, Panel};
+use super::views::UiViews;
+use super::UiAction;
 
 /// Which experimental in-development feature a parent toggled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,40 +52,40 @@ const FEATURES: [(Feature, &str); 2] = [
 
 const SPEEDS: [TextSpeed; 3] = [TextSpeed::Slow, TextSpeed::Normal, TextSpeed::Fast];
 
-/// Every element of the overlay. Buttons carry what they do; `*Label` ids are
-/// the text inside them.
+/// The overlay's buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsId {
-    Panel,
-    Title,
     Tts,
-    TtsLabel,
-    SpeedLabel,
     Speed(TextSpeed),
-    SpeedText(TextSpeed),
     Parent,
-    ParentLabel,
     Feature(Feature),
-    FeatureLabel(Feature),
     Export,
-    ExportLabel,
-    PaceLabel,
     Pace(GamePace),
-    PaceText(GamePace),
-    Note,
     BackToTitle,
-    BackLabel,
     Done,
-    DoneLabel,
-    Hint,
 }
 
 /// What the overlay shows: the live flags plus the parent-panel reveal.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct SettingsModel {
     pub features: FeatureFlags,
     pub parent_open: bool,
     pub pace: GamePace,
+}
+
+/// The overlay as shown: the game's settings plus the player's own.
+#[derive(Clone, Copy, PartialEq)]
+pub struct SettingsView {
+    pub model: SettingsModel,
+    pub tts: bool,
+    pub speed: TextSpeed,
+    pub screen_h: f32,
+}
+
+impl SettingsView {
+    pub fn new(model: SettingsModel, screen: (f32, f32)) -> Self {
+        SettingsView { model, tts: settings::tts_enabled(), speed: settings::text_speed(), screen_h: screen.1 }
+    }
 }
 
 fn feature_on(features: FeatureFlags, f: Feature) -> bool {
@@ -93,156 +99,116 @@ fn feature_on(features: FeatureFlags, f: Feature) -> bool {
 /// is clipped on a short window.
 const MIN_BUTTON_H: f32 = 32.0;
 
-fn toggle_row(id: SettingsId, label_id: SettingsId, label: String, size: u16, h: f32) -> Node<SettingsId> {
-    button(id, label_id, label, size, Fit::shrink(12)).h(h).min_h(MIN_BUTTON_H)
+fn on_off(on: bool) -> (Color, Color) {
+    if on { (ACCENT, DARK_TXT) } else { (BTN_OFF, BTN_TXT_OFF) }
+}
+
+/// A full-width button `h` tall: its fill, and its label's colour.
+fn toggle_row(p: &mut ChildSpawner, id: SettingsId, label: String, size: f32, h: f32, (fill, ink): (Color, Color)) {
+    let node = Node {
+        height: px(h),
+        min_height: px(MIN_BUTTON_H),
+        border: UiRect::ZERO,
+        border_radius: BorderRadius::all(px(8)),
+        ..kit::centered()
+    };
+    p.spawn(button(UiAction::Settings(id), node, fill, fill)).with_child(fitted(label, size, 12.0, false, ink, Justify::Center));
 }
 
 /// Three equal buttons side by side, `h` tall; the row gives up height
 /// (down to MIN_BUTTON_H) on a short window and the buttons stretch to it.
-fn thirds(h: f32, buttons: impl IntoIterator<Item = Node<SettingsId>>) -> Node<SettingsId> {
-    row()
-        .gap(10.0)
-        .align(layout::Align::Stretch)
-        .h(h)
-        .min_h(MIN_BUTTON_H)
-        .children(buttons.into_iter().map(|b| b.grow(1.0).min_w(0.0)))
+fn thirds(p: &mut ChildSpawner, h: f32, size: f32, buttons: Vec<(SettingsId, &'static str, bool)>) {
+    let row = Node { column_gap: px(10), align_items: AlignItems::Stretch, height: px(h), min_height: px(MIN_BUTTON_H), ..default() };
+    p.spawn(row).with_children(|p| {
+        for (id, label, on) in buttons {
+            let (fill, ink) = on_off(on);
+            let node = Node { flex_grow: 1.0, flex_basis: px(0), min_width: px(0), border: UiRect::ZERO, border_radius: BorderRadius::all(px(8)), ..kit::centered() };
+            p.spawn(button(UiAction::Settings(id), node, fill, fill)).with_child(fitted(label, size, 12.0, false, ink, Justify::Center));
+        }
+    });
 }
 
-fn build(m: SettingsModel, screen: (f32, f32)) -> Node<SettingsId> {
-    let tts = if settings::tts_enabled() { "Read dialogue aloud: ON" } else { "Read dialogue aloud: OFF" };
-    let parent_label = if m.parent_open { "Parent options  ▾" } else { "Parent options  ▸" };
-    let label = |s: &str, id| text(s, 18, Fit::shrink(12)).id(id).fixed();
-    let gap = if screen.1 < 600.0 { 6.0 } else { 10.0 };
+fn label(p: &mut ChildSpawner, s: &str) {
+    p.spawn(Node { flex_shrink: 0.0, ..col() }).with_child(fitted(s, 18.0, 12.0, false, LABEL_GRAY, Justify::Left));
+}
 
-    let parent_section = m.parent_open.then(|| {
-        // min_h(0): lets the section's buttons give up height on a short window.
-        col()
-            .min_h(0.0)
-            .gap(gap)
-            .children(FEATURES.iter().map(|&(f, name)| {
-                let state = if feature_on(m.features, f) { "ON" } else { "OFF" };
-                toggle_row(SettingsId::Feature(f), SettingsId::FeatureLabel(f), format!("{name}: {state}"), 20, 44.0)
-            }))
-            // Export the session data (parent dashboard action).
-            .child(toggle_row(SettingsId::Export, SettingsId::ExportLabel, "Export session data".into(), 20, 44.0))
-            // Arcade pace: parents need to know this is the arcade's speed,
-            // not the child's level.
-            .child(label("Arcade speed", SettingsId::PaceLabel))
-            .child(thirds(44.0, GamePace::ALL.iter().map(|&p| {
-                button(SettingsId::Pace(p), SettingsId::PaceText(p), p.label(), 20, Fit::shrink(12))
-            })))
-            .child(text("Experimental — for playtesting", 16, Fit::shrink(11)).id(SettingsId::Note).fixed())
-    });
+pub struct SettingsPanel;
 
-    let panel = col()
-        .id(SettingsId::Panel)
-        .w_pct(1.0)
-        .max_w(480.0)
-        .min_h(540.0_f32.min(screen.1 - 40.0))
-        .pad_edges(28.0, 18.0, 28.0, 10.0)
-        .gap(gap)
-        .child(text("Settings", 36, Fit::shrink(20)).id(SettingsId::Title).center_text().fixed())
+impl Panel for SettingsPanel {
+    type View = SettingsView;
+    // Above every other panel: it opens over any of them.
+    const Z: i32 = 90;
+    fn view(views: &UiViews) -> Option<&SettingsView> {
+        views.settings.as_ref()
+    }
+    fn bundle(v: &SettingsView) -> impl Bundle {
+        let v = *v;
+        (backdrop(0.75, 20.0), Children::spawn(SpawnWith(move |p: &mut ChildSpawner| spawn_panel(p, v))))
+    }
+}
+
+fn spawn_panel(p: &mut ChildSpawner, v: SettingsView) {
+    let m = v.model;
+    let gap = if v.screen_h < 600.0 { 6.0 } else { 10.0 };
+    let panel = Node {
+        width: percent(100),
+        max_width: px(480),
+        min_height: px(540.0_f32.min(v.screen_h - 40.0)),
+        max_height: percent(100),
+        padding: UiRect::new(px(28), px(28), px(18), px(10)),
+        row_gap: px(gap),
+        border: UiRect::all(px(3)),
+        border_radius: BorderRadius::all(px(16)),
+        ..col()
+    };
+    p.spawn((panel, BackgroundColor(kit::color(PANEL_BG)), BorderColor::all(kit::color(ACCENT)))).with_children(|p| {
+        p.spawn(Node { flex_shrink: 0.0, ..col() }).with_child(fitted("Settings", 36.0, 20.0, false, ACCENT, Justify::Center));
         // The parent section is its own page: it replaces the kid's settings
         // while open (both together never fit a default window).
-        .maybe((!m.parent_open).then(|| toggle_row(SettingsId::Tts, SettingsId::TtsLabel, tts.into(), 22, 56.0)))
-        .maybe((!m.parent_open).then(|| {
-            col().gap(6.0).min_h(0.0).pad_edges(0.0, 8.0, 0.0, 0.0).children([
-                label("Text speed", SettingsId::SpeedLabel),
-                thirds(48.0, SPEEDS.iter().map(|&ts| {
-                    button(SettingsId::Speed(ts), SettingsId::SpeedText(ts), ts.label(), 22, Fit::shrink(12))
-                })),
-            ])
-        }))
-        .child(toggle_row(SettingsId::Parent, SettingsId::ParentLabel, parent_label.into(), 22, 44.0))
-        .maybe(parent_section)
-        .child(toggle_row(SettingsId::BackToTitle, SettingsId::BackLabel, "Back to title screen".into(), 22, 48.0))
-        .child(spacer())
-        .child(toggle_row(SettingsId::Done, SettingsId::DoneLabel, "Done".into(), 26, 52.0))
-        .child(text("Press T or ESC to close", 18, Fit::shrink(12)).id(SettingsId::Hint).center_text().fixed());
-    col().pad(20.0).align(layout::Align::Center).justify(Justify::Center).child(panel)
-}
-
-/// Lay the overlay out top-down. The parent section only takes space when
-/// open, so the panel grows to fit (up to the screen). Pure.
-pub fn layout(screen: (f32, f32), m: SettingsModel) -> Frame<SettingsId> {
-    layout::layout(&build(m, screen), layout::screen_rect(screen))
-}
-
-fn center_of(screen: (f32, f32), parent_open: bool, id: SettingsId) -> (f32, f32) {
-    let m = SettingsModel { features: FeatureFlags::default(), parent_open, pace: GamePace::ALL[0] };
-    layout(screen, m).rect(id).unwrap_or_else(|| panic!("{id:?} not laid out")).center()
-}
-
-/// Screen-space center of the "Parent options" reveal row (for input/tests).
-pub fn parent_toggle_center(screen: (f32, f32)) -> (f32, f32) {
-    center_of(screen, false, SettingsId::Parent)
-}
-
-/// Center of an arcade-pace button (the parent panel must be open).
-pub fn pace_button_center(screen: (f32, f32), pace: GamePace) -> (f32, f32) {
-    center_of(screen, true, SettingsId::Pace(pace))
-}
-
-/// Center of a feature toggle row (the parent panel must be open to show them).
-pub fn feature_toggle_center(screen: (f32, f32), feature: Feature) -> (f32, f32) {
-    center_of(screen, true, SettingsId::Feature(feature))
-}
-
-/// Center of the "Back to title screen" button, with the parent panel open
-/// (P) or closed (T).
-pub fn back_to_title_center(screen: (f32, f32), parent_open: bool) -> (f32, f32) {
-    center_of(screen, parent_open, SettingsId::BackToTitle)
-}
-
-pub fn draw(screen: (f32, f32), m: SettingsModel) {
-    let f = layout(screen, m);
-    paint::dim(f.bounds, 0.75);
-    let on_off = |on: bool| if on { (ACCENT, DARK_TXT) } else { (BTN_OFF, BTN_TXT_OFF) };
-    for el in f.elements() {
-        let Some(id) = el.id else { continue };
-        let r = el.rect;
-        if let Kind::Text(t) = &el.kind {
-            let color = match id {
-                SettingsId::Title | SettingsId::ExportLabel => ACCENT,
-                SettingsId::SpeedLabel | SettingsId::PaceLabel | SettingsId::ParentLabel => LABEL_GRAY,
-                SettingsId::Note | SettingsId::Hint => HINT_GRAY,
-                SettingsId::TtsLabel => on_off(settings::tts_enabled()).1,
-                SettingsId::SpeedText(ts) => on_off(settings::text_speed() == ts).1,
-                SettingsId::FeatureLabel(ft) => on_off(feature_on(m.features, ft)).1,
-                SettingsId::PaceText(p) => on_off(m.pace == p).1,
-                SettingsId::DoneLabel => DARK_TXT,
-                _ => BTN_TXT_OFF,
-            };
-            paint::text(t, color);
-            continue;
+        if !m.parent_open {
+            let tts = if v.tts { "Read dialogue aloud: ON" } else { "Read dialogue aloud: OFF" };
+            toggle_row(p, SettingsId::Tts, tts.into(), 22.0, 56.0, on_off(v.tts));
+            p.spawn(Node { row_gap: px(6), min_height: px(0), padding: UiRect::top(px(8)), ..col() }).with_children(|p| {
+                label(p, "Text speed");
+                thirds(p, 48.0, 22.0, SPEEDS.iter().map(|&ts| (SettingsId::Speed(ts), ts.label(), v.speed == ts)).collect());
+            });
         }
-        match id {
-            SettingsId::Panel => {
-                paint::round_rect(r, 16.0, PANEL_BG);
-                paint::outline(r, 3.0, ACCENT);
-            }
-            SettingsId::Tts => paint::round_rect(r, 8.0, on_off(settings::tts_enabled()).0),
-            SettingsId::Speed(ts) => paint::round_rect(r, 8.0, on_off(settings::text_speed() == ts).0),
-            SettingsId::Feature(ft) => paint::round_rect(r, 8.0, on_off(feature_on(m.features, ft)).0),
-            SettingsId::Pace(p) => paint::round_rect(r, 8.0, on_off(m.pace == p).0),
-            SettingsId::Parent | SettingsId::Export | SettingsId::BackToTitle => paint::round_rect(r, 8.0, BTN_OFF),
-            SettingsId::Done => paint::round_rect(r, 10.0, ACCENT),
-            _ => {}
+        let parent_label = if m.parent_open { "Parent options  ▾" } else { "Parent options  ▸" };
+        toggle_row(p, SettingsId::Parent, parent_label.into(), 22.0, 44.0, (BTN_OFF, LABEL_GRAY));
+        if m.parent_open {
+            // A short window scrolls the parent section rather than squash it.
+            p.spawn(kit::scroll_list("parent", gap)).with_children(|p| {
+                for &(f, name) in &FEATURES {
+                    let on = feature_on(m.features, f);
+                    let state = if on { "ON" } else { "OFF" };
+                    toggle_row(p, SettingsId::Feature(f), format!("{name}: {state}"), 20.0, 44.0, on_off(on));
+                }
+                // Export the session data (parent dashboard action).
+                toggle_row(p, SettingsId::Export, "Export session data".into(), 20.0, 44.0, (BTN_OFF, ACCENT));
+                // Arcade pace: parents need to know this is the arcade's
+                // speed, not the child's level.
+                label(p, "Arcade speed");
+                thirds(p, 44.0, 20.0, GamePace::ALL.iter().map(|&pc| (SettingsId::Pace(pc), pc.label(), m.pace == pc)).collect());
+                p.spawn(Node { flex_shrink: 0.0, ..col() })
+                    .with_child(fitted("Experimental — for playtesting", 16.0, 11.0, false, HINT_GRAY, Justify::Left));
+            });
         }
-    }
+        toggle_row(p, SettingsId::BackToTitle, "Back to title screen".into(), 22.0, 48.0, (BTN_OFF, BTN_TXT_OFF));
+        // Done sits at the bottom of the panel.
+        p.spawn(Node { margin: UiRect::top(Val::Auto), ..col() })
+            .with_children(|p| toggle_row(p, SettingsId::Done, "Done".into(), 26.0, 52.0, (ACCENT, DARK_TXT)));
+        p.spawn(Node { flex_shrink: 0.0, ..col() }).with_child(fitted("Press T or ESC to close", 18.0, 12.0, false, HINT_GRAY, Justify::Center));
+    });
 }
 
 /// Handle input; returns a result if the overlay state should change. The
 /// caller owns the live feature flags and the parent-panel reveal state.
-pub fn handle_input(input: &FrameInput, screen: (f32, f32), m: SettingsModel) -> Option<SettingsResult> {
+pub fn handle_input(input: &FrameInput) -> Option<SettingsResult> {
     if input.pressed(KeyCode::Escape) || input.pressed(KeyCode::T) {
         return Some(SettingsResult::Close);
     }
-    if !input.mouse_clicked {
-        return None;
-    }
-    let (mx, my) = input.mouse_pos;
-    match layout(screen, m).hit_at(mx, my)? {
+    let Some(UiAction::Settings(id)) = input.ui_press else { return None };
+    match id {
         SettingsId::Tts => {
             settings::toggle_tts();
             if !settings::tts_enabled() {
@@ -260,6 +226,5 @@ pub fn handle_input(input: &FrameInput, screen: (f32, f32), m: SettingsModel) ->
         SettingsId::Export => Some(SettingsResult::ExportSession),
         SettingsId::BackToTitle => Some(SettingsResult::BackToTitle),
         SettingsId::Done => Some(SettingsResult::Close),
-        _ => None,
     }
 }

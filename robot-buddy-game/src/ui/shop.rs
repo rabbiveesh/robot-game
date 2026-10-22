@@ -1,4 +1,4 @@
-//! Shop UI. Pure layout + render; the purchase arithmetic lives in
+//! Shop UI, as a Bevy UI panel; the purchase arithmetic lives in
 //! `robot_buddy_domain::economy::shop`.
 //!
 //! Views: a catalog of cosmetics (owned ones greyed out); once the kid picks
@@ -6,23 +6,26 @@
 //! 5, how many left?") as a few answer tiles; at a trade desk, the pile laid
 //! out in groups with the division as tiles; and the outfit-color swatches.
 //! Picking the right answer completes the deal; a wrong pick just asks them to
-//! recount (never a wrong-answer buzzer).
-//!
-//! Layout is declarative (see `ui::layout`): [`layout`] builds a node tree
-//! and returns a [`ShopLayout`] whose `Frame` both [`draw_shop`] and
-//! [`handle_click`] read, so what's drawn is what's tappable.
+//! recount (never a wrong-answer buzzer). A long catalog scrolls.
 
 use std::collections::BTreeSet;
 
+use bevy::ecs::spawn::SpawnWith;
+use bevy::prelude::{
+    default, AlignItems, Bundle, ChildSpawner, Children, JustifyContent, Node, SpawnRelated, UiRect as Edges, Val,
+};
+use bevy::text::Justify;
+use bevy::ui::{percent, px, BackgroundColor, BorderColor};
+
 use crate::prelude::*;
+use crate::save::Gender;
 use robot_buddy_domain::economy::shop::{ItemKind, ShopItem, ShopKind, TradeQuote};
 
+use super::kit::{self, backdrop, button, col, fitted, Art, Panel};
+use super::views::UiViews;
+use super::{swatches, ArtId, UiAction};
 use crate::input::FrameInput;
-use crate::ui::layout::{
-    self, button, col, paint, region, row, spacer, text, Align, Fit, Frame, Justify, Kind, Node, Page,
-};
-pub use crate::ui::layout::UiRect;
-use crate::ui::swatches;
+pub use crate::ui::rect::UiRect;
 
 /// What the kid is doing in the shop right now.
 pub enum ShopView<'a> {
@@ -58,73 +61,17 @@ pub struct ShopModel<'a> {
     pub balance: u32,
     pub view: ShopView<'a>,
     pub message: Option<&'a str>,
-    /// Catalog page asked for (clamped when laid out).
-    pub page: usize,
 }
 
-/// Every element of the shop panel the painter or the hit-test cares about.
+/// The shop's buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShopId {
-    Panel,
-    Title,
-    Balance,
-    /// Where the game draws the kid while they pick a color.
-    Preview,
     Item(usize),
-    ItemName(usize),
-    ItemPrice(usize),
-    ItemBlurb(usize),
-    Prompt(usize),
-    Pile,
     /// Answer tile by position in the view's `choices`.
     Answer(usize),
-    AnswerLabel(usize),
     Swatch(usize),
-    Message,
-    PrevPage,
-    PrevLabel,
-    NextPage,
-    NextLabel,
     Done,
-    DoneLabel,
 }
-
-pub struct ShopLayout {
-    pub frame: Frame<ShopId>,
-    /// The catalog slice on screen (everything, unless the window is short).
-    pub page: Page,
-}
-
-impl ShopLayout {
-    /// `None` only on a window too small to fit anything; callers skip, never panic.
-    pub fn panel(&self) -> Option<UiRect> {
-        self.frame.rect(ShopId::Panel)
-    }
-    /// Catalog row for item `index`, if it's on the current page.
-    pub fn item(&self, index: usize) -> Option<UiRect> {
-        self.frame.rect(ShopId::Item(index))
-    }
-    /// Answer tile showing `value`.
-    pub fn answer(&self, view: &ShopView, value: u32) -> Option<UiRect> {
-        let i = view.choices().iter().position(|&v| v == value)?;
-        self.frame.rect(ShopId::Answer(i))
-    }
-    pub fn swatch(&self, index: usize) -> Option<UiRect> {
-        self.frame.rect(ShopId::Swatch(index))
-    }
-    /// `None` if a tiny window clipped it (Esc still closes).
-    pub fn done(&self) -> Option<UiRect> {
-        self.frame.rect(ShopId::Done)
-    }
-    pub fn preview(&self) -> Option<UiRect> {
-        self.frame.rect(ShopId::Preview)
-    }
-}
-
-const PANEL_W: f32 = 640.0;
-const PANEL_H: f32 = 560.0;
-const SCREEN_MARGIN: f32 = 20.0;
-
 /// The label on a catalog row.
 fn item_label(item: &ShopItem, owned: bool) -> String {
     match item.kind {
@@ -148,35 +95,6 @@ fn prompts(view: &ShopView) -> Vec<String> {
         ],
         ShopView::PickingColor { .. } => vec!["Which color do you want to wear?".into()],
     }
-}
-
-fn catalog_row(i: usize, item: &ShopItem, owned: bool) -> Node<ShopId> {
-    let top = row()
-        .gap(12.0)
-        .child(text(item_label(item, owned), 24, Fit::shrink_then_wrap(14, 2)).id(ShopId::ItemName(i)).grow(1.0))
-        .child(text(format!("{} {}", item.cost, item.currency.tag()), 24, Fit::shrink(14)).id(ShopId::ItemPrice(i)));
-    let has_blurb = !item.blurb.is_empty();
-    let row = col().id(ShopId::Item(i)).hit();
-    // A blurb may need a second line on a narrow phone, so its row sizes to
-    // its content; plain rows keep the fixed height the list can squeeze.
-    let row = if has_blurb { row.min_h(62.0) } else { row.h(62.0).min_h(44.0) };
-    row
-        .pad_xy(16.0, 6.0)
-        .gap(4.0)
-        .justify(Justify::Center)
-        .child(top)
-        // What it actually does, for anything whose name doesn't say.
-        .maybe(has_blurb.then(|| text(item.blurb.clone(), 18, Fit::shrink_then_wrap(12, 2)).id(ShopId::ItemBlurb(i))))
-}
-
-fn answer_tiles(choices: &[u32]) -> Node<ShopId> {
-    // Tiles give up height before anything clips (kid-sized floor: 60px):
-    // the row shrinks, the tiles stretch to it.
-    row().gap(18.0).justify(Justify::Center).align(Align::Stretch).h(90.0).min_h(60.0).children(
-        choices.iter().enumerate().map(|(i, v)| {
-            button(ShopId::Answer(i), ShopId::AnswerLabel(i), v.to_string(), 36, Fit::shrink(18)).w(90.0).min_w(48.0)
-        }),
-    )
 }
 
 /// Rows of the pile needed for the trade quote (the grouping IS the division).
@@ -208,89 +126,234 @@ pub fn pile_dots(quote: &TradeQuote, r: UiRect) -> Vec<(f32, f32, f32)> {
         .collect()
 }
 
-fn build(m: &ShopModel, page: Page) -> Node<ShopId> {
-    let header = row()
-        .fixed()
-        .child(
-            col()
-                .grow(1.0)
-                .gap(4.0)
-                .child(text(m.shop.title(), 30, Fit::shrink(18)).id(ShopId::Title).center_text())
-                .child(text(format!("You have {}", m.shop.currency().count(m.balance)), 22, Fit::shrink(14)).id(ShopId::Balance)),
-        )
-        .maybe(matches!(m.view, ShopView::PickingColor { .. }).then(|| region(56.0, 64.0).id(ShopId::Preview).fixed()));
+const PANEL_W: f32 = 640.0;
+const PANEL_H: f32 = 560.0;
+const SCREEN_MARGIN: f32 = 20.0;
 
-    let questions = col()
-        .gap(8.0)
-        .pad_edges(0.0, 20.0, 0.0, 0.0)
-        .fixed()
-        .children(prompts(&m.view).into_iter().enumerate().map(|(i, p)| text(p, 24, Fit::wrap_lines(14, 2)).id(ShopId::Prompt(i))));
-
-    let body: Node<ShopId> = match &m.view {
-        ShopView::Browsing => col().gap(10.0).grow(1.0).min_h(0.0).children(page.rows().map(|i| {
-            let item = &m.catalog[i];
-            catalog_row(i, item, m.owned.contains(&item.id))
-        })),
-        ShopView::Buying { choices, .. } => col().grow(1.0).min_h(0.0).gap(12.0).children([questions, spacer(), answer_tiles(choices)]),
-        ShopView::Trading { quote, choices } => {
-            let rows = pile_rows(quote) as f32;
-            col().grow(1.0).min_h(0.0).gap(12.0).children([
-                questions,
-                region(0.0, (rows - 1.0) * 24.0 + 16.0).auto_w().id(ShopId::Pile).grow(1.0).min_h(rows * 6.0),
-                answer_tiles(choices),
-            ])
-        }
-        ShopView::PickingColor { colors, .. } => {
-            let grid = swatches::grid(colors.len(), ShopId::Swatch);
-            col().grow(1.0).min_h(0.0).gap(24.0).children([questions, grid])
-        }
-    };
-
-    let small_btn = |id, label_id, label: &str| button(id, label_id, label, 22, Fit::shrink(14))
-        // Preferred 100 wide, but a narrow phone squeezes Back / More / Done
-        // side by side rather than clipping one off.
-        .size(100.0, 38.0).min_w(72.0).shrink(1.0);
-    let footer = col()
-        .fixed()
-        .gap(4.0)
-        // Reserved even when empty, so the shelf doesn't jump when Bolt talks.
-        .child(text(m.message.unwrap_or(""), 24, Fit::wrap_lines(14, 2)).id(ShopId::Message).center_text().h(40.0).fixed())
-        .child(
-            row()
-                .gap(12.0)
-                .maybe(page.has_prev().then(|| small_btn(ShopId::PrevPage, ShopId::PrevLabel, "< Back")))
-                .maybe(page.has_next().then(|| small_btn(ShopId::NextPage, ShopId::NextLabel, "More >")))
-                .child(spacer())
-                .child(small_btn(ShopId::Done, ShopId::DoneLabel, "Done")),
-        );
-
-    layout::centered_on_screen(
-        col()
-            .id(ShopId::Panel)
-            // PANEL_W wide, or the whole screen if that's narrower.
-            .w_pct(1.0)
-            .max_w(PANEL_W)
-            .h(PANEL_H)
-            .min_h(0.0)
-            .pad_edges(32.0, 12.0, 16.0, 14.0)
-            .gap(12.0)
-            .children([header, body, footer]),
-        SCREEN_MARGIN,
-    )
+/// The kid as they'd look in Bolt's mirror.
+#[derive(Clone, PartialEq, Debug)]
+pub struct KidLook {
+    pub gender: Gender,
+    pub worn: BTreeSet<String>,
+    pub color: String,
 }
 
-/// Lay the shop out for this screen. Pure — `Game::step` hit-tests with it and
-/// `Game::render` paints it.
-pub fn layout(m: &ShopModel, screen: (f32, f32)) -> ShopLayout {
-    let bounds = layout::screen_rect(screen);
-    let (frame, page) = match m.view {
-        ShopView::Browsing => layout::paged(m.catalog.len(), m.page, bounds, |p| build(m, p)),
-        _ => {
-            let page = Page::all(0);
-            (layout::layout(&build(m, page), bounds), page)
+/// One catalog row as shown.
+#[derive(Clone, PartialEq, Debug)]
+pub struct ShopRow {
+    pub label: String,
+    pub price: String,
+    pub blurb: String,
+    pub bg: Color,
+}
+
+/// Everything the shop panel shows, owned (see [`ShopModel`] for the live,
+/// borrowed version the game reads input against).
+#[derive(Clone, PartialEq, Debug)]
+pub struct ShopPanelView {
+    pub title: String,
+    pub balance: String,
+    pub prompts: Vec<String>,
+    /// The catalog, while browsing.
+    pub rows: Vec<ShopRow>,
+    pub choices: Vec<u32>,
+    /// The trade desk's pile.
+    pub pile: Option<TradeQuote>,
+    /// Swatch colours and the one worn, while picking a colour.
+    pub swatches: Option<(Vec<Color>, usize)>,
+    /// The kid, while picking a colour.
+    pub preview: Option<KidLook>,
+    pub message: Option<String>,
+}
+
+impl ShopPanelView {
+    pub fn new(m: &ShopModel, look: KidLook) -> Self {
+        let browsing = matches!(m.view, ShopView::Browsing);
+        ShopPanelView {
+            title: m.shop.title().to_string(),
+            balance: format!("You have {}", m.shop.currency().count(m.balance)),
+            prompts: prompts(&m.view),
+            rows: if browsing {
+                m.catalog.iter().map(|item| {
+                    let owned = m.owned.contains(&item.id);
+                    let bg = if owned { OWNED_BG } else if m.balance >= item.cost { ROW_BG } else { POOR_BG };
+                    ShopRow {
+                        label: item_label(item, owned),
+                        price: format!("{} {}", item.cost, item.currency.tag()),
+                        blurb: item.blurb.clone(),
+                        bg,
+                    }
+                }).collect()
+            } else {
+                vec![]
+            },
+            choices: m.view.choices().to_vec(),
+            pile: match &m.view {
+                ShopView::Trading { quote, .. } => Some(**quote),
+                _ => None,
+            },
+            swatches: match &m.view {
+                ShopView::PickingColor { colors, current } => Some((colors.iter().map(|c| c.1).collect(), *current)),
+                _ => None,
+            },
+            preview: matches!(m.view, ShopView::PickingColor { .. }).then_some(look),
+            message: m.message.map(str::to_string),
         }
+    }
+}
+
+pub struct ShopPanel;
+
+impl Panel for ShopPanel {
+    type View = ShopPanelView;
+    const Z: i32 = 40;
+    fn view(views: &UiViews) -> Option<&ShopPanelView> {
+        views.shop.as_ref()
+    }
+    fn bundle(v: &ShopPanelView) -> impl Bundle {
+        let v = v.clone();
+        (backdrop(0.5, SCREEN_MARGIN), Children::spawn(SpawnWith(move |p: &mut ChildSpawner| spawn_panel(p, &v))))
+    }
+}
+
+fn spawn_panel(p: &mut ChildSpawner, v: &ShopPanelView) {
+    let panel = Node {
+        // PANEL_W wide, or the whole screen if that's narrower.
+        width: percent(100),
+        max_width: px(PANEL_W),
+        height: px(PANEL_H),
+        max_height: percent(100),
+        min_height: px(0),
+        padding: Edges::new(px(32), px(16), px(12), px(14)),
+        row_gap: px(12),
+        border: Edges::all(px(4)),
+        ..col()
     };
-    ShopLayout { frame, page }
+    p.spawn((panel, BackgroundColor(kit::color(DARK_BG)), BorderColor::all(kit::color(GOLD)))).with_children(|p| {
+        // Header: title and purse, and the kid's mirror while picking a colour.
+        p.spawn(Node { flex_shrink: 0.0, ..default() }).with_children(|p| {
+            p.spawn(Node { flex_grow: 1.0, min_width: px(0), row_gap: px(4), ..col() }).with_children(|p| {
+                p.spawn(fitted(v.title.clone(), 30.0, 18.0, false, GOLD, Justify::Center));
+                p.spawn(fitted(v.balance.clone(), 22.0, 14.0, false, WHITE, Justify::Left));
+            });
+            if v.preview.is_some() {
+                p.spawn((Node { width: px(56), height: px(64), flex_shrink: 0.0, ..default() }, Art(ArtId::ShopPreview)));
+            }
+        });
+        // The body takes the room left; a long catalog scrolls inside it.
+        p.spawn(Node { flex_grow: 1.0, min_height: px(0), row_gap: px(12), ..col() }).with_children(|p| body(p, v));
+        // Footer: Bolt's message (room reserved even when he's quiet, so the
+        // shelf doesn't jump when he talks), then Done.
+        p.spawn(Node { flex_shrink: 0.0, row_gap: px(4), ..col() }).with_children(|p| {
+            p.spawn(Node { height: px(40), flex_shrink: 0.0, ..col() })
+                .with_child(kit::filled(v.message.clone().unwrap_or_default(), 24.0, 12.0, GOLD, Justify::Center));
+            p.spawn(Node { justify_content: JustifyContent::End, ..default() }).with_children(|p| {
+                let node = Node { width: px(100), height: px(38), min_width: px(72), flex_shrink: 1.0, ..kit::centered() };
+                p.spawn(button(UiAction::Shop(ShopId::Done), node, BUTTON_BG, Color::new(1.0, 1.0, 1.0, 0.3)))
+                    .with_child(fitted("Done", 22.0, 14.0, false, WHITE, Justify::Center));
+            });
+        });
+    });
+}
+
+fn body(p: &mut ChildSpawner, v: &ShopPanelView) {
+    if !v.prompts.is_empty() {
+        p.spawn(Node { row_gap: px(8), padding: Edges::top(px(20)), flex_shrink: 0.0, ..col() }).with_children(|p| {
+            for prompt in &v.prompts {
+                p.spawn(kit::text(prompt.clone(), 24.0, WHITE));
+            }
+        });
+    }
+    if !v.rows.is_empty() {
+        p.spawn(kit::scroll_list("shop", 10.0)).with_children(|p| {
+            for (i, row) in v.rows.iter().enumerate() {
+                catalog_row(p, i, row);
+            }
+        });
+    }
+    if let Some(quote) = &v.pile {
+        let rows = pile_rows(quote) as f32;
+        let pile = Node { height: px((rows - 1.0) * 24.0 + 16.0), flex_grow: 1.0, min_height: px(rows * 6.0), ..default() };
+        p.spawn((pile, Art(ArtId::ShopPile)));
+    } else if !v.choices.is_empty() {
+        // Pushes the tiles to the bottom.
+        p.spawn(Node { flex_grow: 1.0, ..default() });
+    }
+    if !v.choices.is_empty() {
+        // Tiles give up height before anything clips (kid-sized floor: 60px):
+        // the row shrinks, the tiles stretch to it.
+        let row = Node {
+            column_gap: px(18),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Stretch,
+            height: px(90),
+            min_height: px(60),
+            ..default()
+        };
+        p.spawn(row).with_children(|p| {
+            for (i, v) in v.choices.iter().enumerate() {
+                let node = Node { width: px(90), min_width: px(48), ..kit::centered() };
+                p.spawn(button(UiAction::Shop(ShopId::Answer(i)), node, TILE_BG, Color::new(1.0, 1.0, 1.0, 0.4)))
+                    .with_child(fitted(v.to_string(), 36.0, 18.0, false, WHITE, Justify::Center));
+            }
+        });
+    }
+    if let Some((colors, current)) = &v.swatches {
+        swatches::grid(p, colors, *current, |i| UiAction::Shop(ShopId::Swatch(i)));
+    }
+}
+
+fn catalog_row(p: &mut ChildSpawner, i: usize, row: &ShopRow) {
+    let has_blurb = !row.blurb.is_empty();
+    // A blurb may need a second line on a narrow phone, so its row sizes to
+    // its content; plain rows keep a fixed height.
+    let node = Node {
+        min_height: px(if has_blurb { 62.0 } else { 44.0 }),
+        height: if has_blurb { Val::Auto } else { px(62) },
+        flex_shrink: 0.0,
+        padding: Edges::axes(px(16), px(6)),
+        row_gap: px(4),
+        justify_content: JustifyContent::Center,
+        ..col()
+    };
+    p.spawn(button(UiAction::Shop(ShopId::Item(i)), node, row.bg, Color::new(1.0, 1.0, 1.0, 0.25))).with_children(|p| {
+        p.spawn(Node { column_gap: px(12), ..default() }).with_children(|p| {
+            p.spawn(Node { flex_grow: 1.0, min_width: px(0), ..col() })
+                .with_child(fitted(row.label.clone(), 24.0, 14.0, true, WHITE, Justify::Left));
+            p.spawn(fitted(row.price.clone(), 24.0, 14.0, false, GOLD, Justify::Left));
+        });
+        // What it actually does, for anything whose name doesn't say.
+        if has_blurb {
+            p.spawn(kit::text(row.blurb.clone(), 18.0, Color::new(1.0, 1.0, 1.0, 0.62)));
+        }
+    });
+}
+
+/// Paint art slot `id` (`w`×`h`, local coordinates).
+pub fn draw_art(id: ArtId, v: &ShopPanelView, w: f32, h: f32) {
+    match id {
+        ArtId::ShopPile => {
+            if let Some(quote) = &v.pile {
+                for (x, y, rad) in pile_dots(quote, UiRect::new(0.0, 0.0, w, h)) {
+                    draw_circle(x, y, rad, PEARL);
+                    draw_circle(x - rad / 4.0, y - rad / 4.0, rad * 0.375, Color::new(1.0, 1.0, 1.0, 0.9));
+                }
+            }
+        }
+        ArtId::ShopPreview => {
+            if let Some(look) = &v.preview {
+                use crate::sprites::{self, Dir};
+                let (px, py) = (4.0, 14.0);
+                let time = get_time() as f32;
+                match look.gender {
+                    Gender::Boy => sprites::player::draw_player_boy(px, py, Dir::Down, 0, time),
+                    Gender::Girl => sprites::player::draw_player_girl(px, py, Dir::Down, 0, time),
+                }
+                sprites::player::draw_player_cosmetics(px, py, Dir::Down, 0, &look.worn, &look.color);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// An input outcome the game acts on.
@@ -298,20 +361,16 @@ pub enum ShopInput {
     SelectItem(usize),
     Answer(u32),
     PickColor(usize),
-    /// Show catalog page `n`.
-    Page(usize),
     Close,
 }
 
-pub fn handle_click(mx: f32, my: f32, layout: &ShopLayout, view: &ShopView) -> Option<ShopInput> {
-    match layout.frame.hit_at(mx, my)? {
+pub fn handle_click(input: &FrameInput, view: &ShopView) -> Option<ShopInput> {
+    let Some(UiAction::Shop(id)) = input.ui_press else { return None };
+    match id {
         ShopId::Done => Some(ShopInput::Close),
         ShopId::Item(i) => Some(ShopInput::SelectItem(i)),
         ShopId::Answer(i) => view.choices().get(i).map(|&v| ShopInput::Answer(v)),
         ShopId::Swatch(i) => Some(ShopInput::PickColor(i)),
-        ShopId::PrevPage => Some(ShopInput::Page(layout.page.index.saturating_sub(1))),
-        ShopId::NextPage => Some(ShopInput::Page(layout.page.index + 1)),
-        _ => None,
     }
 }
 
@@ -335,8 +394,6 @@ pub fn handle_key(input: &FrameInput, view: &ShopView) -> Option<ShopInput> {
     }
 }
 
-// ─── Drawing ────────────────────────────────────────────
-
 const DARK_BG: Color = Color::new(0.078, 0.078, 0.180, 1.0);
 const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0);
 const ROW_BG: Color = Color::new(0.16, 0.18, 0.28, 1.0);
@@ -345,53 +402,6 @@ const POOR_BG: Color = Color::new(0.30, 0.18, 0.18, 1.0);
 const TILE_BG: Color = Color::new(0.129, 0.588, 0.953, 1.0);
 const BUTTON_BG: Color = Color::new(0.329, 0.431, 0.478, 1.0);
 const PEARL: Color = Color::new(0.93, 0.96, 0.99, 1.0);
-
-/// Paint the shop from its laid-out frame: styling only, no coordinates.
-pub fn draw_shop(m: &ShopModel, layout: &ShopLayout) {
-    let f = &layout.frame;
-    paint::dim(f.bounds, 0.5);
-    for el in f.elements() {
-        let Some(id) = el.id else { continue };
-        let r = el.rect;
-        if let Kind::Text(t) = &el.kind {
-            let color = match id {
-                ShopId::Title | ShopId::ItemPrice(_) | ShopId::Message => GOLD,
-                ShopId::ItemBlurb(_) => Color::new(1.0, 1.0, 1.0, 0.62),
-                _ => WHITE,
-            };
-            paint::text(t, color);
-            continue;
-        }
-        match id {
-            ShopId::Panel => paint::boxed(r, DARK_BG, 4.0, GOLD),
-            ShopId::Item(i) => {
-                let item = &m.catalog[i];
-                let is_owned = m.owned.contains(&item.id);
-                let bg = if is_owned { OWNED_BG } else if m.balance >= item.cost { ROW_BG } else { POOR_BG };
-                paint::boxed(r, bg, 2.0, Color::new(1.0, 1.0, 1.0, 0.25));
-            }
-            ShopId::Answer(_) => paint::boxed(r, TILE_BG, 2.0, Color::new(1.0, 1.0, 1.0, 0.4)),
-            ShopId::Pile => {
-                if let ShopView::Trading { quote, .. } = &m.view {
-                    let c = paint::canvas(r);
-                    for (x, y, rad) in pile_dots(quote, r) {
-                        c.circle(x, y, rad, PEARL);
-                        c.circle(x - rad / 4.0, y - rad / 4.0, rad * 0.375, Color::new(1.0, 1.0, 1.0, 0.9));
-                    }
-                }
-            }
-            ShopId::Swatch(i) => {
-                if let ShopView::PickingColor { colors, current } = &m.view {
-                    swatches::paint_swatch(r, colors[i].1, i == *current);
-                }
-            }
-            ShopId::Done | ShopId::PrevPage | ShopId::NextPage => {
-                paint::boxed(r, BUTTON_BG, 2.0, Color::new(1.0, 1.0, 1.0, 0.3))
-            }
-            _ => {}
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -1,6 +1,7 @@
 //! Native visual check: drive the real game into each UI state with the test
-//! harness, record its draw calls with the real render code, then paint each
-//! recording in a Bevy window and save a PNG.
+//! harness, record its draw calls and panel views with the real render code,
+//! then show each recording in a Bevy window (panels as Bevy UI, art drawn
+//! into their slots) and save a PNG.
 //!
 //!   SHOT_W=640 SHOT_H=480 SHOT_DIR=/tmp/shots cargo run -p robot-buddy-game --example screenshots
 //!
@@ -18,6 +19,8 @@ use bevy::render::view::screenshot::{save_to_disk, Screenshot};
 use bevy::window::WindowResolution;
 use common::Harness;
 use robot_buddy_game::app::{DrawList, DrawPlugin};
+use robot_buddy_game::ui::kit::ArtSizes;
+use robot_buddy_game::ui::views::UiViews;
 use robot_buddy_game::draw::{self, Cmd};
 use robot_buddy_game::game::GameState;
 use robot_buddy_game::input::{FrameInput, KeyCode};
@@ -32,23 +35,26 @@ fn shot_screen() -> (f32, f32) {
     (env_f("SHOT_W", 960.0), env_f("SHOT_H", 720.0))
 }
 
-/// Recorded shots, painted later by the Bevy app.
+/// Recorded shots, painted later by the Bevy app: the screen's draw calls
+/// and the panels' views.
 #[derive(Resource, Default)]
-struct Shots(Vec<(String, Vec<Cmd>)>);
+struct Shots(Vec<(String, Vec<Cmd>, UiViews)>);
 
 impl Shots {
-    /// Record what `draw` paints at the shot size. The clock is pinned so
-    /// blinking hints show.
-    fn snap(&mut self, name: &str, draw: impl FnOnce((f32, f32))) {
+    /// Record what `draw` paints at the shot size, and the panels `views`
+    /// shows. The clock is pinned so blinking hints show.
+    fn snap(&mut self, name: &str, draw: impl FnOnce((f32, f32)), views: impl FnOnce((f32, f32)) -> UiViews) {
         let screen = shot_screen();
         draw::begin_frame(screen, 0.1);
         draw(screen);
-        self.0.push((name.to_string(), draw::take_commands()));
+        self.0.push((name.to_string(), draw::take_commands(), views(screen)));
     }
 
     fn snap_game(&mut self, name: &str, h: &mut Harness) {
-        let input = FrameInput::empty();
-        self.snap(name, |screen| h.game.render(screen, &input));
+        let screen = shot_screen();
+        draw::begin_frame(screen, 0.1);
+        h.game.render(screen, &FrameInput::empty());
+        self.0.push((name.to_string(), draw::take_commands(), h.game.ui_views(screen)));
     }
 }
 
@@ -269,6 +275,40 @@ fn record() -> Shots {
         shots.snap_game("20_dogfish_house", &mut h);
     }
 
+    // ── Shelly's leap strip, before and after a size is picked ──
+    {
+        let mut h = Harness::new(21);
+        h.start_dev_game();
+        h.game.profile.math_band = 2;
+        h.game.map = Map::reef();
+        h.game.npcs.clear();
+        h.game.npcs_offstage.clear();
+        h.warp_to(5, 13);
+        h.advance(30);
+        shots.snap_game("21_leap_choosing", &mut h);
+        let size = h.game.leap_session().unwrap().puzzle.size;
+        h.pick_leap_size(size);
+        h.advance(10);
+        shots.snap_game("22_leap_committed", &mut h);
+    }
+
+    // ── The dive shaft (a deep one, with ledges) ──
+    {
+        let mut h = Harness::new(9);
+        h.start_dev_game();
+        h.game.profile.math_band = 4;
+        h.game.map = Map::reef();
+        h.game.npcs = npc_mod::npcs_for_map("reef");
+        h.game.npcs_offstage.clear();
+        h.warp_to(36, 10);
+        h.walk_to_npc(NpcKind::Octopus);
+        h.interact();
+        h.select_option("dive");
+        let first = h.game.active_descent().unwrap().session.puzzle.kicks[1];
+        h.kick(first, true);
+        shots.snap_game("23_descent", &mut h);
+    }
+
     // ── Panels drawn directly: a 4-line dialogue and a wrapped word problem ──
     {
         use robot_buddy_game::ui::dialogue::{DialogueBox, DialogueLine};
@@ -278,7 +318,11 @@ fn record() -> Shots {
         let mut d = DialogueBox::new();
         d.start(vec![DialogueLine { speaker: "Bolt the Shopkeeper".into(), text: text.into() }]);
         for _ in 0..600 { d.update(1.0 / 60.0); }
-        shots.snap("13_dialogue_4_lines", |screen| d.draw(screen));
+        shots.snap("13_dialogue_4_lines", |_| {}, |_| UiViews {
+            dialogue: d.view(),
+            dialogue_reveal: d.revealed(),
+            ..default()
+        });
     }
     {
         use ::rand::SeedableRng;
@@ -318,9 +362,9 @@ fn record() -> Shots {
                 ChallengeAction::AnswerSubmitted { answer: wrong },
             );
             for (name, cs) in [("presented", &p), ("showme_feedback", &hinted_fed), ("taught", &taught)] {
-                shots.snap(&format!("14_challenge_band{band}_{name}"), |screen| {
-                    let l = challenge::layout(cs, &c, screen);
-                    challenge::draw(&l, cs, &c, 1.0);
+                shots.snap(&format!("14_challenge_band{band}_{name}"), |_| {}, |screen| UiViews {
+                    challenge: Some(challenge::ChallengeView::new(cs, &c, screen)),
+                    ..default()
                 });
             }
         }
@@ -351,7 +395,7 @@ fn main() {
         }))
         .add_plugins(DrawPlugin)
         .insert_resource(shots)
-        .add_systems(Update, show_shots)
+        .add_systems(Update, show_shots.before(robot_buddy_game::ui::kit::PanelSystems))
         .run();
 }
 
@@ -359,6 +403,8 @@ fn show_shots(
     mut frame: Local<u32>,
     shots: Res<Shots>,
     mut list: ResMut<DrawList>,
+    mut views: ResMut<UiViews>,
+    art: Res<ArtSizes>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
 ) {
@@ -366,13 +412,16 @@ fn show_shots(
     let Some(f) = frame.checked_sub(WARMUP) else { return };
     let i = (f / PER_SHOT) as usize;
     let phase = f % PER_SHOT;
-    let Some((name, cmds)) = shots.0.get(i) else {
+    let Some((name, cmds, shot_views)) = shots.0.get(i) else {
         if phase == PER_SHOT - 1 {
             exit.write(AppExit::Success);
         }
         return;
     };
-    list.0 = cmds.clone();
+    *views = shot_views.clone();
+    draw::begin_frame(shot_screen(), 0.1);
+    views.draw_all_art(&art.0);
+    list.0 = cmds.iter().cloned().chain(draw::take_commands()).collect();
     if phase == SETTLE {
         let dir = std::env::var("SHOT_DIR").unwrap_or_else(|_| "shots".into());
         std::fs::create_dir_all(&dir).unwrap();

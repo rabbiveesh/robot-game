@@ -422,9 +422,7 @@ fn swag_bought_at_bolts_can_be_handed_to_a_buddy_and_stays_theirs() {
 
 /// The heading on the Give-Swag panel, as the kid reads it.
 fn swag_title(h: &Harness) -> String {
-    let layout = h.game.swag_layout(common::SCREEN).expect("swag panel open");
-    let title = layout.frame.text(robot_buddy_game::ui::swag::SwagId::Title).expect("title laid out");
-    title.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>().join(" ")
+    h.game.ui_views(common::SCREEN).swag.expect("swag panel open").title
 }
 
 /// Everyone in Color Change wears their own colour: hand it to Tali and pick
@@ -1808,7 +1806,7 @@ fn goyish_shooter_click_aims_and_fires() {
 fn goyish_shooter_can_be_left_with_a_tap() {
     use robot_buddy_game::tilemap::Map;
     use robot_buddy_game::npc as npc_mod;
-    use robot_buddy_game::ui::shooter::{footer, FooterId};
+    use robot_buddy_game::ui::{shooter::FooterId, UiAction};
     use robot_buddy_game::input::KeyCode;
 
     let mut h = Harness::new(9);
@@ -1823,8 +1821,7 @@ fn goyish_shooter_can_be_left_with_a_tap() {
     assert_eq!(h.game.state, GameState::Shooter);
 
     let dum_dums = h.game.dum_dums;
-    let (x, y) = footer(common::SCREEN).rect(FooterId::Leave).expect("Leave is on screen").center();
-    h.click(x, y);
+    h.tap(UiAction::Shooter(FooterId::Leave));
     assert_eq!(h.game.state, GameState::Playing, "the tap left the shooter");
     assert!(h.game.active_shooter().is_none());
     assert_eq!(h.game.dum_dums, dum_dums, "walking away pays nothing and costs nothing");
@@ -2125,7 +2122,6 @@ fn shellys_pearl_takes_the_right_leap_size_not_a_stroll() {
 #[test]
 fn shellys_panel_can_be_played_entirely_by_tapping() {
     use robot_buddy_game::tilemap::Map;
-    use robot_buddy_game::ui;
 
     let mut h = Harness::new(21);
     h.start_dev_game();
@@ -2141,28 +2137,15 @@ fn shellys_panel_can_be_played_entirely_by_tapping() {
     };
 
     // Tap the right size tile.
-    let (x, y) = {
-        let s = h.game.leap_session().unwrap();
-        let layout = ui::leap::layout(s, (960.0, 720.0));
-        let (r, _) = layout.choices.iter().find(|(_, n)| *n == size)
-            .expect("the answer is on offer");
-        (r.x + r.w / 2.0, r.y + r.h / 2.0)
-    };
-    h.click(x, y);
+    h.pick_leap_size(size);
     assert_eq!(h.game.leap_session().unwrap().chosen, Some(size), "the tap committed the size");
     assert_eq!((h.game.player.tile_x, h.game.player.tile_y), (5, 13),
         "a tap on the panel must not send the kid walking");
 
     // Tap Leap until the pearl turns up.
     for _ in 0..count {
-        let (lx, ly) = {
-            let s = h.game.leap_session().expect("still on the trip");
-            let layout = ui::leap::layout(s, (960.0, 720.0));
-            let r = layout.leap_btn.expect("the Leap button is up once a size is locked in");
-            (r.x + r.w / 2.0, r.y + r.h / 2.0)
-        };
-        h.click(lx, ly);
-        h.run_until(|g| !g.player.moving, 120);
+        assert!(h.game.leap_session().is_some(), "still on the trip");
+        h.leap();
     }
     assert!(h.game.pearls > 0, "tapping through the trip should find the pearl");
 }

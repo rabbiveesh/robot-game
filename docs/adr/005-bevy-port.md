@@ -37,7 +37,7 @@ Port `robot-buddy-game` in place to Bevy 0.19.1, keeping `Game` as a pure core.
 | Drawing | `src/draw.rs` | Immediate-mode calls with macroquad's names and coordinates (`draw_rectangle`, `draw_text`, `Color::from_rgba`, `set_camera`…). Each call appends a `Cmd`; `paint` draws them in order, each a hair in front of the last. Recording needs no window, so `render` can run in the screenshots example. |
 | Input | `src/input.rs` | `FrameInput` as before, with the game's own `KeyCode` (macroquad names) mapped from Bevy's. Touch landing counts as a click. Every mapped key is captured; macroquad's capture list had silently dropped 5–9 and 0. |
 | Browser | `src/web.rs` | `web-sys`: localStorage, tab visibility, speechSynthesis, file download, `Date`. No hand-written JS beyond the loader in `index.html`. |
-| UI layout | `src/ui/layout/` | ADR-004's pipeline, with the engine swapped for taffy (the same taffy Bevy UI uses). |
+| UI layout | `src/ui/layout/` | ADR-004's pipeline, with the engine swapped for taffy (the same taffy Bevy UI uses). Later replaced by Bevy UI panels (ADR-006). |
 | Web build | `build-wasm.sh` | cargo (`wasm-release` profile) → `wasm-bindgen --target web` → `wasm-opt -Oz`. |
 | Screenshots | `examples/screenshots.rs` | Drives the game with the test harness, records each shot's draw list, then paints and saves them from a Bevy window. Needs `--features screenshots` (PNG encoding stays out of the WASM). |
 
@@ -57,7 +57,7 @@ Bevy UI entities would delete the `Frame`/painter layer and `hit_at`, but it wou
   the next modal;
 - swap about five lines of hit-testing for `bevy_picking`.
 
-The trade wasn't worth it now. A panel can still move to Bevy UI on its own later.
+The trade wasn't worth it at port time. ADR-006 later moved every panel to Bevy UI and answered the first point with a headless Bevy layout probe.
 
 **`Game` stays one struct with a `GameState` enum**, not ECS states and per-minigame
 plugins. That split is a refactor of game logic, not a port. It's easier to do one

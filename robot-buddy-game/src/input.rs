@@ -7,6 +7,8 @@
 
 use std::collections::HashSet;
 
+use crate::ui::{ArtId, UiAction};
+
 /// The keys the game reads. Names follow the physical key (`Key1` is the `1`
 /// key on the top row).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -68,6 +70,14 @@ pub struct FrameInput {
     /// A mouse press or a finger landing this frame, at `mouse_pos`.
     pub mouse_clicked: bool,
     pub chars_typed: Vec<char>,
+    /// The panel button tapped this frame, if any. Bevy UI hit-tests the
+    /// nodes it drew; the game only ever sees which button it was.
+    pub ui_press: Option<UiAction>,
+    /// True when this frame's click landed on a panel (button or not), so
+    /// the map doesn't also take it as click-to-walk.
+    pub click_on_ui: bool,
+    /// Panel art slots on screen last frame, with their logical size.
+    pub art: Vec<(ArtId, f32, f32)>,
 }
 
 impl FrameInput {
@@ -105,6 +115,19 @@ impl FrameInput {
         self.mouse_pos = (x, y);
         self.mouse_clicked = true;
         self
+    }
+
+    /// A tap on a panel button.
+    pub fn with_ui_press(mut self, action: UiAction) -> Self {
+        self.ui_press = Some(action);
+        self.mouse_clicked = true;
+        self.click_on_ui = true;
+        self
+    }
+
+    /// The size of panel art slot `id`, if it was on screen.
+    pub fn art_size(&self, id: ArtId) -> Option<(f32, f32)> {
+        self.art.iter().find(|(a, ..)| *a == id).map(|&(_, w, h)| (w, h))
     }
 
     pub fn with_char(mut self, c: char) -> Self {

@@ -8,7 +8,14 @@
 use crate::prelude::*;
 use robot_buddy_domain::logic::shooter::{ShooterSession, ShooterPhase, FIELD_W, FIELD_H, DOT_MAX};
 use robot_buddy_domain::types::CraStage;
-use crate::ui::layout::{self, button, row, text, Fit, Frame, Kind, UiRect};
+use bevy::prelude::{children, default, AlignItems, Bundle, Node, PositionType, UiRect};
+use bevy::text::Justify;
+use bevy::ui::{percent, px};
+
+use super::kit::{self, button, fitted, Panel};
+use super::views::UiViews;
+use super::UiAction;
+use crate::input::FrameInput;
 
 const VOID: Color = Color::from_rgba(8, 10, 24, 255);
 const PIP: Color = Color::from_rgba(255, 238, 170, 255);
@@ -22,32 +29,56 @@ fn play_rect(screen: (f32, f32)) -> (f32, f32, f32, f32) {
     (pad, top, sw - 2.0 * pad, sh - top - 46.0)
 }
 
-/// The bottom bar's parts: a Leave button a tablet kid can tap, and the hint.
+/// The bottom bar's one button: Leave, which a tablet kid can tap (no ESC).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FooterId {
     Leave,
-    LeaveLabel,
-    Hint,
 }
 
 const HINT: &str = "TAP an alien  \u{2022}  or \u{2190}\u{2192} to hop + SPACE";
 
-/// The bottom strip under the play field, laid out so the button and the hint
-/// share it without overlapping at any width. Read by both `draw` and the
-/// game's click handling.
-pub fn footer(screen: (f32, f32)) -> Frame<FooterId> {
-    let (sw, sh) = screen;
-    let bar = row()
-        .pad_xy(16.0, 5.0)
-        .gap(12.0)
-        .child(button(FooterId::Leave, FooterId::LeaveLabel, "< Leave", 20, Fit::shrink(14)).size(100.0, 36.0).min_w(76.0).shrink(1.0))
-        .child(text(HINT, 20, Fit::shrink(10)).id(FooterId::Hint).center_text().grow(1.0));
-    layout::layout(&bar, UiRect { x: 0.0, y: sh - 46.0, w: sw, h: 46.0 })
+/// The footer is up while the waves are (not over ALL CLEAR).
+#[derive(Clone, PartialEq, Debug)]
+pub struct FooterView;
+
+/// The bottom strip under the play field: Leave and the hint share it.
+pub struct FooterPanel;
+
+impl Panel for FooterPanel {
+    type View = FooterView;
+    const Z: i32 = 10;
+    fn view(views: &UiViews) -> Option<&FooterView> {
+        views.shooter_footer.as_ref()
+    }
+    fn bundle(_: &FooterView) -> impl Bundle {
+        let bar = Node {
+            position_type: PositionType::Absolute,
+            bottom: px(0),
+            width: percent(100),
+            height: px(46),
+            padding: UiRect::axes(px(16), px(5)),
+            column_gap: px(12),
+            align_items: AlignItems::Center,
+            ..default()
+        };
+        let leave = Node { width: px(100), height: px(36), min_width: px(76), flex_shrink: 1.0, ..kit::centered() };
+        let hint = Node { flex_grow: 1.0, min_width: px(0), ..kit::centered() };
+        (
+            bar,
+            children![
+                (
+                    button(UiAction::Shooter(FooterId::Leave), leave, Color::from_rgba(84, 110, 122, 255), Color::from_rgba(255, 255, 255, 80)),
+                    children![fitted("< Leave", 20.0, 14.0, false, WHITE, Justify::Center)],
+                ),
+                (hint, children![fitted(HINT, 20.0, 10.0, false, Color::from_rgba(150, 165, 210, 220), Justify::Center)]),
+            ],
+        )
+    }
 }
 
-/// True if a click at (mx, my) lands on the Leave button.
-pub fn leave_hit(screen: (f32, f32), mx: f32, my: f32) -> bool {
-    footer(screen).rect(FooterId::Leave).is_some_and(|r| r.contains(mx, my))
+/// True if this frame's tap was on Leave.
+pub fn leave_hit(input: &FrameInput) -> bool {
+    input.ui_press == Some(UiAction::Shooter(FooterId::Leave))
 }
 
 /// Map a screen-space click to a logical field column, or `None` if the click
@@ -118,8 +149,6 @@ pub fn draw(session: &ShooterSession, ship_x: f32, cheer: Option<&str>, screen: 
     // ── Bottom guidance / states ──
     if session.phase == ShooterPhase::Complete {
         centered_banner(sw, sh, "ALL CLEAR!", Color::from_rgba(140, 240, 160, 255));
-    } else {
-        draw_footer(screen);
     }
 
     // A clean wave's cheer: mid-field while play goes on (the next wave is
@@ -135,19 +164,6 @@ fn draw_cheer(sw: f32, y: f32, msg: &str) {
     let w = measure_text(msg, None, size as u16, 1.0).width;
     draw_rectangle(sw / 2.0 - w / 2.0 - 18.0, y - 36.0, w + 36.0, 50.0, Color::from_rgba(10, 14, 30, 190));
     draw_text(msg, sw / 2.0 - w / 2.0, y, size, Color::from_rgba(255, 226, 120, 255));
-}
-
-fn draw_footer(screen: (f32, f32)) {
-    let f = footer(screen);
-    for el in f.elements() {
-        match (el.id, &el.kind) {
-            (Some(FooterId::Leave), _) => layout::paint::boxed(
-                el.rect, Color::from_rgba(84, 110, 122, 255), 2.0, Color::from_rgba(255, 255, 255, 80)),
-            (Some(FooterId::LeaveLabel), Kind::Text(t)) => layout::paint::text(t, WHITE),
-            (Some(FooterId::Hint), Kind::Text(t)) => layout::paint::text(t, Color::from_rgba(150, 165, 210, 220)),
-            _ => {}
-        }
-    }
 }
 
 /// The target banner. Concrete learners get a countable pip row; everyone else

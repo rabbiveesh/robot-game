@@ -98,6 +98,9 @@ pub enum Cmd {
     Triangle { a: Vec2, b: Vec2, c: Vec2, color: Color },
     /// Baseline-anchored text, like macroquad's `draw_text`.
     Text { text: String, x: f32, y: f32, size: u16, color: Color },
+    /// Everything after this goes to render layer `n`: 0 is the screen, any
+    /// other is one panel's art slot (see [`art`]).
+    Layer(u8),
 }
 
 #[derive(Default)]
@@ -139,6 +142,19 @@ pub fn begin_frame(screen: (f32, f32), time: f64) {
 /// Everything recorded since [`begin_frame`], in paint order.
 pub fn take_commands() -> Vec<Cmd> {
     with(|c| std::mem::take(&mut c.cmds))
+}
+
+/// Record art for the panel slot on render layer `layer` (`w`×`h` logical
+/// pixels): `f` draws in the slot's own coordinates, top-left at (0, 0), and
+/// the slot shows exactly that (anything outside is cut off). The camera is
+/// ignored inside and restored after.
+pub fn art(layer: u8, f: impl FnOnce()) {
+    debug_assert!(layer > 0, "layer 0 is the screen");
+    let saved = with(|c| std::mem::replace(&mut c.offset, Vec2::ZERO));
+    push(Cmd::Layer(layer));
+    f();
+    push(Cmd::Layer(0));
+    with(|c| c.offset = saved);
 }
 
 pub fn screen_width() -> f32 {
@@ -238,7 +254,7 @@ pub fn draw_text(text: &str, x: f32, y: f32, font_size: f32, color: Color) -> Te
 /// macroquad's signature; call sites pass `None` and `1.0`.
 pub fn measure_text(text: &str, _font: Option<&()>, font_size: u16, font_scale: f32) -> TextDimensions {
     let size = (font_size as f32 * font_scale).round() as u16;
-    crate::ui::layout::FontMetrics::bundled().dimensions(text, size)
+    crate::ui::metrics::FontMetrics::bundled().dimensions(text, size)
 }
 
 #[cfg(test)]
