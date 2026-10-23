@@ -273,26 +273,46 @@ mod challenges {
         UiViews { challenge: Some(ChallengeView::new(cs, c, screen)), ..Default::default() }
     }
 
+    // One test per screen, so the sweep spreads across cores (it is most of
+    // this file's time).
     #[test]
-    fn every_challenge_phase_is_sound_everywhere() {
+    fn every_challenge_phase_is_sound_on_a_phone() {
+        every_challenge_phase_is_sound_at(SCREENS[0]);
+    }
+    #[test]
+    fn every_challenge_phase_is_sound_on_a_big_phone() {
+        every_challenge_phase_is_sound_at(SCREENS[1]);
+    }
+    #[test]
+    fn every_challenge_phase_is_sound_on_a_small_window() {
+        every_challenge_phase_is_sound_at(SCREENS[2]);
+    }
+    #[test]
+    fn every_challenge_phase_is_sound_on_a_tablet() {
+        every_challenge_phase_is_sound_at(SCREENS[3]);
+    }
+    #[test]
+    fn every_challenge_phase_is_sound_on_a_desktop() {
+        every_challenge_phase_is_sound_at(SCREENS[4]);
+    }
+
+    fn every_challenge_phase_is_sound_at(screen: (f32, f32)) {
         let all = all();
-        for screen in SCREENS {
-            let mut probe = UiProbe::new(screen);
-            for c in &all {
-                for display in [c.display_text.as_str(), WORD_PROBLEM] {
-                    for (name, cs) in phases(c, display) {
-                        let snap = probe.show(views(&cs, c, screen));
-                        let what = format!("{name} ({} {} {} band {}, {display:?}) at {screen:?}",
-                            c.numbers.a, c.numbers.op, c.numbers.b, c.sampled_band);
-                        let problems = snap.problems();
-                        assert!(problems.is_empty(), "{what}:\n  {}", problems.join("\n  "));
-                        // The CRA visual painted into its slot (the same plan)
-                        // must fit the slot.
-                        if let Some(r) = snap.art(ArtId::ChallengeVisual) {
-                            let v = robot_buddy_game::ui::visuals::plan(c, r.w);
-                            assert!(v.bbox.w <= r.w + 0.5 && v.bbox.h <= r.h + 0.5,
-                                "{what}: visual is {:?}, its slot is {r:?}", v.bbox);
-                        }
+        let mut probe = UiProbe::new(screen);
+        for c in &all {
+            for display in [c.display_text.as_str(), WORD_PROBLEM] {
+                for (name, cs) in phases(c, display) {
+                    let snap = probe.show(views(&cs, c, screen));
+                    let what = format!("{name} ({} {} {} band {}, {display:?}) at {screen:?}",
+                        c.numbers.a, c.numbers.op, c.numbers.b, c.sampled_band);
+                    let problems = snap.problems();
+                    assert!(problems.is_empty(), "{what}:\n  {}", problems.join("\n  "));
+                    // The CRA visual painted into its slot (the same plan)
+                    // must fit the slot.
+                    if let Some(r) = snap.art(ArtId::ChallengeVisual) {
+                        let v = robot_buddy_game::ui::visuals::plan(c, r.w);
+                        assert!(v.bbox.w <= r.w + 0.5 && v.bbox.h <= r.h + 0.5,
+                            "{what}: visual is {:?}, its slot is {r:?}", v.bbox);
                     }
                 }
             }
