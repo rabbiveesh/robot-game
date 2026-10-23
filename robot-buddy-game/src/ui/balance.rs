@@ -14,7 +14,7 @@ use robot_buddy_domain::types::Operation;
 
 use crate::input::FrameInput;
 
-pub use crate::ui::layout::UiRect;
+pub use crate::ui::rect::UiRect;
 
 pub struct ChoiceBound {
     pub rect: UiRect,

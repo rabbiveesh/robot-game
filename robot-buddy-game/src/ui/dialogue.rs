@@ -1,6 +1,16 @@
+use bevy::ecs::spawn::SpawnWith;
+use bevy::prelude::{
+    children, default, AlignItems, App, Bundle, ChildSpawner, Children, Component, IntoScheduleConfigs, JustifyContent,
+    Node, Pickable, PositionType, Query, Res, Spawn, SpawnRelated, TextColor, TextFont, TextSpan, UiRect, Update, Val,
+    With, Without, ZIndex,
+};
+use bevy::text::{Justify, LineHeight};
+use bevy::ui::{percent, px, BackgroundColor, BorderColor};
+
 use crate::prelude::*;
-use crate::ui::layout::{self, col, gap_box, paint, row, spacer, Fit, Frame, Justify, Kind};
 use crate::audio;
+use super::kit::{self, Panel};
+use super::views::UiViews;
 use crate::settings;
 
 pub struct DialogueLine {
@@ -97,86 +107,132 @@ impl DialogueBox {
         }
     }
 
-    /// Draw the current line. Layout comes from [`layout`]; the typewriter
-    /// only reveals a prefix of lines broken on the FULL text, so words never
-    /// hop to the next line mid-sentence and the box never grows mid-line.
-    pub fn draw(&self, screen: (f32, f32)) {
-        if !self.active { return; }
-        let Some(line) = self.lines.get(self.current_line) else { return };
-        let frame = layout(&line.speaker, &line.text, screen);
-        let border = speaker_color(&line.speaker);
-        let visible = line.text[..self.char_index.min(line.text.len())].chars().count();
-        for el in frame.elements() {
-            match (el.id, &el.kind) {
-                (Some(DialogueId::Area), _) => {
-                    // The box starts halfway down the name tab, which sits
-                    // across its top edge.
-                    let b = el.rect.inset(0.0, TAB_OVERHANG, 0.0, 0.0);
-                    paint::fill(b, Color::from_rgba(20, 20, 40, 230));
-                    paint::outline(b, 3.0, border);
-                }
-                (Some(DialogueId::Tab), _) => paint::fill(el.rect, border),
-                (Some(DialogueId::Speaker), Kind::Text(t)) => paint::text(t, Color::from_rgba(26, 26, 46, 255)),
-                (Some(DialogueId::Body), Kind::Text(t)) => paint::text_prefix(t, visible, WHITE),
-                (Some(DialogueId::Continue), Kind::Text(t)) if self.waiting_for_input && paint::blink(6.0) => {
-                    paint::text(t, Color::from_rgba(150, 150, 150, 255));
-                }
-                _ => {}
-            }
+    /// What the dialogue panel shows, if a line is up.
+    pub fn view(&self) -> Option<DialogueView> {
+        if !self.active {
+            return None;
         }
+        let line = self.lines.get(self.current_line)?;
+        Some(DialogueView { speaker: line.speaker.clone(), text: line.text.clone(), waiting: self.waiting_for_input })
+    }
+
+    /// Characters of the current line the typewriter has revealed.
+    pub fn revealed(&self) -> usize {
+        self.lines.get(self.current_line).map_or(0, |l| l.text[..self.char_index.min(l.text.len())].chars().count())
     }
 }
 
 /// How far the speaker's name tab rises above the box's top edge.
 const TAB_OVERHANG: f32 = 18.0;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DialogueId {
-    /// The whole dialogue area: the name tab plus the box under it.
-    Area,
-    Tab,
-    Speaker,
-    Body,
-    /// The "SPACE >" prompt, in a footer the body can never run into.
-    Continue,
+/// One dialogue line, as the panel shows it.
+#[derive(Clone, PartialEq, Debug)]
+pub struct DialogueView {
+    pub speaker: String,
+    pub text: String,
+    /// The whole line is out; "SPACE >" blinks.
+    pub waiting: bool,
 }
 
-/// Lay out one dialogue line along the bottom of the screen. Pure. The box is
-/// at least as tall as it always was and grows (up to 60% of the screen) for
-/// a long line; past that the text shrinks. "SPACE >" has its own reserved
-/// footer row.
-pub fn layout(speaker: &str, text: &str, screen: (f32, f32)) -> Frame<DialogueId> {
-    let (_, sh) = screen;
-    let area = col()
-        .id(DialogueId::Area)
-        .min_h(170.0 + TAB_OVERHANG)
-        .max_h((sh * 0.6).max(170.0 + TAB_OVERHANG))
-        .min_w(0.0)
-        .child(
-            row().h(34.0).fixed().child(gap_box(15.0, 0.0)).child(
-                row()
-                    .id(DialogueId::Tab)
-                    .h(34.0)
-                    .pad_xy(12.0, 0.0)
-                    .shrink(1.0)
-                    .child(layout::text(speaker, 26, Fit::shrink(14)).id(DialogueId::Speaker)),
-            ),
-        )
-        .child(
-            col()
-                .grow(1.0)
-                .pad_edges(20.0, 12.0, 20.0, 8.0)
-                .gap(6.0)
-                .child(layout::text(text, 28, Fit::wrap(16)).line_gap(4.0).id(DialogueId::Body))
-                .child(spacer())
-                .child(
-                    row().justify(Justify::End).fixed().child(
-                        layout::text("SPACE >", 20, Fit::shrink(14)).id(DialogueId::Continue),
-                    ),
-                ),
-        );
-    let root = col().pad(10.0).justify(Justify::End).child(area);
-    layout::layout(&root, layout::screen_rect(screen))
+/// The dialogue box along the bottom of the screen. At least as tall as it
+/// always was, it grows (up to 60% of the screen) for a long line. The
+/// typewriter reveals a prefix of the full line, which is laid out whole from
+/// the start, so words never hop to the next line mid-sentence and the box
+/// never grows mid-line. "SPACE >" has its own footer row.
+pub struct DialoguePanel;
+
+/// The part of the line not yet revealed (laid out, but transparent).
+#[derive(Component)]
+struct Unrevealed;
+
+/// The part of the line revealed so far.
+#[derive(Component)]
+struct Revealed;
+
+impl Panel for DialoguePanel {
+    type View = DialogueView;
+    const Z: i32 = 20;
+    fn view(views: &UiViews) -> Option<&DialogueView> {
+        views.dialogue.as_ref()
+    }
+    fn bundle(v: &DialogueView) -> impl Bundle {
+        let v = v.clone();
+        let border = kit::color(speaker_color(&v.speaker));
+        let root = Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            padding: UiRect::all(px(10)),
+            justify_content: JustifyContent::End,
+            ..kit::col()
+        };
+        // The dialogue never takes a tap: a click anywhere advances it.
+        (root, Pickable::IGNORE, Children::spawn(SpawnWith(move |p: &mut ChildSpawner| {
+            let area = Node { width: percent(100), min_width: px(0), ..kit::col() };
+            p.spawn((area, Pickable::IGNORE)).with_children(|p| {
+                // The name tab sits across the box's top edge, in front of it.
+                p.spawn((Node { height: px(34), flex_shrink: 0.0, padding: UiRect::left(px(15)), ..default() }, ZIndex(1), Pickable::IGNORE))
+                    .with_child((
+                        Node { height: px(34), padding: UiRect::axes(px(12), px(0)), flex_shrink: 1.0, min_width: px(0), align_items: AlignItems::Center, ..default() },
+                        BackgroundColor(border),
+                        Pickable::IGNORE,
+                        Children::spawn(Spawn(kit::fitted(v.speaker.clone(), 26.0, 14.0, false, Color::from_rgba(26, 26, 46, 255), Justify::Left))),
+                    ));
+                let body = Node {
+                    min_height: px(170.0),
+                    max_height: Val::Vh(60.0),
+                    margin: UiRect::top(px(-TAB_OVERHANG)),
+                    padding: UiRect::new(px(20), px(20), px(12.0 + TAB_OVERHANG), px(8)),
+                    row_gap: px(6),
+                    border: UiRect::all(px(3)),
+                    ..kit::col()
+                };
+                p.spawn((body, BackgroundColor(kit::color(Color::from_rgba(20, 20, 40, 230))), BorderColor::all(border), Pickable::IGNORE))
+                    .with_children(|p| {
+                        p.spawn((
+                            kit::filled("", 28.0, 16.0, WHITE, Justify::Left),
+                            children![
+                                (TextSpan::new(""), TextFont::from_font_size(28.0), LineHeight::RelativeToFont(1.15), TextColor(kit::color(WHITE)), Revealed),
+                                (TextSpan::new(v.text.clone()), TextFont::from_font_size(28.0), LineHeight::RelativeToFont(1.15), TextColor(bevy::color::Color::NONE), Unrevealed),
+                            ],
+                        ));
+                        if v.waiting {
+                            // Pinned to the bottom of the box (an auto top margin, not a
+                            // grow spacer: taffy over-sizes an auto-height column that
+                            // holds one).
+                            let footer = Node { justify_content: JustifyContent::End, flex_shrink: 0.0, margin: UiRect::top(Val::Auto), ..default() };
+                            p.spawn((footer, kit::Blink(6.0), Pickable::IGNORE))
+                                .with_child(kit::fitted("SPACE >", 20.0, 14.0, false, Color::from_rgba(150, 150, 150, 255), Justify::Right));
+                        }
+                    });
+            });
+        })))
+    }
+    fn setup(app: &mut App) {
+        app.add_systems(Update, typewriter.after(kit::PanelSystems));
+    }
+}
+
+/// Move the typewriter's split point: the revealed prefix is white, the rest
+/// is laid out but invisible.
+fn typewriter(
+    views: Res<UiViews>,
+    mut shown: Query<&mut TextSpan, (With<Revealed>, Without<Unrevealed>)>,
+    mut hidden: Query<&mut TextSpan, (With<Unrevealed>, Without<Revealed>)>,
+) {
+    let Some(v) = &views.dialogue else { return };
+    let split = v.text.char_indices().nth(views.dialogue_reveal).map_or(v.text.len(), |(i, _)| i);
+    let (a, b) = v.text.split_at(split);
+    for mut s in &mut shown {
+        if s.0 != a {
+            s.0 = a.to_string();
+        }
+    }
+    for mut s in &mut hidden {
+        if s.0 != b {
+            s.0 = b.to_string();
+        }
+    }
 }
 
 fn speaker_color(speaker: &str) -> Color {

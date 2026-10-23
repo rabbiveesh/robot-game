@@ -190,7 +190,7 @@ fn deserialize_dir<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Dir, D::Err
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Gender {
     Boy,
     Girl,
@@ -369,7 +369,7 @@ pub trait RawStorage {
 }
 
 fn warn(msg: &str) {
-    macroquad::logging::warn!("{msg}");
+    bevy::log::warn!("{msg}");
 }
 
 /// Copy an unreadable blob to its backup key unless it's already there.
@@ -487,7 +487,7 @@ impl SaveBackend for LocalStorageBackend {
 
     fn is_page_hidden(&self) -> bool {
         #[cfg(target_arch = "wasm32")]
-        { unsafe { page_is_hidden() != 0 } }
+        { crate::web::page_is_hidden() }
         #[cfg(not(target_arch = "wasm32"))]
         { false }
     }
@@ -553,41 +553,22 @@ impl SaveBackend for InMemoryBackend {
 
 // ─── PLATFORM STORAGE ───────────────────────────────────
 
-// WASM: uses extern "C" functions provided by the localStorage plugin in index.html.
+// WASM: browser localStorage (see `crate::web`).
 // Native: uses /tmp/ file storage for dev.
 
 #[cfg(target_arch = "wasm32")]
-extern "C" {
-    fn ls_get_len(key_ptr: *const u8, key_len: usize) -> i32;
-    fn ls_get(key_ptr: *const u8, key_len: usize, buf_ptr: *mut u8, buf_len: usize);
-    fn ls_set(key_ptr: *const u8, key_len: usize, val_ptr: *const u8, val_len: usize);
-    fn page_is_hidden() -> i32;
-}
-
-#[cfg(target_arch = "wasm32")]
 fn read_storage(key: &str) -> Option<String> {
-    unsafe {
-        let len = ls_get_len(key.as_ptr(), key.len());
-        if len < 0 { return None; }
-        let len = len as usize;
-        let mut buf = vec![0u8; len];
-        ls_get(key.as_ptr(), key.len(), buf.as_mut_ptr(), len);
-        String::from_utf8(buf).ok()
-    }
+    crate::web::storage_get(key)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn write_storage(key: &str, value: &str) {
-    unsafe {
-        ls_set(key.as_ptr(), key.len(), value.as_ptr(), value.len());
-    }
+    crate::web::storage_set(key, value)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn current_timestamp() -> u64 {
-    // macroquad's get_time() returns seconds since start, not epoch.
-    // For a rough timestamp, use 0 — proper epoch time needs JS interop.
-    0
+    crate::web::now_secs()
 }
 
 #[cfg(not(target_arch = "wasm32"))]

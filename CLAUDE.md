@@ -4,9 +4,7 @@ A math education RPG for kids (ages 4-10). Zelda-style top-down tile game where 
 
 ## Project State
 
-- **`main` branch**: Vanilla-JS prototype (still deployed at https://rabbiveesh.github.io/robot-game/ until macroquad migration lands).
-
-- **`macroquad-migration` branch (current)**: Pure Rust. Domain crate + macroquad game crate, one WASM binary, no JS.
+- **`main` branch**: Pure Rust. Domain crate + Bevy game crate, one WASM binary, no hand-written JS. Deployed at https://rabbiveesh.github.io/robot-game/. (The game ran on macroquad until the Bevy port; see ADR-005.)
 
 - **`adaptive-learning-design` branch**: Design specs for the architecture (docs/ only, no code).
   - `docs/adaptive-learning-spec.md` — learner profiles, intake quiz, frustration detection, CRA progression
@@ -35,10 +33,10 @@ These are NOT optional. Every PR must respect these:
 
 ## Tech Stack
 
-- **One language: Rust.** Domain crate + macroquad game crate, single WASM binary.
+- **One language: Rust.** Domain crate + game crate on **Bevy 0.19** (`bevy_vector_shapes` for the procedural art, Bevy UI for panels), single WASM binary. Browser APIs go through `web-sys`.
 - **Tests**: `cargo test` runs the domain unit tests and the headless story-style game integration tests (see ADR-002). Don't write test counts into docs; they go stale on the next PR.
-- **Build**: `cargo build --target wasm32-unknown-unknown --release` → `target/wasm32-unknown-unknown/release/robot-buddy-game.wasm`.
-- **CI**: GitHub Actions: `cargo test` + WASM build + deploy to Pages. No Node, no npm.
+- **Build**: `./build-wasm.sh` → cargo (`wasm-release` profile) + `wasm-bindgen` (version must match Cargo.lock) + `wasm-opt` → `robot-buddy-game/www/`. Bevy's cold build is slow (~10+ min); incremental builds are seconds.
+- **CI**: GitHub Actions: `cargo test` + WASM build + deploy to Pages, with a cargo cache. No Node, no npm.
 
 ## Project Layout
 
@@ -68,29 +66,35 @@ robot-buddy-domain/              # Pure Rust domain (no browser deps)
     bin/
       simulate.rs                # CLI learning simulator
 
-robot-buddy-game/                # Macroquad game (depends on domain)
+robot-buddy-game/                # Bevy game (depends on domain)
   Cargo.toml
   index.html                     # WASM loader (source — copied into www/ by build)
   src/
     lib.rs                       # re-exports modules so tests/ can use them
-    main.rs                      # thin macroquad shim: capture FrameInput → step → render
-    game.rs                      # Game struct + step (pure logic) + render (macroquad-only) + GameEvent
-    input.rs                     # FrameInput — single input boundary
+    main.rs                      # starts the Bevy app with a Game
+    app.rs                       # Bevy plugins: capture FrameInput → Game::step → Game::render → paint
+    draw.rs                      # immediate-mode drawing (draw_rectangle, draw_text…) recorded as a
+                                 #   Cmd list; app.rs paints it (ShapePainter + pooled Text2d);
+                                 #   draw::art paints into a panel's art slot
+    game/                        # Game struct + step (pure logic) + render (records draws) + GameEvent
+    input.rs                     # FrameInput — single input boundary (+ the game's KeyCode)
+    web.rs                       # browser APIs via web-sys: localStorage, speech, download, clock
     save.rs                      # SaveBackend trait + LocalStorageBackend (prod) + InMemoryBackend (tests)
     tilemap.rs, npc.rs, session.rs, settings.rs
     sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit)
     ui/                          # challenge, descent, dialogue, hud, interaction_menu, leap, shop, swag, swatches, title_screen, settings_overlay, visuals
-      layout/                    # declarative layout (ADR-004): node tree → LayoutEngine → Frame
-                                 #   (placed text + hit targets) read by BOTH draw and click;
-                                 #   FontMetrics (headless, real font), paging, assert_sane, painter
+                                 #   Panels are Bevy UI (ADR-006): Game::ui_views → UiViews (views.rs)
+                                 #   → each panel's bundle; taps come back as UiAction in FrameInput
+      kit.rs                     # Panel trait, taps, Shrink (text that fits), art slots, scroll lists
+      probe.rs                   # UiProbe: headless Bevy layout of the panels + Snapshot::problems
+      metrics.rs, rect.rs        # headless font widths; UiRect for the hand-drawn boards
     visuals/                     # math visualization renderers
-    audio/                       # TTS via miniquad plugin
+    audio/                       # TTS (browser speechSynthesis via web.rs)
     net/                         # AI dialogue fetch
   tests/                         # headless integration tests — plain `cargo test`, no window
-    common/mod.rs                # Harness + story helpers (walk_to_npc, interact, answer_correctly)
+    common/mod.rs                # Harness + story helpers (walk_to_npc, interact, tap(UiAction))
     headless.rs, story.rs        # player-flow tests; assertions read GameEvent log
-    layout_sweep.rs, sweep/      # assert_sane over migrated panels × 5 screens (360×640 phone up) × awkward data
-    layout_discipline.rs         # migrated panels may not call raw draw/measure fns or hand-make rects
+    panels.rs                    # every panel × 5 screens (360×640 phone up) × awkward data, via UiProbe
   www/                           # build output (gitignored except index.html)
 ```
 
@@ -99,9 +103,11 @@ robot-buddy-game/                # Macroquad game (depends on domain)
 ADRs document key design decisions, their context, and consequences. Read these before proposing alternatives — the "why not" is usually in the Alternatives Considered section.
 
 - **[ADR-001: Band Blending](docs/adr/001-band-blending.md)** — Bands are distribution centers, not hard levels. Accuracy-based promotion replaces streaks. Spread width tightens on frustration, widens on confidence. Streak is display-only.
-- **[ADR-002: Headless Test Harness](docs/adr/002-headless-test-harness.md)** — `Game::step` (pure) / `Game::render` (macroquad) split, `FrameInput` boundary, `SaveBackend` trait with `InMemoryBackend` for tests, `GameEvent` log as the assertion surface. Story-style integration tests run as plain `cargo test` with no window.
+- **[ADR-002: Headless Test Harness](docs/adr/002-headless-test-harness.md)** — `Game::step` (pure) / `Game::render` (records draw calls) split, `FrameInput` boundary, `SaveBackend` trait with `InMemoryBackend` for tests, `GameEvent` log as the assertion surface. Story-style integration tests run as plain `cargo test` with no window.
 - **[ADR-003: Logic-Puzzle, Manipulative & Quest Domain Layer](docs/adr/003-logic-puzzle-and-manipulative-domain-layer.md)** — Every new feature (extra logic puzzles, CRA manipulatives, quests, shop, encounters, voice parser) is built as a pure, headlessly-tested domain module first; the conflict-prone `game.rs` wiring is the only serial step. The ADR lists what's wired end-to-end vs. domain-only and gives the turnkey wiring recipe.
-- **[ADR-004: UI Layout](docs/adr/004-ui-layout.md)** — Panels describe a flexbox-shaped node tree; a swappable `LayoutEngine` (in-house `FlowEngine`, exact CSS flexbox, checked against taffy) produces a `Frame` that both drawing and hit-testing read, so overlap and hit-rect drift are impossible by construction. Overflow overflows (then clips): panels fit with `.w_pct(1.0).max_w(W)` and `min_h(0.0)`, never by relying on the engine to squeeze. Text needs an explicit `Fit` policy; `assert_sane` sweeps panels × screens; migrated panels paint only through `ui::layout::paint`. The ADR lists exactly what each check catches and misses, and the taffy swap recipe.
+- **[ADR-004: UI Layout](docs/adr/004-ui-layout.md)** — *Superseded by ADR-006.* Our own declarative layout (node tree → taffy → `Frame` read by draw and click) with `assert_sane` sweeps. Its Alternatives section still explains why hit rects must come from the same layout as the drawing.
+- **[ADR-005: Bevy Port](docs/adr/005-bevy-port.md)** — The game runs on Bevy, keeping `Game` as a pure core: `step` stays headless, `render` records macroquad-shaped draw calls that Bevy paints, browser APIs go through `web-sys`.
+- **[ADR-006: Panels on Bevy UI](docs/adr/006-bevy-ui-panels.md)** — Panels are Bevy UI built from plain views; taps come back as named `UiAction`s, never coordinates; panel art draws into per-panel art slots. Our layout engine is gone; `UiProbe` lays panels out headlessly so story-test taps and a 5-screen sweep catch off-screen, overlapping and spilling layouts. Supersedes ADR-004.
 
 ## Key Domain Concepts
 
@@ -117,17 +123,18 @@ ADRs document key design decisions, their context, and consequences. Read these 
 # Test
 cargo test                                                    # domain + game integration tests
 
-# Build WASM
-cargo build --target wasm32-unknown-unknown --release
+# Run natively
+cargo run -p robot-buddy-game
 
-# Assemble www/ (WASM + macroquad JS bundle + index.html)
+# Build WASM and assemble www/ (needs wasm-bindgen-cli at Cargo.lock's version; wasm-opt optional)
 ./build-wasm.sh
 
 # Serve locally
 cd robot-buddy-game/www && npx serve .
 
-# Screenshot every migrated UI panel natively (real draw code, real game state)
-SHOT_W=960 SHOT_H=720 SHOT_DIR=/tmp/shots cargo run -p robot-buddy-game --example screenshots
+# Screenshot every migrated UI panel natively (real draw code, real game state).
+# In the cloud: prefix with xvfb-run -a -s "-screen 0 1920x1080x24" (needs mesa-vulkan-drivers)
+SHOT_W=960 SHOT_H=720 SHOT_DIR=/tmp/shots cargo run -p robot-buddy-game --example screenshots --features screenshots
 
 # Simulate adaptive learning
 cargo run -p robot-buddy-domain --bin simulate -- --profile gifted

@@ -8,10 +8,17 @@
 use crate::prelude::*;
 use robot_buddy_domain::logic::shooter::{ShooterSession, ShooterPhase, FIELD_W, FIELD_H, DOT_MAX};
 use robot_buddy_domain::types::CraStage;
-use crate::ui::layout::{self, button, row, text, Fit, Frame, Kind, UiRect};
+use bevy::prelude::{children, default, AlignItems, Bundle, Node, PositionType, UiRect};
+use bevy::text::Justify;
+use bevy::ui::{percent, px};
 
-const VOID: Color = color_u8!(8, 10, 24, 255);
-const PIP: Color = color_u8!(255, 238, 170, 255);
+use super::kit::{self, button, fitted, Panel};
+use super::views::UiViews;
+use super::UiAction;
+use crate::input::FrameInput;
+
+const VOID: Color = Color::from_rgba(8, 10, 24, 255);
+const PIP: Color = Color::from_rgba(255, 238, 170, 255);
 
 /// The centered play rect (x, y, w, h) the field maps into. Shared by `draw`
 /// and `field_x_at` so click-to-aim lands exactly where things are drawn.
@@ -22,32 +29,56 @@ fn play_rect(screen: (f32, f32)) -> (f32, f32, f32, f32) {
     (pad, top, sw - 2.0 * pad, sh - top - 46.0)
 }
 
-/// The bottom bar's parts: a Leave button a tablet kid can tap, and the hint.
+/// The bottom bar's one button: Leave, which a tablet kid can tap (no ESC).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FooterId {
     Leave,
-    LeaveLabel,
-    Hint,
 }
 
 const HINT: &str = "TAP an alien  \u{2022}  or \u{2190}\u{2192} to hop + SPACE";
 
-/// The bottom strip under the play field, laid out so the button and the hint
-/// share it without overlapping at any width. Read by both `draw` and the
-/// game's click handling.
-pub fn footer(screen: (f32, f32)) -> Frame<FooterId> {
-    let (sw, sh) = screen;
-    let bar = row()
-        .pad_xy(16.0, 5.0)
-        .gap(12.0)
-        .child(button(FooterId::Leave, FooterId::LeaveLabel, "< Leave", 20, Fit::shrink(14)).size(100.0, 36.0).min_w(76.0).shrink(1.0))
-        .child(text(HINT, 20, Fit::shrink(10)).id(FooterId::Hint).center_text().grow(1.0));
-    layout::layout(&bar, UiRect { x: 0.0, y: sh - 46.0, w: sw, h: 46.0 })
+/// The footer is up while the waves are (not over ALL CLEAR).
+#[derive(Clone, PartialEq, Debug)]
+pub struct FooterView;
+
+/// The bottom strip under the play field: Leave and the hint share it.
+pub struct FooterPanel;
+
+impl Panel for FooterPanel {
+    type View = FooterView;
+    const Z: i32 = 10;
+    fn view(views: &UiViews) -> Option<&FooterView> {
+        views.shooter_footer.as_ref()
+    }
+    fn bundle(_: &FooterView) -> impl Bundle {
+        let bar = Node {
+            position_type: PositionType::Absolute,
+            bottom: px(0),
+            width: percent(100),
+            height: px(46),
+            padding: UiRect::axes(px(16), px(5)),
+            column_gap: px(12),
+            align_items: AlignItems::Center,
+            ..default()
+        };
+        let leave = Node { width: px(100), height: px(36), min_width: px(76), flex_shrink: 1.0, ..kit::centered() };
+        let hint = Node { flex_grow: 1.0, min_width: px(0), ..kit::centered() };
+        (
+            bar,
+            children![
+                (
+                    button(UiAction::Shooter(FooterId::Leave), leave, Color::from_rgba(84, 110, 122, 255), Color::from_rgba(255, 255, 255, 80)),
+                    children![fitted("< Leave", 20.0, 14.0, false, WHITE, Justify::Center)],
+                ),
+                (hint, children![fitted(HINT, 20.0, 10.0, false, Color::from_rgba(150, 165, 210, 220), Justify::Center)]),
+            ],
+        )
+    }
 }
 
-/// True if a click at (mx, my) lands on the Leave button.
-pub fn leave_hit(screen: (f32, f32), mx: f32, my: f32) -> bool {
-    footer(screen).rect(FooterId::Leave).is_some_and(|r| r.contains(mx, my))
+/// True if this frame's tap was on Leave.
+pub fn leave_hit(input: &FrameInput) -> bool {
+    input.ui_press == Some(UiAction::Shooter(FooterId::Leave))
 }
 
 /// Map a screen-space click to a logical field column, or `None` if the click
@@ -79,7 +110,7 @@ pub fn draw(session: &ShooterSession, ship_x: f32, cheer: Option<&str>, screen: 
 
     // Faint frame. No danger line: the aliens settle near the bottom and wait
     // for as long as the kid needs.
-    draw_rectangle_lines(play_x, play_y, play_w, play_h, 2.0, color_u8!(60, 70, 110, 120));
+    draw_rectangle_lines(play_x, play_y, play_w, play_h, 2.0, Color::from_rgba(60, 70, 110, 120));
 
     // ── Target banner ── shown as a numeral (Abstract/Representational) or as a
     // row of pips to count (Concrete), matching how the aliens read.
@@ -96,9 +127,9 @@ pub fn draw(session: &ShooterSession, ship_x: f32, cheer: Option<&str>, screen: 
         let (bx, by) = to_screen(shot.x, shot.y);
         let len = (unit * 4.0).clamp(10.0, 22.0);
         // Glowing tail behind a bright core.
-        draw_line(bx, by, bx, by + len, 6.0, color_u8!(120, 230, 255, 70));
-        draw_line(bx, by, bx, by + len, 3.0, color_u8!(200, 250, 255, 230));
-        draw_circle(bx, by, 3.5, color_u8!(255, 255, 255, 255));
+        draw_line(bx, by, bx, by + len, 6.0, Color::from_rgba(120, 230, 255, 70));
+        draw_line(bx, by, bx, by + len, 3.0, Color::from_rgba(200, 250, 255, 230));
+        draw_circle(bx, by, 3.5, Color::from_rgba(255, 255, 255, 255));
     }
 
     // ── Ship on the bottom rail ──
@@ -106,20 +137,18 @@ pub fn draw(session: &ShooterSession, ship_x: f32, cheer: Option<&str>, screen: 
     draw_ship(ship_x, ship_y - alien_r * 0.6, alien_r);
 
     // Aiming guide: a soft beam up the ship's column so kids see where a shot goes.
-    draw_line(ship_x, ship_y - alien_r, ship_x, play_y, 2.0, color_u8!(120, 200, 255, 40));
+    draw_line(ship_x, ship_y - alien_r, ship_x, play_y, 2.0, Color::from_rgba(120, 200, 255, 40));
 
     // ── Score (top-right) ──
     let score_label = format!("★ {}", session.score);
     let score_size = 26.0;
     let sw_txt = measure_text(&score_label, None, score_size as u16, 1.0).width;
     draw_text(&score_label, play_x + play_w - sw_txt - 6.0, 34.0, score_size,
-              color_u8!(180, 220, 255, 255));
+              Color::from_rgba(180, 220, 255, 255));
 
     // ── Bottom guidance / states ──
     if session.phase == ShooterPhase::Complete {
-        centered_banner(sw, sh, "ALL CLEAR!", color_u8!(140, 240, 160, 255));
-    } else {
-        draw_footer(screen);
+        centered_banner(sw, sh, "ALL CLEAR!", Color::from_rgba(140, 240, 160, 255));
     }
 
     // A clean wave's cheer: mid-field while play goes on (the next wave is
@@ -133,27 +162,14 @@ pub fn draw(session: &ShooterSession, ship_x: f32, cheer: Option<&str>, screen: 
 fn draw_cheer(sw: f32, y: f32, msg: &str) {
     let size = 40.0;
     let w = measure_text(msg, None, size as u16, 1.0).width;
-    draw_rectangle(sw / 2.0 - w / 2.0 - 18.0, y - 36.0, w + 36.0, 50.0, color_u8!(10, 14, 30, 190));
-    draw_text(msg, sw / 2.0 - w / 2.0, y, size, color_u8!(255, 226, 120, 255));
-}
-
-fn draw_footer(screen: (f32, f32)) {
-    let f = footer(screen);
-    for el in f.elements() {
-        match (el.id, &el.kind) {
-            (Some(FooterId::Leave), _) => layout::paint::boxed(
-                el.rect, color_u8!(84, 110, 122, 255), 2.0, color_u8!(255, 255, 255, 80)),
-            (Some(FooterId::LeaveLabel), Kind::Text(t)) => layout::paint::text(t, WHITE),
-            (Some(FooterId::Hint), Kind::Text(t)) => layout::paint::text(t, color_u8!(150, 165, 210, 220)),
-            _ => {}
-        }
-    }
+    draw_rectangle(sw / 2.0 - w / 2.0 - 18.0, y - 36.0, w + 36.0, 50.0, Color::from_rgba(10, 14, 30, 190));
+    draw_text(msg, sw / 2.0 - w / 2.0, y, size, Color::from_rgba(255, 226, 120, 255));
 }
 
 /// The target banner. Concrete learners get a countable pip row; everyone else
 /// gets the numeral.
 fn draw_target_banner(target: u32, rep: CraStage, sw: f32) {
-    let gold = color_u8!(255, 214, 90, 255);
+    let gold = Color::from_rgba(255, 214, 90, 255);
     if rep == CraStage::Concrete && target <= DOT_MAX {
         let word = "MAKE";
         let size = 40.0;
@@ -180,13 +196,13 @@ fn draw_alien(cx: f32, cy: f32, r: f32, value: u32, selected: bool, rep: CraStag
     // Selection glow ring.
     if selected {
         let pulse = (time * 6.0).sin() * 0.5 + 0.5;
-        draw_circle(cx, cy, r + 5.0 + pulse * 3.0, color_u8!(255, 240, 130, 70));
-        draw_circle_lines(cx, cy, r + 4.0, 2.5, color_u8!(255, 240, 130, 220));
+        draw_circle(cx, cy, r + 5.0 + pulse * 3.0, Color::from_rgba(255, 240, 130, 70));
+        draw_circle_lines(cx, cy, r + 4.0, 2.5, Color::from_rgba(255, 240, 130, 220));
     }
 
     // A little green alien — brighter when tagged.
-    let body = if selected { color_u8!(150, 235, 130, 255) } else { color_u8!(110, 200, 110, 255) };
-    let dark = color_u8!(24, 60, 30, 255);
+    let body = if selected { Color::from_rgba(150, 235, 130, 255) } else { Color::from_rgba(110, 200, 110, 255) };
+    let dark = Color::from_rgba(24, 60, 30, 255);
 
     // Wobbling antennae with glowing tips.
     let wob = (time * 4.0 + cx * 0.1).sin() * 2.0;
@@ -195,7 +211,7 @@ fn draw_alien(cx: f32, cy: f32, r: f32, value: u32, selected: bool, rep: CraStag
         let tx = cx + side * r * 0.62;
         let ty = cy - r * 1.05 + wob;
         draw_line(ax, cy - r * 0.55, tx, ty, 2.5, body);
-        draw_circle(tx, ty, 3.0, color_u8!(255, 240, 150, 255));
+        draw_circle(tx, ty, 3.0, Color::from_rgba(255, 240, 150, 255));
     }
 
     // Round body + a couple of little feet.
@@ -207,7 +223,7 @@ fn draw_alien(cx: f32, cy: f32, r: f32, value: u32, selected: bool, rep: CraStag
     let eye_y = cy - r * 0.42;
     for side in [-1.0_f32, 1.0] {
         let ex = cx + side * r * 0.36;
-        draw_circle(ex, eye_y, r * 0.2, color_u8!(250, 255, 250, 255));
+        draw_circle(ex, eye_y, r * 0.2, Color::from_rgba(250, 255, 250, 255));
         draw_circle(ex + side * r * 0.05, eye_y, r * 0.09, dark);
     }
 
@@ -239,7 +255,7 @@ fn draw_numeral(cx: f32, cy: f32, r: f32, value: u32) {
     let label = value.to_string();
     let size = (r * 1.15).max(18.0);
     let m = measure_text(&label, None, size as u16, 1.0);
-    draw_text(&label, cx - m.width / 2.0, cy + m.height / 2.0 - 1.0, size, color_u8!(20, 16, 40, 255));
+    draw_text(&label, cx - m.width / 2.0, cy + m.height / 2.0 - 1.0, size, Color::from_rgba(20, 16, 40, 255));
 }
 
 /// Lay `count` dots in a centered grid (rows of up to 5) within a box of
@@ -275,8 +291,8 @@ fn draw_pips_row(cx: f32, cy: f32, count: u32, color: Color) {
 }
 
 fn draw_ship(cx: f32, cy: f32, r: f32) {
-    let hull = color_u8!(90, 200, 230, 255);
-    let trim = color_u8!(230, 250, 255, 255);
+    let hull = Color::from_rgba(90, 200, 230, 255);
+    let trim = Color::from_rgba(230, 250, 255, 255);
     // The player's rocket, pointing up at the alien swarm.
     draw_triangle(
         vec2(cx, cy - r * 0.9),
@@ -290,7 +306,7 @@ fn draw_ship(cx: f32, cy: f32, r: f32) {
         vec2(cx - r * 0.3, cy + r * 0.6),
         vec2(cx + r * 0.3, cy + r * 0.6),
         vec2(cx, cy + r * 1.0),
-        color_u8!(255, 170, 80, 220),
+        Color::from_rgba(255, 170, 80, 220),
     );
 }
 
@@ -312,10 +328,10 @@ fn centered_banner(sw: f32, sh: f32, msg: &str, color: Color) {
     let w = measure_text(msg, None, size as u16, 1.0).width;
     // Soft plate behind the text.
     draw_rectangle(sw / 2.0 - w / 2.0 - 24.0, sh / 2.0 - 48.0, w + 48.0, 78.0,
-                   color_u8!(10, 14, 30, 200));
+                   Color::from_rgba(10, 14, 30, 200));
     draw_text(msg, sw / 2.0 - w / 2.0, sh / 2.0 + 8.0, size, color);
     let sub = "Tap to continue";
     let subs = 22.0;
     let sw2 = measure_text(sub, None, subs as u16, 1.0).width;
-    draw_text(sub, sw / 2.0 - sw2 / 2.0, sh / 2.0 + 40.0, subs, color_u8!(180, 190, 220, 220));
+    draw_text(sub, sw / 2.0 - sw2 / 2.0, sh / 2.0 + 40.0, subs, Color::from_rgba(180, 190, 220, 220));
 }

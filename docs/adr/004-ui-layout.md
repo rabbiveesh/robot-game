@@ -1,7 +1,7 @@
 # ADR-004: Declarative UI Layout with a Swappable Engine
 
-**Status:** Accepted and implemented (shop, swag, quest, challenge + CRA visuals, dialogue, settings)
-**Date:** 2026-09-23 (revised the same day: flexbox semantics, hardened checks, a taffy differential test run and retired)
+**Status:** Superseded by [ADR-006](006-bevy-ui-panels.md) (panels on Bevy UI; `ui/layout` deleted)
+**Date:** 2026-09-23 (revised the same day: flexbox semantics, hardened checks, a taffy differential test run and retired). 2026-10-22: the engine is now taffy (the Bevy port, ADR-005); `FlowEngine` is deleted.
 **Deciders:** Veesh, Claude
 
 ## Context
@@ -56,9 +56,9 @@ fits text and produces a `Frame` that both drawing and click handling read.
 | Reserved lines | `node.rs` `reserve_lines(n)` | A text leaf holds room for `n` lines even while empty. Used for slots that fill in later — the challenge's "Hmm, not quite!" feedback — so the answer buttons below don't jump out from under the kid's finger when it appears. Empty text takes no ink, so the sweep's overlap check ignores an empty reserved box. |
 | Engine seam | `engine.rs` | `trait LayoutEngine { fn compute(&self, &LayoutTree, bounds, &dyn TextMetrics) -> Vec<UiRect> }` — object-safe, not generic over panel ids. Contract: the root fills `bounds`; **exact (unrounded) CSS flexbox**, including overflow. |
 | Shared post-passes | `engine.rs` | `round_edges`: each absolute edge to the nearest pixel (monotonic, so nothing that fit starts overflowing). `clip`: a node that leaves its parent's content box is `None` with its subtree. Both run for every engine. |
-| In-house engine | `flow.rs` | `FlowEngine`: single-line flexbox with CSS semantics — no cross-axis cap, fit-content auto cross sizes, Center/End overflow the start side, automatic minimums, min-content contributions, and a step-for-step port of taffy's `resolve_flexible_lengths`. Held to taffy by a differential test (below). |
+| Engine | `taffy_engine.rs` | `TaffyEngine`: taffy (the flexbox implementation inside Bevy UI, so it adds nothing to the binary), styles mapped field for field, text leaves measured by `text.rs`. Until the Bevy port this was the in-house `FlowEngine`, held to taffy by a differential test (below). |
 | Text | `text.rs` | One `shape(spec, w, h)` decides both "how big is this text" (measure) and "how is it drawn" (resolve), so they can't disagree. Shared by every engine: it is the measure function a taffy engine calls. |
-| Metrics | `metrics.rs` | `TextMetrics`. `FontMetrics` parses the exact bytes `crate::text` gives macroquad (`assets/unifont-subset.ttf`) with fontdue — macroquad's own rasterizer — and sums advances the way `macroquad::text::measure_text` does. `renderer_drift()` compares it with `MacroquadMetrics` (macroquad itself) on a probe at startup. |
+| Metrics | `metrics.rs` | `TextMetrics`. `FontMetrics` parses the bundled font (`assets/unifont-subset.ttf`, which Bevy also draws with) with fontdue and sums advances. |
 | Output | `frame.rs` | `Frame<Id>`: placed texts (lines + baselines + fitted size), boxes, regions, hit targets keyed by panel-defined ids; `hit_at`, `rect(id)`, and `clipped()` — **every** clipped text / region / id'd node, with or without an id. |
 | Paging | `page.rs` | Kids can't scroll and flexbox can only overflow, so list paging lives **above** the engine: lay out, and if any row was clipped, rebuild with fewer rows plus "More >" until every page fits. Reads only `Frame::clipped`, so it survives an engine swap. |
 | Painter | `paint.rs` | The only code that turns a migrated panel's frame into pixels: `text`, `fill`, `outline`, `round_rect`, `dim`, `blink`, and a `Canvas` (circle, ring, line, rect, rect lines, text) for custom art inside a region that warns in debug builds when art strays outside it. |
@@ -95,8 +95,8 @@ What that means when writing a panel:
 - `Justify::End` on overflow pushes the *first* children off the start side;
   `Center` spills both ways; `SpaceBetween` with no room acts as `Start`.
 
-Pinned by `flow.rs` unit tests (cross overflow, percent + max, justify on overflow,
-rounding, fit-content). A differential test against taffy also checked these fixtures,
+Pinned by unit tests in `taffy_engine.rs` (cross overflow, percent + max, justify on
+overflow, rounding, fit-content), written for `FlowEngine` and now run against taffy. A differential test against taffy also checked these fixtures,
 plus the nested min-height rule and inner-basis shrinking, before it was retired (below).
 
 ## What the checks catch — and what they don't
@@ -124,7 +124,7 @@ than the visuals straying outside its region (only the debug-build `Canvas` warn
 drift between headless metrics and the renderer (see metrics below); whether text
 at a `Fit` floor is still big enough for a four-year-old.
 
-**A differential test against taffy (retired).** `tests/layout_taffy.rs` ran the same
+**A differential test against taffy (retired, and moot since the swap).** `tests/layout_taffy.rs` ran the same
 sweep bodies with every `layout()` call also computed by taffy 0.14 and required
 FlowEngine and taffy to agree on every node's **unrounded** rect to 0.01px (about
 8,600 layouts, plus CSS fixtures). It found three real divergences, all fixed:
@@ -132,14 +132,12 @@ container min-content counted `min_h` instead of preferred sizes; shrink was wei
 by the outer instead of the inner basis; and taffy's own rounding of relative offsets
 can push a snug child a pixel out of its parent, which is why rounding is a shared
 pass. It was then **removed**: it doubled `cargo test` time (~20s) to re-prove an
-agreement that only changes when `flow.rs` does. To bring it back, restore
-`tests/layout_taffy.rs`, the `taffy` dev-dependency and the debug-only
-`layout::with_engine` hook from commit b58cb74 (`git show b58cb74`), and re-run it
-whenever `flow.rs` or the node vocabulary changes.
+agreement that only changes when `flow.rs` does. The Bevy port then made taffy the
+engine (below), so there is nothing left to diff against.
 
 **`tests/layout_discipline.rs`** parses each migrated file (`MIGRATED`, now including
 `visuals.rs`) with syn and fails on:
-- raw macroquad drawing/measuring/camera/clock calls — any `draw` / `draw_*` /
+- raw drawing/measuring/camera/clock calls (`crate::draw`) — any `draw` / `draw_*` /
   `gl_*` by prefix (so `draw_rectangle_lines_ex`, `draw_hexagon`,
   `draw_multiline_text_ex`, `draw_texture*`, future ones) plus `measure_text`,
   `get_text_center`, `screen_width/height`, `get_time`, camera and context fns;
@@ -155,14 +153,10 @@ It does **not** catch: arithmetic on a frame's rect fields fed to paint
 (`r.x + 6.0`); raw-drawing helpers whose names don't start with `draw`; macros
 defined elsewhere that draw internally; method calls named `draw` on objects.
 
-**Metrics.** Layout measures Unifont headlessly. `text::init` now checks the
-renderer against `FontMetrics` on a probe (ASCII, digits, `− × ÷`, `★`, eight sizes)
-and returns `Err` if the font didn't load or widths differ by more than half a pixel
-— e.g. under `high_dpi` at a fractional scale, where macroquad rasterizes at
-`ceil(size × dpi)`. The game calls `init_or_die` (debug: panic; release: error log);
-the screenshot example (`high_dpi: true`) prints a loud warning. It does not catch a
-glyph outside the probe drifting; the per-paint debug check (`paint.rs`) still warns
-on the first one it sees.
+**Metrics.** Layout measures Unifont headlessly with fontdue; Bevy draws the same
+font. Under macroquad a startup probe (`renderer_drift`) checked the renderer agreed;
+under Bevy there is no such probe, so drift between the two shapers (they read the
+same advance widths, and Unifont has no kerning) would show only in screenshots.
 
 ### Migrated vs not
 
@@ -171,36 +165,15 @@ Migrated: shop (catalog, buy, trade pile, color picker), swag, quest, challenge
 Not migrated (use the shared `UiRect` only): leap, descent, title screen, interaction
 menu, kenken, sudoku, patterns, balance, shooter, HUD.
 
-## Swapping in taffy
+## Swapped in taffy (2026-10-22)
 
-Verified end to end (before the differential test was retired): with the steps below
-the whole suite (unit, sweep, differential, 64 story tests) passed, and the WASM grows by **~37KB** (1,677,336 → 1,714,783 bytes,
-opt-level s + LTO, FlowEngine dropped by the linker).
-
-1. `robot-buddy-game/Cargo.toml`: move the dev-dependency
-   `taffy = { version = "0.14", default-features = false, features = ["std", "flexbox", "taffy_tree"] }`
-   to `[dependencies]`.
-2. Recover `TaffyEngine` from `tests/layout_taffy.rs` at commit b58cb74 into a new
-   `src/ui/layout/taffy.rs` (~110 lines; derive `Default`; import from `super::`).
-   What it does:
-   - builds the `TaffyTree<usize>` bottom-up from the `LayoutTree` arena, each node
-     carrying its arena index as context, mapping `Style` field for field;
-   - forces the root's `size` to `bounds` (the engine contract: the root fills it);
-   - calls `disable_rounding()` — rounding is the shared `round_edges` pass;
-   - lays out with `compute_layout_with_measure` + `compute_leaf_layout`, measuring
-     text leaves with `text.rs`: width = known, else `MinContent → min_width`,
-     `MaxContent → natural_width`, `Definite(w) → natural_width.min(w).max(min_width)`;
-     height = known, else `MinContent → min_height`, otherwise `natural_height`;
-   - sums relative `location`s into absolute rects. No clip pass of its own: the
-     shared `clip` runs after it.
-3. `src/ui/layout/mod.rs`: `pub mod taffy;` and `pub type DefaultEngine = taffy::TaffyEngine;`.
-4. Delete `flow.rs`, or keep it and revive the differential test to diff the two.
-
-Nothing in any panel, the painter, `Frame`, paging, text fitting, the sweep, or the
-harness changes. Differences to expect: none on the swept panels as of b58cb74 (the
-differential test said so to 0.01px); if `flow.rs` changed since, revive the test
-first. Taffy alignment also has `safe` variants (`AlignItems::SAFE_CENTER` …) our
-vocabulary doesn't expose; adding one to `node.rs` means adding it to `FlowEngine` too.
+Done in the Bevy port (ADR-005), following the recipe this section used to give:
+`TaffyEngine` (from commit b58cb74's differential test, updated to the taffy 0.10
+that Bevy UI ships) lives in `src/ui/layout/taffy_engine.rs` and is the
+`DefaultEngine`; `flow.rs` is deleted. Nothing in any panel, the painter, `Frame`,
+paging, text fitting, the sweep or the harness changed, and the sweep passed
+unchanged. Taffy alignment also has `safe` variants (`AlignItems::SafeCenter` …) our
+vocabulary doesn't expose yet.
 
 ## Alternatives Considered
 
@@ -209,7 +182,7 @@ number that the next catalog item or longer string breaks. The bugs came from
 drawing and hit-testing being two unconnected computations, and patching offsets
 leaves them unconnected.
 
-**egui (via egui-macroquad).** egui is immediate-mode: layout happens while painting,
+**egui (via egui-macroquad, now bevy_egui).** egui is immediate-mode: layout happens while painting,
 inside its own input and frame loop, so `Game::step` couldn't hit-test headlessly
 (ADR-002) without running egui's context. It would add roughly a megabyte of WASM,
 and it brings its own theming and input model that fight the kid-styled custom art
@@ -221,11 +194,9 @@ window/group placement with a fixed skin, not constraint-based. It has no
 measure-then-place pass we could run in `step`, and styling it to look like the
 game costs more than the layout it saves.
 
-**Adopt taffy now.** Viable and now proven (see the swap above): ~37KB. We still
-need our text fitting, rounding/clip passes, paging policy and sanity sweep around
-it, and FlowEngine is ~440 lines (plus tests) that agree with it exactly on everything we lay
-out. Kept as the default for size; the swap is a one-file change whenever the UI
-wants something taffy has and FlowEngine doesn't.
+**Adopt taffy now.** Viable and proven at the time (~37KB), but FlowEngine agreed with
+it exactly and was smaller, so it stayed the default. Under Bevy, taffy is already in
+the binary, so the size argument flipped and the swap was made (above).
 
 **Keep FlowEngine's lenient semantics (cross-axis cap, zero-clamped justify).**
 Friendlier for narrow screens, but it's behaviour no browser or taffy has: panels
@@ -247,8 +218,8 @@ that (−8.5KB) and matches taffy's tree-building API.
   players do; a renderer that disagrees fails at startup instead of silently.
 - The CRA visuals can't outgrow their slot: measuring and drawing are one display
   list, and the number bond now squeezes on a phone instead of overflowing it.
-- The engine is CSS flexbox, checked against taffy, so a panel can be reasoned about
-  (or prototyped in a browser) as CSS, and the taffy swap is proven, not promised.
+- The engine is CSS flexbox (now taffy itself), so a panel can be reasoned about
+  (or prototyped in a browser) as CSS.
 - Latent bugs the sweeps found are fixed: the Hermie trade label escaped the panel
   at 480px; the settings parent section ran off a 960×720 window; the trade pile
   had no height budget; long quest options didn't fit; the number bond overflowed a
@@ -257,7 +228,7 @@ that (−8.5KB) and matches taffy's tree-building API.
 ### Negative
 - About +85KB WASM for the layout module, per-panel trees and frames, and the
   visuals display list.
-- `FontMetrics` parses the 440KB font a second time (macroquad parses its own copy)
+- `FontMetrics` parses the 440KB font a second time (Bevy parses its own copy)
   on first layout, which costs some memory and a one-off parse.
 - CSS's min-height rule is a real gotcha: a column that should squeeze needs
   `.min_h(0.0)`, and the sweep only finds a missing one on a screen short enough.

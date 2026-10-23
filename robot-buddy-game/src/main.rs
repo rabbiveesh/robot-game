@@ -1,33 +1,18 @@
-use robot_buddy_game::prelude::*;
+use bevy::prelude::*;
 
-use robot_buddy_game::input::FrameInput;
-use robot_buddy_game::game::{Game, GAME_W, GAME_H};
+use robot_buddy_game::app::{clock_seed, primary_window, GamePlugin};
+use robot_buddy_game::game::Game;
 
-fn window_conf() -> Conf {
-    Conf {
-        window_title: "Robot Buddy Adventure".to_string(),
-        window_width: GAME_W as i32,
-        window_height: GAME_H as i32,
-        ..Default::default()
-    }
-}
+fn main() {
+    let mut game = Game::new(clock_seed());
+    game.refresh_save_slots();
 
-#[macroquad::main(window_conf)]
-async fn main() {
-    // Load the bundled glyph font now that the GL context exists, so every
-    // draw_text call (math symbols, ★, emoji) renders instead of tofu.
-    robot_buddy_game::text::init_or_die();
-
-    let seed = macroquad::rand::rand() as u64;
-    let mut g = Game::new(seed);
-    g.refresh_save_slots();
-
-    loop {
-        let dt = get_frame_time();
-        let input = FrameInput::capture();
-        let screen = (screen_width(), screen_height());
-        g.step(&input, dt, screen);
-        g.render(screen, &input);
-        next_frame().await;
-    }
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(primary_window()),
+            ..default()
+        }))
+        .insert_non_send(game)
+        .add_plugins(GamePlugin)
+        .run();
 }

@@ -15,35 +15,28 @@ impl Game {
             balance: self.balance_for(ash.shop.currency()),
             view: shop_view(ash, self.outfit_color(wardrobe::PLAYER)),
             message: ash.message.as_deref(),
-            page: ash.page,
         })
     }
 
-    /// The shop panel as laid out on `screen` — what's drawn and what's
-    /// tappable (tests click through this, same as `step`).
-    pub fn shop_layout(&self, screen: (f32, f32)) -> Option<ui::shop::ShopLayout> {
-        self.shop_model().map(|m| ui::shop::layout(&m, screen))
+    /// The shop panel as shown.
+    pub(super) fn shop_panel_view(&self) -> Option<ui::shop::ShopPanelView> {
+        let model = self.shop_model()?;
+        let look = ui::shop::KidLook {
+            gender: self.player_gender,
+            worn: model.owned.clone(),
+            color: self.outfit_color(wardrobe::PLAYER).to_string(),
+        };
+        Some(ui::shop::ShopPanelView::new(&model, look))
     }
 
-    pub(super) fn step_shop(&mut self, input: &FrameInput, screen: (f32, f32)) {
+    pub(super) fn step_shop(&mut self, input: &FrameInput) {
         let intent = {
             let Some(model) = self.shop_model() else { return };
-            let layout = ui::shop::layout(&model, screen);
-            if input.mouse_clicked {
-                let (mx, my) = input.mouse_pos;
-                ui::shop::handle_click(mx, my, &layout, &model.view)
-            } else {
-                ui::shop::handle_key(input, &model.view)
-            }
+            ui::shop::handle_click(input, &model.view).or_else(|| ui::shop::handle_key(input, &model.view))
         };
         let Some(intent) = intent else { return };
 
         match intent {
-            ui::shop::ShopInput::Page(page) => {
-                if let Some(ash) = self.activity.shop.as_mut() {
-                    ash.page = page;
-                }
-            }
             ui::shop::ShopInput::Close => {
                 // "Done" dismisses the nearest thing: the color picker if it's
                 // up, otherwise the whole shop.
@@ -285,26 +278,6 @@ impl Game {
         });
     }
 
-    /// Shop overlay, plus the live outfit preview while picking a color.
-    pub(super) fn render_shop_overlay(&self, screen: (f32, f32)) {
-        if let (Some(ash), Some(model)) = (self.activity.shop.as_ref(), self.shop_model()) {
-            let layout = ui::shop::layout(&model, screen);
-            ui::shop::draw_shop(&model, &layout);
-
-            // While picking an outfit color, show a live preview of the kid in
-            // the panel's top-right so tapping swatches visibly recolors them.
-            if let Some(r) = layout.preview() {
-                let (px, py) = (r.x + 4.0, r.y + 14.0);
-                match self.player_gender {
-                    Gender::Boy => sprites::player::draw_player_boy(px, py, Dir::Down, 0, self.game_time),
-                    Gender::Girl => sprites::player::draw_player_girl(px, py, Dir::Down, 0, self.game_time),
-                }
-                sprites::player::draw_player_cosmetics(px, py, Dir::Down, 0, &ash.owned,
-                    self.outfit_color(wardrobe::PLAYER));
-            }
-        }
-    }
-
     /// Open the Give-Swag panel for whoever the menu is talking to: to the
     /// list of what the kid is wearing, or (`recolor_only`, from a buddy's "New
     /// color?") straight to that buddy's Color Change swatches.
@@ -321,7 +294,6 @@ impl Game {
             recipient_sprite: sprite,
             items: self.swag_catalog_for(wardrobe::PLAYER),
             message: None,
-            page: 0,
             picking_color: recolor_only,
             recolor_only,
         });
@@ -345,35 +317,31 @@ impl Game {
             items: &asw.items,
             taken: self.wardrobe.worn_by(&asw.recipient_id),
             message: asw.message.as_deref(),
-            page: asw.page,
             picking,
         })
     }
 
-    /// The swag picker as laid out on `screen`.
-    pub fn swag_layout(&self, screen: (f32, f32)) -> Option<ui::swag::SwagLayout> {
-        self.swag_model().map(|m| ui::swag::layout(&m, screen))
+    /// The Give-Swag panel as shown, with the buddy in their current outfit.
+    pub(super) fn swag_panel_view(&self) -> Option<ui::swag::SwagPanelView> {
+        let asw = self.activity.swag.as_ref()?;
+        let model = self.swag_model()?;
+        let look = ui::swag::BuddyLook {
+            sprite: asw.recipient_sprite,
+            worn: model.taken.clone(),
+            color: self.outfit_color(&asw.recipient_id).to_string(),
+        };
+        Some(ui::swag::SwagPanelView::new(&model, look))
     }
 
-    pub(super) fn step_swag(&mut self, input: &FrameInput, screen: (f32, f32)) {
+    pub(super) fn step_swag(&mut self, input: &FrameInput) {
         let intent = {
             let Some(model) = self.swag_model() else { return };
-            if input.mouse_clicked {
-                let (mx, my) = input.mouse_pos;
-                ui::swag::handle_click(mx, my, &ui::swag::layout(&model, screen))
-            } else {
-                ui::swag::handle_key(input, &model)
-            }
+            ui::swag::handle_click(input).or_else(|| ui::swag::handle_key(input, &model))
         };
         let Some(intent) = intent else { return };
         let Some(asw) = self.activity.swag.as_ref() else { return };
 
         match intent {
-            ui::swag::SwagInput::Page(page) => {
-                if let Some(asw) = self.activity.swag.as_mut() {
-                    asw.page = page;
-                }
-            }
             ui::swag::SwagInput::Close => {
                 // Done backs out of the swatches to the list they came from;
                 // opened for a recolour, there's no list to go back to.
@@ -441,35 +409,10 @@ impl Game {
         domain_shop::swag_items().into_iter().filter(|i| worn.contains(&i.id)).collect()
     }
 
-    /// Give-Swag overlay, with the buddy previewed in their current outfit.
-    pub(super) fn render_swag_overlay(&self, screen: (f32, f32)) {
-        if let (Some(asw), Some(model)) = (self.activity.swag.as_ref(), self.swag_model()) {
-            let layout = ui::swag::layout(&model, screen);
-            let taken = model.taken;
-            ui::swag::draw(&model, &layout);
-            // Live preview of the buddy in their current outfit, so handing
-            // something over visibly lands on them.
-            if let Some((px, py)) = layout.preview() {
-                match asw.recipient_sprite {
-                    Some(sprite) => {
-                        sprite.draw_sprite(px, py, Dir::Down, self.game_time, false);
-                        sprites::swag::draw_swag(px, py, Dir::Down, 0.0, taken,
-                            self.outfit_color(&asw.recipient_id), sprite.swag_fit());
-                    }
-                    None => {
-                        sprites::robot::draw_robot(px, py, Dir::Down, 0, self.game_time);
-                        sprites::swag::draw_swag(px, py, Dir::Down, 0.0, taken,
-                            self.outfit_color(&asw.recipient_id), sprites::swag::SwagFit::ROBOT);
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Build the shop's current view (browsing, solving a purchase subtraction,
-/// or picking an outfit color) from the active session. Borrows the session
-/// so the layout/draw can read it.
+/// or picking an outfit color) from the active session. Borrows the session.
 fn shop_view<'a>(ash: &'a ActiveShop, color_choice: &str) -> ui::shop::ShopView<'a> {
     if ash.picking_color {
         let current = sprites::player::OUTFIT_COLORS
@@ -575,26 +518,20 @@ mod tests {
             message: None,
             source_npc: "shopkeeper".into(),
             picking_color: false,
-            page: 0,
         });
         g.set_state(GameState::Shop);
     }
 
-    /// Click whatever shop element sits at the center of `rect`.
-    fn click_shop(g: &mut Game, rect: ui::shop::UiRect) {
-        let click = crate::input::FrameInput::empty()
-            .with_mouse_click(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+    /// Tap a shop button.
+    fn tap(g: &mut Game, id: ui::shop::ShopId) {
+        let click = crate::input::FrameInput::empty().with_ui_press(ui::UiAction::Shop(id));
         g.step(&click, 1.0 / 60.0, SCREEN);
     }
 
-    fn shop_layout(g: &Game) -> ui::shop::ShopLayout {
-        g.shop_layout(SCREEN).expect("shop should be open")
-    }
-
     /// The catalog row for `id`.
-    fn shop_row(g: &Game, id: &str) -> ui::shop::UiRect {
+    fn shop_row(g: &Game, id: &str) -> ui::shop::ShopId {
         let i = g.activity.shop.as_ref().unwrap().catalog.iter().position(|it| it.id == id).expect("item in catalog");
-        shop_layout(g).item(i).expect("row on screen")
+        ui::shop::ShopId::Item(i)
     }
 
     #[test]
@@ -605,26 +542,21 @@ mod tests {
 
         // Tap the Color Change row, then answer the purchase subtraction.
         let row = shop_row(&g, "color_change");
-        click_shop(&mut g, row);
-        let answer = g.activity.shop.as_ref().unwrap().answer;
-        let tile = {
-            let ash = g.activity.shop.as_ref().unwrap();
-            shop_layout(&g).answer(&shop_view(ash, g.outfit_color(wardrobe::PLAYER)), answer).expect("correct answer tile")
-        };
-        click_shop(&mut g, tile);
+        tap(&mut g, row);
+        let ash = g.activity.shop.as_ref().unwrap();
+        let tile = ash.choices.iter().position(|&c| c == ash.answer).expect("correct answer tile");
+        tap(&mut g, ui::shop::ShopId::Answer(tile));
 
         let ash = g.activity.shop.as_ref().unwrap();
         assert!(ash.owned.contains("color_change"));
         assert!(ash.picking_color, "buying Color Change should open the picker");
 
         // Pick the second swatch; the kid's outfit color should change.
-        let swatch = shop_layout(&g).swatch(1).unwrap();
-        click_shop(&mut g, swatch);
+        tap(&mut g, ui::shop::ShopId::Swatch(1));
         assert_eq!(g.outfit_color(wardrobe::PLAYER), sprites::player::OUTFIT_COLORS[1].0);
 
         // Done dismisses the picker but keeps the shop open.
-        let close = shop_layout(&g).done().unwrap();
-        click_shop(&mut g, close);
+        tap(&mut g, ui::shop::ShopId::Done);
         let ash = g.activity.shop.as_ref().unwrap();
         assert!(!ash.picking_color, "Done should close the picker first");
         assert!(g.activity.shop.is_some(), "the shop itself should stay open");
@@ -638,14 +570,13 @@ mod tests {
 
         // Reopen the picker from the owned Color Change row.
         let row = shop_row(&g, "color_change");
-        click_shop(&mut g, row);
+        tap(&mut g, row);
         assert!(g.activity.shop.as_ref().unwrap().picking_color);
 
         // Pick a sequence with repeats and back-tracking. Each pick must stick,
         // the picker must stay open, and the highlighted swatch must follow.
         for &i in &[1usize, 3, 6, 3, 1, 0, 6, 0] {
-            let swatch = shop_layout(&g).swatch(i).unwrap();
-            click_shop(&mut g, swatch);
+            tap(&mut g, ui::shop::ShopId::Swatch(i));
             assert_eq!(g.outfit_color(wardrobe::PLAYER), sprites::player::OUTFIT_COLORS[i].0,
                 "picking swatch {i} should set the kid's colour to {}", sprites::player::OUTFIT_COLORS[i].0);
             assert!(g.activity.shop.as_ref().unwrap().picking_color,
@@ -664,7 +595,7 @@ mod tests {
         g.dress(wardrobe::WardrobeAction::put_on(wardrobe::PLAYER, "color_change"));
         open_shop(&mut g);
         let row = shop_row(&g, "color_change");
-        click_shop(&mut g, row);
+        tap(&mut g, row);
         assert!(
             g.activity.shop.as_ref().unwrap().picking_color,
             "tapping an owned Color Change should reopen the picker, not refuse the sale"

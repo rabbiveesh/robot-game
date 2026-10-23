@@ -1,6 +1,6 @@
-//! Robot Buddy game library. `src/main.rs` is a thin macroquad shim that drives
-//! `Game::step` + `Game::render` each frame; tests in `tests/` exercise `Game`
-//! directly with no window.
+//! Robot Buddy game library. `src/main.rs` starts a Bevy app ([`app`]) that
+//! drives `Game::step` + `Game::render` each frame; tests in `tests/` exercise
+//! `Game` directly with no window.
 
 pub mod tilemap;
 pub mod sprites;
@@ -15,5 +15,9 @@ pub mod input;
 pub mod pathfinding;
 pub mod number_track;
 pub mod text;
+pub mod draw;
+pub mod app;
+#[cfg(target_arch = "wasm32")]
+pub mod web;
 pub mod prelude;
 pub mod game;

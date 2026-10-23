@@ -35,9 +35,8 @@ impl Game {
     /// One frame of the dive. Kicks run through the pure reducer; landing on
     /// the door holds a short beat, pays a pearl for a clean dive, and then
     /// lets the shaft portal do its normal job.
-    pub(super) fn step_descent(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+    pub(super) fn step_descent(&mut self, input: &FrameInput, dt: f32) {
         let Some(ad) = self.activity.descent.as_ref() else { return };
-        let layout = ui::descent::layout(&ad.session, screen);
 
         // Landed: hold the beat, then descend for real.
         if ad.session.phase == DivePhase::Landed {
@@ -52,12 +51,7 @@ impl Game {
             return;
         }
 
-        let intent = if input.mouse_clicked {
-            let (mx, my) = input.mouse_pos;
-            ui::descent::handle_click(mx, my, &layout)
-        } else {
-            ui::descent::handle_key(input, &ad.session)
-        };
+        let intent = ui::descent::handle_click(input).or_else(|| ui::descent::handle_key(input, &ad.session));
         let Some(intent) = intent else { return };
 
         let action = match intent {

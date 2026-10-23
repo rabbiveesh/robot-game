@@ -1,4 +1,4 @@
-//! Grid pathfinding for tap-to-move. Pure logic — no macroquad, no rendering.
+//! Grid pathfinding for tap-to-move. Pure logic — no engine, no rendering.
 //!
 //! Tap-to-move (tap-to-move-spec) needs to turn "the kid tapped that tile" into
 //! a walk path. The core is a 4-directional BFS over the tile grid, parameter-

@@ -1,5 +1,5 @@
 //! Shelly's leap panel — the strip along the bottom of the reef while a pearl
-//! trip is going. Pure layout + render; the rules live in
+//! trip is going, as a Bevy UI panel. The rules live in
 //! `robot_buddy_domain::logic::leap`.
 //!
 //! It shows her call ("stone 12, four leaps") and the leap sizes on offer as
@@ -7,61 +7,58 @@
 //! committed. Everything a kid needs to see stays on screen — the clue is never
 //! a toast they can miss.
 
+use bevy::ecs::spawn::SpawnWith;
+use bevy::prelude::{default, Bundle, ChildSpawner, Children, JustifyContent, Node, PositionType, SpawnRelated, UiRect};
+use bevy::text::Justify;
+use bevy::ui::{percent, px, BackgroundColor, BorderColor};
+
 use crate::prelude::*;
 use robot_buddy_domain::logic::leap::{LeapPhase, LeapSession};
 
-use crate::ui::layout::{paint, UiRect};
+use super::kit::{self, button, col, fitted, Panel, Tint};
+use super::views::UiViews;
+use super::UiAction;
+use crate::input::FrameInput;
 
-pub struct LeapLayout {
-    pub panel: UiRect,
-    /// Size tiles, with the size each one commits to.
-    pub choices: Vec<(UiRect, u8)>,
-    /// Shown once a size is locked in.
-    pub leap_btn: Option<UiRect>,
-    pub back_btn: Option<UiRect>,
+/// What the strip shows: Shelly's call, a status line, and the buttons.
+#[derive(Clone, PartialEq, Debug)]
+pub struct LeapView {
+    pub call: String,
+    pub status: String,
+    /// Sizes on offer, until one is picked.
+    pub choices: Vec<u8>,
+    /// The size the kid committed to (shows Leap / Swim back).
+    pub chosen: Option<u8>,
 }
 
-/// Panel geometry, all measured off the panel's top edge so the text rows and
-/// the button row can't drift into each other.
-const CALL_Y: f32 = 30.0;
-const STATUS_Y: f32 = 56.0;
-const ROW_Y: f32 = 70.0;
-const BTN_H: f32 = 54.0;
-/// Enough room for both text rows, the buttons, and a margin under them.
-const PANEL_H: f32 = ROW_Y + BTN_H + 14.0;
-
-pub fn layout(session: &LeapSession, screen: (f32, f32)) -> LeapLayout {
-    let (sw, sh) = screen;
-    let panel_h = PANEL_H;
-    let panel = UiRect { x: 0.0, y: sh - panel_h, w: sw, h: panel_h };
-
-    let btn_h = BTN_H;
-    let gap = 12.0;
-    let row_y = panel.y + ROW_Y;
-    let mut choices = Vec::new();
-    let mut leap_btn = None;
-    let mut back_btn = None;
-
-    if session.chosen.is_none() {
-        let n = session.puzzle.choices.len().max(1);
-        let btn_w = 96.0f32.min((sw - 40.0 - (n as f32 - 1.0) * gap) / n as f32);
-        let row_w = n as f32 * btn_w + (n as f32 - 1.0) * gap;
-        let start_x = sw / 2.0 - row_w / 2.0;
-        for (i, &size) in session.puzzle.choices.iter().enumerate() {
-            choices.push((
-                UiRect { x: start_x + i as f32 * (btn_w + gap), y: row_y, w: btn_w, h: btn_h },
-                size,
-            ));
-        }
-    } else {
-        let btn_w = 150.0;
-        let row_w = btn_w * 2.0 + gap;
-        let start_x = sw / 2.0 - row_w / 2.0;
-        leap_btn = Some(UiRect { x: start_x, y: row_y, w: btn_w, h: btn_h });
-        back_btn = Some(UiRect { x: start_x + btn_w + gap, y: row_y, w: btn_w, h: btn_h });
+impl LeapView {
+    pub fn new(session: &LeapSession, call: String) -> Self {
+        let status = match session.phase {
+            LeapPhase::Choosing => "How big is each leap?".to_string(),
+            LeapPhase::Overshot => format!(
+                "Stone {} — past the pearl! Swim back and pick again.", session.position,
+            ),
+            _ => match session.next_stone() {
+                Some(next) => format!(
+                    "On stone {}. Leaping by {}s — next stop {next}.",
+                    session.position,
+                    session.chosen.unwrap_or(0),
+                ),
+                None => format!("On stone {}.", session.position),
+            },
+        };
+        let choices = if session.chosen.is_none() { session.puzzle.choices.clone() } else { vec![] };
+        LeapView { call, status, choices, chosen: session.chosen }
     }
+}
 
-    LeapLayout { panel, choices, leap_btn, back_btn }
+/// The leap panel's buttons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeapId {
+    /// A size tile; carries the size it commits to.
+    Size(u8),
+    Leap,
+    SwimBack,
 }
 
 pub enum LeapInput {
@@ -70,153 +67,71 @@ pub enum LeapInput {
     SwimBack,
 }
 
-pub fn handle_click(mx: f32, my: f32, layout: &LeapLayout) -> Option<LeapInput> {
-    for (rect, size) in &layout.choices {
-        if rect.contains(mx, my) {
-            return Some(LeapInput::Pick(*size));
-        }
-    }
-    if layout.leap_btn.is_some_and(|r| r.contains(mx, my)) {
-        return Some(LeapInput::Leap);
-    }
-    if layout.back_btn.is_some_and(|r| r.contains(mx, my)) {
-        return Some(LeapInput::SwimBack);
-    }
-    None
-}
-
-/// True when (mx, my) is over the panel at all — the map shouldn't take a
-/// click-to-walk from a tap the kid aimed at Shelly's buttons.
-pub fn absorbs_click(mx: f32, my: f32, layout: &LeapLayout) -> bool {
-    layout.panel.contains(mx, my)
-}
-
 const PANEL_BG: Color = Color::new(0.043, 0.157, 0.216, 0.92);
 const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0);
+const EDGE: Color = Color::new(1.0, 1.0, 1.0, 0.35);
 
+pub struct LeapPanel;
 
-pub fn draw(session: &LeapSession, layout: &LeapLayout, call: &str, mouse: (f32, f32)) {
-    let p = layout.panel;
-    draw_rectangle(p.x, p.y, p.w, p.h, PANEL_BG);
-    draw_line(p.x, p.y, p.x + p.w, p.y, 3.0, Color::new(0.30, 0.85, 0.90, 0.7));
-
-    // Shelly's call, then a status line that tracks the trip. Both are
-    // centered and shrink to fit — the call is a full sentence.
-    paint::centered_fitted(call, p, p.y + CALL_Y, 24, GOLD);
-
-    let status = match session.phase {
-        LeapPhase::Choosing => "How big is each leap?".to_string(),
-        LeapPhase::Overshot => format!(
-            "Stone {} — past the pearl! Swim back and pick again.", session.position,
-        ),
-        _ => match session.next_stone() {
-            Some(next) => format!(
-                "On stone {}. Leaping by {}s — next stop {next}.",
-                session.position,
-                session.chosen.unwrap_or(0),
-            ),
-            None => format!("On stone {}.", session.position),
-        },
-    };
-    paint::centered_fitted(&status, p, p.y + STATUS_Y, 19, Color::new(1.0, 1.0, 1.0, 0.8));
-
-    let (mx, my) = mouse;
-    for (i, (rect, size)) in layout.choices.iter().enumerate() {
-        let hot = rect.contains(mx, my);
-        let bg = if hot { Color::from_rgba(50, 140, 190, 255) } else { Color::from_rgba(33, 96, 170, 255) };
-        draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg);
-        draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.35));
-        let label = format!("[{}] {size}", i + 1);
-        let m = measure_text(&label, None, 28, 1.0);
-        draw_text(&label, rect.x + rect.w / 2.0 - m.width / 2.0, rect.y + rect.h / 2.0 + 10.0,
-            28.0, WHITE);
+impl Panel for LeapPanel {
+    type View = LeapView;
+    const Z: i32 = 10;
+    fn view(views: &UiViews) -> Option<&LeapView> {
+        views.leap.as_ref()
     }
-
-    if let Some(r) = layout.leap_btn {
-        let hot = r.contains(mx, my);
-        let bg = if hot { Color::from_rgba(60, 170, 120, 255) } else { Color::from_rgba(42, 130, 92, 255) };
-        draw_rectangle(r.x, r.y, r.w, r.h, bg);
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.35));
-        let label = format!("Leap {} >", session.chosen.unwrap_or(0));
-        let m = measure_text(&label, None, 26, 1.0);
-        draw_text(&label, r.x + r.w / 2.0 - m.width / 2.0, r.y + r.h / 2.0 + 9.0, 26.0, WHITE);
-    }
-    if let Some(r) = layout.back_btn {
-        let hot = r.contains(mx, my);
-        let bg = if hot { Color::from_rgba(90, 110, 130, 255) } else { Color::from_rgba(66, 84, 100, 255) };
-        draw_rectangle(r.x, r.y, r.w, r.h, bg);
-        draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(1.0, 1.0, 1.0, 0.35));
-        let label = "< Swim back";
-        let m = measure_text(label, None, 26, 1.0);
-        draw_text(label, r.x + r.w / 2.0 - m.width / 2.0, r.y + r.h / 2.0 + 9.0, 26.0, WHITE);
+    fn bundle(v: &LeapView) -> impl Bundle {
+        let v = v.clone();
+        let strip = Node {
+            position_type: PositionType::Absolute,
+            bottom: px(0),
+            width: percent(100),
+            padding: UiRect::new(px(16), px(16), px(10), px(14)),
+            row_gap: px(6),
+            border: UiRect::top(px(3)),
+            ..col()
+        };
+        (
+            strip,
+            BackgroundColor(kit::color(PANEL_BG)),
+            BorderColor::all(kit::color(Color::new(0.30, 0.85, 0.90, 0.7))),
+            Children::spawn(SpawnWith(move |p: &mut ChildSpawner| spawn_strip(p, &v))),
+        )
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ui::layout::paint::MIN_FONT;
-    use crate::ui::layout::text::fit_size_by;
-    use robot_buddy_domain::logic::leap::{Clue, LeapPuzzle};
-
-    fn session() -> LeapSession {
-        LeapSession::new(LeapPuzzle {
-            max: 12,
-            pearl: 9,
-            size: 3,
-            count: 3,
-            choices: vec![3, 6, 7],
-            clue: Clue::Count { n: 3 },
-        })
-    }
-
-    /// Regression: the status line used to be drawn at the panel's bottom edge,
-    /// which put it underneath the buttons. Every row has to own its own band.
-    #[test]
-    fn the_text_rows_never_overlap_the_buttons() {
-        let s = session();
-        for screen in [(640.0, 480.0), (960.0, 720.0), (1600.0, 900.0)] {
-            let l = layout(&s, screen);
-            let top = l.panel.y;
-            for (rect, _) in &l.choices {
-                assert!(rect.y > top + STATUS_Y,
-                    "{screen:?}: buttons must start below the status line");
-                assert!(rect.y + rect.h <= l.panel.y + l.panel.h,
-                    "{screen:?}: buttons must stay inside the panel");
-            }
-            assert!(top + STATUS_Y > top + CALL_Y, "the status sits under the call");
+fn spawn_strip(p: &mut ChildSpawner, v: &LeapView) {
+    // Shelly's call is a full sentence: it shrinks on a narrow window.
+    p.spawn(Node { flex_shrink: 0.0, ..col() }).with_child(fitted(v.call.clone(), 24.0, 12.0, true, GOLD, Justify::Center));
+    p.spawn(Node { flex_shrink: 0.0, ..col() })
+        .with_child(fitted(v.status.clone(), 19.0, 12.0, true, Color::new(1.0, 1.0, 1.0, 0.8), Justify::Center));
+    let row = Node { column_gap: px(12), justify_content: JustifyContent::Center, margin: UiRect::top(px(4)), ..default() };
+    p.spawn(row).with_children(|p| {
+        for (i, &size) in v.choices.iter().enumerate() {
+            tile(p, LeapId::Size(size), 96.0, format!("[{}] {size}", i + 1), 28.0, (33, 96, 170), (50, 140, 190));
         }
-    }
-
-    /// Shelly's call is a full sentence; on a narrow window it has to shrink
-    /// rather than run off the edge. Measured with the bundled game font
-    /// (headless, the same widths macroquad renders).
-    #[test]
-    fn a_long_call_shrinks_to_fit_the_panel() {
-        let call = "My pearl's under stone 9! You get there in 3 leaps - how big is each one?";
-        let m = crate::ui::layout::FontMetrics::bundled();
-        let width_of = |t: &str, size: u16| crate::ui::layout::TextMetrics::width(m, t, size);
-        for width in [480.0f32, 640.0, 960.0, 1600.0] {
-            let room = width - 32.0;
-            let size = fit_size_by(call, room, 24, MIN_FONT, width_of);
-            assert!(width_of(call, size) <= room || size == MIN_FONT,
-                "at {width}px the call still overflows at size {size}");
-            assert!(size <= 24, "never bigger than asked for");
+        if let Some(size) = v.chosen {
+            tile(p, LeapId::Leap, 150.0, format!("Leap {size} >"), 26.0, (42, 130, 92), (60, 170, 120));
+            tile(p, LeapId::SwimBack, 150.0, "< Swim back".into(), 26.0, (66, 84, 100), (90, 110, 130));
         }
-        // A roomy window keeps the full-size text.
-        assert_eq!(fit_size_by("short", 900.0, 24, MIN_FONT, width_of), 24);
-    }
+    });
+}
 
-    /// The panel keeps its buttons on screen at the sizes a kid actually plays at.
-    #[test]
-    fn buttons_stay_on_screen() {
-        let s = session();
-        for screen in [(480.0, 800.0), (960.0, 720.0)] {
-            let l = layout(&s, screen);
-            for (rect, _) in &l.choices {
-                assert!(rect.x >= 0.0 && rect.x + rect.w <= screen.0,
-                    "{screen:?}: a size tile runs off the edge");
-            }
-        }
-    }
+fn tile(p: &mut ChildSpawner, id: LeapId, w: f32, label: String, size: f32, idle: (u8, u8, u8), hot: (u8, u8, u8)) {
+    let rgb = |(r, g, b): (u8, u8, u8)| Color::from_rgba(r, g, b, 255);
+    // Tiles share the row when it's narrow, down to a thumb's width.
+    let node = Node { width: px(w), height: px(54), min_width: px(44), flex_shrink: 1.0, ..kit::centered() };
+    p.spawn((
+        button(UiAction::Leap(id), node, rgb(idle), EDGE),
+        Tint { idle: kit::color(rgb(idle)), hot: kit::color(rgb(hot)) },
+    ))
+    .with_child(fitted(label, size, 14.0, false, WHITE, Justify::Center));
+}
+
+pub fn handle_click(input: &FrameInput) -> Option<LeapInput> {
+    let Some(UiAction::Leap(id)) = input.ui_press else { return None };
+    Some(match id {
+        LeapId::Size(n) => LeapInput::Pick(n),
+        LeapId::Leap => LeapInput::Leap,
+        LeapId::SwimBack => LeapInput::SwimBack,
+    })
 }
