@@ -113,7 +113,7 @@ ADRs document key design decisions, their context, and consequences. Read these 
 - **CRA Progression**: Concrete → Representational → Abstract. Tracked per math operation. A kid can be abstract for addition but concrete for division.
 - **Frustration Detection**: Analyzes rolling window of last 20 attempts + behavioral signals. Produces recommendations (drop band, encourage, switch to chat).
 - **Stealth Assessment**: Every interaction is a data point. The child never feels tested. Assessment happens through gameplay.
-- **Event Sourcing with Snapshots**: Events accumulate during a session. On save, snapshot the state + keep last 5 session logs. Bounded growth (~30KB cap).
+- **Event Sourcing with Snapshots**: Events accumulate during a session. On save, snapshot the state + keep last 5 session logs. Bounded growth: the profile part stays small; the attempt log (`attempt_log::MAX_ATTEMPTS` records, a few hundred bytes each) is the bulk, a few hundred KB per slot when full.
 
 ## Commands
 
