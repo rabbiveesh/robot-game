@@ -36,7 +36,7 @@ These are NOT optional. Every PR must respect these:
 ## Tech Stack
 
 - **One language: Rust.** Domain crate + macroquad game crate, single WASM binary.
-- **Tests**: `cargo test` runs 62 domain unit tests + 7 game integration tests (headless story-style — see ADR-002).
+- **Tests**: `cargo test` runs the domain unit tests and the headless story-style game integration tests (see ADR-002). Don't write test counts into docs; they go stale on the next PR.
 - **Build**: `cargo build --target wasm32-unknown-unknown --release` → `target/wasm32-unknown-unknown/release/robot-buddy-game.wasm`.
 - **CI**: GitHub Actions: `cargo test` + WASM build + deploy to Pages. No Node, no npm.
 
@@ -95,7 +95,7 @@ robot-buddy-game/                # Macroquad game (depends on domain)
     net/                         # AI dialogue fetch
   tests/                         # headless integration tests — plain `cargo test`, no window
     common/mod.rs                # Harness + story helpers (walk_to_npc, interact, answer_correctly)
-    headless.rs, story.rs        # 7 player-flow tests; assertions read GameEvent log
+    headless.rs, story.rs        # player-flow tests; assertions read GameEvent log
     layout_sweep.rs, sweep/      # assert_sane over migrated panels × 5 screens (360×640 phone up) × awkward data
     layout_discipline.rs         # migrated panels may not call raw draw/measure fns or hand-make rects
   www/                           # build output (gitignored except index.html)
@@ -116,13 +116,13 @@ ADRs document key design decisions, their context, and consequences. Read these 
 - **CRA Progression**: Concrete → Representational → Abstract. Tracked per math operation. A kid can be abstract for addition but concrete for division.
 - **Frustration Detection**: Analyzes rolling window of last 20 attempts + behavioral signals. Produces recommendations (drop band, encourage, switch to chat).
 - **Stealth Assessment**: Every interaction is a data point. The child never feels tested. Assessment happens through gameplay.
-- **Event Sourcing with Snapshots**: Events accumulate during a session. On save, snapshot the state + keep last 5 session logs. Bounded growth (~30KB cap).
+- **Event Sourcing with Snapshots**: Events accumulate during a session. On save, snapshot the state + keep last 5 session logs. Bounded growth: the profile part stays small; the attempt log (`attempt_log::MAX_ATTEMPTS` records, a few hundred bytes each) is the bulk, a few hundred KB per slot when full.
 
 ## Commands
 
 ```bash
 # Test
-cargo test                                                    # 62 domain + 7 game integration tests
+cargo test                                                    # domain + game integration tests
 
 # Build WASM
 cargo build --target wasm32-unknown-unknown --release
