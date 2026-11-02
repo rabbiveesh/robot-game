@@ -14,8 +14,11 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      # Bevy's cold build is long; cache compiled dependencies between runs.
+      - uses: Swatinem/rust-cache@v2
+
       - name: Run tests
         run: cargo test
 
       - name: Build WASM
-        run: cargo build --target wasm32-unknown-unknown --release
+        run: cargo build --target wasm32-unknown-unknown --profile wasm-release -p robot-buddy-game

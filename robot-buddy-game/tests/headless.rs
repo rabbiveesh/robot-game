@@ -1,10 +1,10 @@
 //! Truly headless integration test. Constructs a Game and drives it with
-//! synthetic FrameInput. No macroquad window. No Window::from_config.
+//! synthetic FrameInput. No window, no Bevy app.
 //! No `harness = false`. Just plain `cargo test`.
 //!
-//! If this runs green, step() is genuinely pure — no macroquad context needed.
+//! If this runs green, step() is genuinely pure — no rendering context needed.
 
-use macroquad::prelude::KeyCode;
+use robot_buddy_game::input::KeyCode;
 use robot_buddy_game::game::{Game, GameState};
 use robot_buddy_game::input::FrameInput;
 

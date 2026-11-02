@@ -45,19 +45,13 @@ pub fn cancel() {
 // ─── PLATFORM ───────────────────────────────────────────
 
 #[cfg(target_arch = "wasm32")]
-extern "C" {
-    fn tts_speak(text_ptr: *const u8, text_len: usize, pitch100: u32, rate100: u32);
-    fn tts_cancel();
-}
-
-#[cfg(target_arch = "wasm32")]
 fn platform_speak(text: &str, pitch: u32, rate: u32) {
-    unsafe { tts_speak(text.as_ptr(), text.len(), pitch, rate); }
+    crate::web::speak(text, pitch as f32 / 100.0, rate as f32 / 100.0);
 }
 
 #[cfg(target_arch = "wasm32")]
 fn platform_cancel() {
-    unsafe { tts_cancel(); }
+    crate::web::cancel_speech();
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -168,8 +168,7 @@ impl Game {
         let Some(l) = self.pearl_hop_layout(screen) else { return };
         self.activity.pearl_hop.as_mut().unwrap().now = input.now;
         let a = self.activity.pearl_hop.as_ref().unwrap();
-        let (mx, my) = input.mouse_pos;
-        let tap = if input.mouse_clicked { ui::pearl_hop::handle_click(mx, my, &l) } else { None };
+        let tap = ui::pearl_hop::handle_click(input);
         let key = ui::pearl_hop::handle_key(input, &a.session);
 
         // Leaving is always one tap (or ESC) away, whatever she's doing.

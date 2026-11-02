@@ -1,5 +1,5 @@
 # Deploy the playable game to GitHub Pages
-# Macroquad WASM build — no Node, no npm, one toolchain
+# Bevy WASM build (cargo + wasm-bindgen + wasm-opt) — no Node, no npm
 name: Deploy game to Pages
 
 on:
@@ -35,6 +35,16 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
 
+      # Bevy's cold build is long; cache compiled dependencies between runs.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen-cli (matching Cargo.lock) and wasm-opt
+        run: |
+          WANT=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+          curl -sSL "https://github.com/rustwasm/wasm-bindgen/releases/download/${WANT}/wasm-bindgen-${WANT}-x86_64-unknown-linux-musl.tar.gz" \
+            | sudo tar -xz --strip-components=1 -C /usr/local/bin "wasm-bindgen-${WANT}-x86_64-unknown-linux-musl/wasm-bindgen"
+          sudo apt-get update && sudo apt-get install -y binaryen
+
       - name: Run tests
         run: cargo test
 
@@ -45,8 +55,8 @@ jobs:
         run: |
           mkdir -p _site
           cp robot-buddy-game/www/index.html _site/
-          cp robot-buddy-game/www/mq_js_bundle.js _site/
-          cp robot-buddy-game/www/robot-buddy-game.wasm _site/
+          cp robot-buddy-game/www/robot-buddy-game.js _site/
+          cp robot-buddy-game/www/robot-buddy-game_bg.wasm _site/
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

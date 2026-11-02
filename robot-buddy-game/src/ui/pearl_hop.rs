@@ -4,15 +4,21 @@
 //!
 //! ```text
 //!  ┌──────────────────────────────────────────────┐
-//!  │ (o) 12                               [Leave] │  top row (layout)
+//!  │ (o) 12                               [Leave] │  top row (panel)
 //!  │   (• • •)                                    │
-//!  │   Shelly        stepping stones              │  Scene region: custom art,
-//!  │   [rock] ~ o ~ o ~ o ~ o ~ o ~ o ~ o ~ o ~~~ │  painted through a Canvas
-//!  │ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ │  bound to the region
+//!  │   Shelly        stepping stones              │  Scene: hand-drawn on the
+//!  │   [rock] ~ o ~ o ~ o ~ o ~ o ~ o ~ o ~ o ~~~ │  screen, under the panel
+//!  │ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ │
 //!  │               "Find my pearl!"               │  caption (for grown-ups)
 //!  │                  [ Again! ]                  │  once the win has played
 //!  └──────────────────────────────────────────────┘
 //! ```
+//!
+//! The lagoon fills the whole screen and is drawn by hand; the purse count,
+//! the caption and the Leave / Again! buttons are a Bevy UI panel over it
+//! ([`HopPanel`]) whose rows have fixed heights, so [`layout`] knows where
+//! the scene is without asking Bevy. Only the buttons take taps; a press
+//! anywhere else goes to the scene.
 //!
 //! The kid can't read, so nothing important is only words: dots, stones,
 //! Shelly's count-aloud and her antics carry the game. [`scene_model`] says
@@ -24,26 +30,29 @@
 use crate::prelude::*;
 use std::collections::BTreeSet;
 
+use bevy::ecs::spawn::SpawnWith;
+use bevy::picking::Pickable;
+use bevy::prelude::{default, AlignItems, AlignSelf, ChildSpawner, Children, JustifyContent, Node, PositionType, SpawnRelated};
+use bevy::text::Justify;
+use bevy::ui::{percent, px, BackgroundColor, BorderRadius, UiRect as Edges};
+
+use super::kit::{self, button, col, fitted, Art, Panel};
+use super::views::UiViews;
+use super::{ArtId, UiAction};
 use crate::input::FrameInput;
 use crate::sprites::dressed::{self, Body, Outfit, Posture};
 use crate::sprites::npcs::ClamFace;
 use crate::sprites::swag::SwagFit;
 use crate::sprites::Dir;
-use crate::ui::layout::{self, col, paint, region, row, spacer, text, Align, Fit, Frame, Justify, Kind, Node, UiRect};
+use crate::ui::canvas as paint;
+use crate::ui::rect::UiRect;
 use robot_buddy_domain::logic::pearl_hop::{HopPhase, HopRound, HopSession, HopStage, SPLASH_SECS};
 
+/// Pearl Hop's buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HopId {
-    PearlIcon,
-    Count,
     Leave,
-    LeaveIcon,
-    LeaveLabel,
-    Scene,
-    Caption,
     Again,
-    AgainIcon,
-    AgainLabel,
 }
 
 /// What Shelly is wearing (from the wardrobe, same as in the world).
@@ -52,7 +61,7 @@ pub struct ShellyOutfit<'a> {
     pub color: &'a str,
 }
 
-/// What the panel shows this frame.
+/// What the minigame shows this frame.
 pub struct HopView<'a> {
     pub session: &'a HopSession,
     /// The kid's pearl purse as shown — the won pearl only lands in it when
@@ -63,72 +72,147 @@ pub struct HopView<'a> {
     pub outfit: ShellyOutfit<'a>,
 }
 
+/// The panel's rows (fixed heights, so the scene's rect is arithmetic).
+const PAD: f32 = 10.0;
+const GAP: f32 = 6.0;
+const TOP_H: f32 = 46.0;
+const PURSE: f32 = 26.0;
+const CAPTION_H: f32 = 50.0;
+const CAPTION_MAX_W: f32 = 520.0;
+/// Reserved even before the win, so the scene never jumps when Again! turns
+/// up; padded so it never sits against the caption.
+const BOTTOM_H: f32 = 68.0;
+
+/// Where the hand-drawn parts go this frame.
 pub struct PearlHopLayout {
-    pub frame: Frame<HopId>,
+    pub bounds: UiRect,
+    /// The purse icon in the top row (the won pearl flies into it).
+    pub purse: UiRect,
     pub scene: SceneGeom,
 }
 
-impl PearlHopLayout {
-    pub fn leave(&self) -> Option<UiRect> {
-        self.frame.rect(HopId::Leave)
-    }
-    pub fn again(&self) -> Option<UiRect> {
-        self.frame.rect(HopId::Again)
-    }
-}
-
-fn icon_button(id: HopId, icon: HopId, label_id: HopId, label: &str, size: u16) -> Node<HopId> {
-    row()
-        .id(id)
-        .hit()
-        .justify(Justify::Center)
-        .gap(8.0)
-        .child(region(24.0, 24.0).id(icon).fixed())
-        .child(text(label, size, Fit::shrink(14)).id(label_id))
-}
-
+/// Lay out the scene for `screen`. Pure: the panel's rows have fixed heights,
+/// so the scene is whatever is left between the top row and the caption.
 pub fn layout(view: &HopView, screen: (f32, f32)) -> PearlHopLayout {
-    let again = view.session.win_done();
-    let top = row()
-        .h(46.0)
-        .fixed()
-        .gap(8.0)
-        .child(region(26.0, 26.0).id(HopId::PearlIcon).fixed())
-        .child(text(view.pearls.to_string(), 24, Fit::shrink(14)).id(HopId::Count))
-        .child(spacer())
-        .child(icon_button(HopId::Leave, HopId::LeaveIcon, HopId::LeaveLabel, "Leave", 22).size(124.0, 44.0).fixed());
-    // Reserved even before the win, so the scene never jumps when Again!
-    // turns up; padded so it never sits against the caption.
-    let bottom = row()
-        .h(68.0)
-        .fixed()
-        .pad_edges(0.0, 10.0, 0.0, 4.0)
-        .justify(Justify::Center)
-        .maybe(again.then(|| {
-            icon_button(HopId::Again, HopId::AgainIcon, HopId::AgainLabel, "Again!", 26).size(180.0, 54.0).fixed()
-        }));
-    let root = col()
-        .pad(10.0)
-        .gap(6.0)
-        .child(top)
-        .child(region(0.0, 0.0).id(HopId::Scene).w_pct(1.0).grow(1.0).min_h(0.0))
-        .child(
-            text(view.caption, 22, Fit::shrink_then_wrap(12, 2))
-                .id(HopId::Caption)
-                .center_text()
-                .pad_xy(14.0, 4.0)
-                .w_pct(1.0)
-                .max_w(520.0)
-                .align_self(Align::Center)
-                .h(50.0)
-                .fixed(),
-        )
-        .child(bottom);
-    let bounds = layout::screen_rect(screen);
-    let frame = layout::layout(&root, bounds);
-    let scene_rect = frame.rect(HopId::Scene).unwrap_or(bounds);
-    let scene = SceneGeom::new(scene_rect, bounds, &view.session.round);
-    PearlHopLayout { frame, scene }
+    let bounds = UiRect::new(0.0, 0.0, screen.0, screen.1);
+    let top = PAD + TOP_H + GAP;
+    let below = GAP + CAPTION_H + GAP + BOTTOM_H + PAD;
+    let scene_rect = UiRect::new(PAD, top, (screen.0 - 2.0 * PAD).max(0.0), (screen.1 - top - below).max(0.0));
+    let purse = UiRect::new(PAD, PAD + (TOP_H - PURSE) / 2.0, PURSE, PURSE);
+    PearlHopLayout { bounds, purse, scene: SceneGeom::new(scene_rect, bounds, &view.session.round) }
+}
+
+/// What the panel over the lagoon shows.
+#[derive(Clone, PartialEq, Debug)]
+pub struct HopPanelView {
+    pub pearls: u32,
+    pub caption: String,
+    /// The win has played: Again! is up.
+    pub again: bool,
+}
+
+impl HopPanelView {
+    pub fn new(view: &HopView) -> Self {
+        HopPanelView { pearls: view.pearls, caption: view.caption.to_string(), again: view.session.win_done() }
+    }
+}
+
+/// The purse count, the caption and the buttons, over the hand-drawn lagoon.
+pub struct HopPanel;
+
+impl Panel for HopPanel {
+    type View = HopPanelView;
+    const Z: i32 = 10;
+    fn view(views: &UiViews) -> Option<&HopPanelView> {
+        views.pearl_hop.as_ref()
+    }
+    fn bundle(v: &HopPanelView) -> impl bevy::prelude::Bundle {
+        let v = v.clone();
+        let root = Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            padding: Edges::all(px(PAD)),
+            row_gap: px(GAP),
+            ..col()
+        };
+        (root, Pickable::IGNORE, Children::spawn(SpawnWith(move |p: &mut ChildSpawner| spawn_panel(p, &v))))
+    }
+}
+
+/// Lays out nothing but takes up room, and lets taps through to the scene.
+fn clear(node: Node) -> (Node, Pickable) {
+    (node, Pickable::IGNORE)
+}
+
+fn spawn_panel(p: &mut ChildSpawner, v: &HopPanelView) {
+    let top = Node { height: px(TOP_H), flex_shrink: 0.0, column_gap: px(8), align_items: AlignItems::Center, ..default() };
+    p.spawn(clear(top)).with_children(|p| {
+        // The purse icon is drawn on the scene, here.
+        p.spawn(clear(Node { width: px(PURSE), height: px(PURSE), flex_shrink: 0.0, ..default() }));
+        p.spawn(clear(Node { flex_grow: 1.0, min_width: px(0), ..col() }))
+            .with_child(fitted(v.pearls.to_string(), 24.0, 14.0, false, INK, Justify::Left));
+        let leave = Node {
+            width: px(124),
+            height: px(44),
+            flex_shrink: 0.0,
+            column_gap: px(8),
+            border: Edges::ZERO,
+            border_radius: BorderRadius::all(px(10)),
+            ..kit::centered()
+        };
+        let fill = Color::new(0.26, 0.35, 0.42, 0.92);
+        p.spawn(button(UiAction::PearlHop(HopId::Leave), leave, fill, fill)).with_children(|p| {
+            p.spawn((Node { width: px(24), height: px(24), flex_shrink: 0.0, ..default() }, Art(ArtId::HopLeaveIcon)));
+            p.spawn(fitted("Leave", 22.0, 14.0, false, WHITE, Justify::Center));
+        });
+    });
+    p.spawn(clear(Node { flex_grow: 1.0, min_height: px(0), ..default() }));
+    let caption = Node {
+        height: px(CAPTION_H),
+        flex_shrink: 0.0,
+        width: percent(100),
+        max_width: px(CAPTION_MAX_W),
+        align_self: AlignSelf::Center,
+        padding: Edges::axes(px(14), px(4)),
+        border_radius: BorderRadius::all(px(14)),
+        ..kit::centered()
+    };
+    p.spawn((caption, BackgroundColor(kit::color(CAPTION_BG)), Pickable::IGNORE))
+        .with_child(kit::filled(v.caption.clone(), 22.0, 12.0, INK, Justify::Center));
+    let bottom = Node {
+        height: px(BOTTOM_H),
+        flex_shrink: 0.0,
+        padding: Edges::new(px(0), px(0), px(10), px(4)),
+        justify_content: JustifyContent::Center,
+        ..default()
+    };
+    p.spawn(clear(bottom)).with_children(|p| {
+        if v.again {
+            let again = Node {
+                width: px(180),
+                height: px(54),
+                column_gap: px(8),
+                border: Edges::all(px(3)),
+                border_radius: BorderRadius::all(px(16)),
+                ..kit::centered()
+            };
+            p.spawn(button(UiAction::PearlHop(HopId::Again), again, BTN, GOLD)).with_children(|p| {
+                p.spawn((Node { width: px(24), height: px(24), flex_shrink: 0.0, ..default() }, Art(ArtId::HopAgainIcon)));
+                p.spawn(fitted("Again!", 26.0, 14.0, false, WHITE, Justify::Center));
+            });
+        }
+    });
+}
+
+/// The icons on Leave (a back arrow) and Again! (a pearl), `w`×`h` local.
+pub fn draw_icon(id: ArtId, w: f32, h: f32, time: f32) {
+    let r = UiRect::new(0.0, 0.0, w, h);
+    match id {
+        ArtId::HopLeaveIcon => draw_back_arrow(&paint::canvas(r), r),
+        ArtId::HopAgainIcon => draw_pearl(&paint::canvas(r), r.center(), w * 0.42, time),
+        _ => {}
+    }
 }
 
 // ─── Scene geometry (pure) ──────────────────────────────
@@ -430,10 +514,10 @@ pub enum HopInput {
 }
 
 /// Taps on the buttons.
-pub fn handle_click(mx: f32, my: f32, l: &PearlHopLayout) -> Option<HopInput> {
-    match l.frame.hit_at(mx, my)? {
-        HopId::Leave => Some(HopInput::Leave),
-        HopId::Again => Some(HopInput::Again),
+pub fn handle_click(input: &FrameInput) -> Option<HopInput> {
+    match input.ui_press? {
+        UiAction::PearlHop(HopId::Leave) => Some(HopInput::Leave),
+        UiAction::PearlHop(HopId::Again) => Some(HopInput::Again),
         _ => None,
     }
 }
@@ -487,6 +571,7 @@ const STONE_PAST: Color = Color::new(1.0, 0.62, 0.55, 1.0);
 /// An uncounted target dot.
 const DOT: Color = Color::new(0.20, 0.45, 0.70, 1.0);
 const BTN: Color = Color::new(0.10, 0.36, 0.55, 1.0);
+const CAPTION_BG: Color = Color::new(0.93, 0.97, 0.98, 1.0);
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
@@ -524,14 +609,13 @@ impl Pose {
 }
 
 pub fn draw(view: &HopView, l: &PearlHopLayout, art: &HopArt, time: f32) {
-    let f = &l.frame;
     let g = &l.scene;
     let s = view.session;
 
     // The whole screen is the lagoon: sky over water, so the buttons sit on
     // the scene rather than on a dark modal.
-    paint::vgradient(f.bounds, SKY_TOP, SKY_BOTTOM, 12);
-    draw_water(g, f.bounds, time);
+    paint::vgradient(l.bounds, SKY_TOP, SKY_BOTTOM, 12);
+    draw_water(g, l.bounds, time);
 
     let m = scene_model(view);
     let c = paint::canvas(g.rect);
@@ -542,8 +626,8 @@ pub fn draw(view: &HopView, l: &PearlHopLayout, art: &HopArt, time: f32) {
     let pose = shelly_pose(g, s, art, time);
     draw_splash(&c, g, s);
     // Shelly, the band and her "in hand" ring can leave the scene while she's
-    // pulled, so they paint on the whole screen (ADR-004).
-    let screen = paint::canvas(f.bounds);
+    // pulled, so they paint on the whole screen.
+    let screen = paint::canvas(l.bounds);
     draw_band(&screen, g, s, art, pose);
     draw_win_burst(&c, g, s, time);
     draw_shelly(&screen, g, pose, &view.outfit, art, time);
@@ -552,36 +636,13 @@ pub fn draw(view: &HopView, l: &PearlHopLayout, art: &HopArt, time: f32) {
         draw_hand(&screen, hx, hy, pressed, art.hand_alpha);
     }
 
-    for el in f.elements() {
-        let Some(id) = el.id else { continue };
-        match (&el.kind, id) {
-            (Kind::Text(t), HopId::Caption) => {
-                paint::round_rect(el.rect, 14.0, Color::new(0.93, 0.97, 0.98, 1.0));
-                paint::text(t, INK)
-            }
-            (Kind::Text(t), HopId::Count) => paint::text(t, INK),
-            (Kind::Text(t), _) => paint::text(t, WHITE),
-            (_, HopId::Leave) => paint::round_rect(el.rect, 10.0, Color::new(0.26, 0.35, 0.42, 0.92)),
-            (_, HopId::Again) => {
-                // A breathing gold rim round a rounded button.
-                let pulse = (time * 3.0).sin() * 0.5 + 0.5;
-                paint::round_rect(el.rect.expand(2.0 + pulse * 2.0), 16.0, GOLD);
-                paint::round_rect(el.rect, 14.0, BTN);
-            }
-            (_, HopId::PearlIcon) => {
-                // The purse swells as the won pearl drops in.
-                let pop = s.win_clock().map_or(0.0, |c| {
-                    let u = (c - WIN_PEARL_ARRIVES) / 0.35;
-                    if (0.0..1.0).contains(&u) { (u * std::f32::consts::PI).sin() } else { 0.0 }
-                });
-                draw_pearl(&paint::canvas(el.rect.expand(8.0)), el.rect.center(), el.rect.w * (0.42 + 0.2 * pop), time)
-            }
-            (_, HopId::AgainIcon) => draw_pearl(&paint::canvas(el.rect), el.rect.center(), el.rect.w * 0.42, time),
-            (_, HopId::LeaveIcon) => draw_back_arrow(&paint::canvas(el.rect), el.rect),
-            _ => {}
-        }
-    }
-    draw_pearl_flight(f, g, s, time);
+    // The purse swells as the won pearl drops in.
+    let pop = s.win_clock().map_or(0.0, |c| {
+        let u = (c - WIN_PEARL_ARRIVES) / 0.35;
+        if (0.0..1.0).contains(&u) { (u * std::f32::consts::PI).sin() } else { 0.0 }
+    });
+    draw_pearl(&paint::canvas(l.purse.expand(8.0)), l.purse.center(), l.purse.w * (0.42 + 0.2 * pop), time);
+    draw_pearl_flight(l, g, s, time);
 }
 
 /// Water from the surface line to the bottom of the screen, a sandy floor,
@@ -1060,19 +1121,18 @@ fn draw_win_burst(c: &paint::Canvas, g: &SceneGeom, s: &HopSession, time: f32) {
 }
 
 /// The won pearl flies from the stone up into the purse in the top row,
-/// trailing sparkles. Drawn over the whole screen, above the buttons.
-fn draw_pearl_flight(f: &Frame<HopId>, g: &SceneGeom, s: &HopSession, time: f32) {
+/// trailing sparkles.
+fn draw_pearl_flight(l: &PearlHopLayout, g: &SceneGeom, s: &HopSession, time: f32) {
     let Some(k) = s.win_clock() else { return };
     if !(WIN_PEARL_LEAVES..WIN_PEARL_ARRIVES).contains(&k) {
         return;
     }
-    let Some(purse) = f.rect(HopId::PearlIcon) else { return };
     let from = won_pearl_at(g, s);
-    let to = purse.center();
+    let to = l.purse.center();
     let u = ease((k - WIN_PEARL_LEAVES) / (WIN_PEARL_ARRIVES - WIN_PEARL_LEAVES));
     let arc = g.r * 3.0;
     let at = |u: f32| (lerp(from.0, to.0, u), lerp(from.1, to.1, u) - 4.0 * arc * u * (1.0 - u));
-    let c = paint::canvas(f.bounds);
+    let c = paint::canvas(l.bounds);
     for i in 1..6 {
         let (tx, ty) = at((u - i as f32 * 0.04).max(0.0));
         c.circle(tx, ty, (g.r * 0.35 - i as f32 * 1.5).max(2.0), with_alpha(GOLD, 0.7 - i as f32 * 0.1));
@@ -1126,6 +1186,8 @@ mod tests {
     use robot_buddy_domain::logic::pearl_hop::{generate_round, hop_reducer, HopAction, Landing};
 
     const NOTHING: &BTreeSet<String> = &BTreeSet::new();
+    /// Phone up to desktop, as the panel sweep uses.
+    const SCREENS: [(f32, f32); 5] = [(360.0, 640.0), (480.0, 800.0), (640.0, 480.0), (960.0, 720.0), (1600.0, 900.0)];
 
     fn view(s: &HopSession) -> HopView<'_> {
         HopView { session: s, pearls: 3, caption: "Find my pearl!", outfit: ShellyOutfit { worn: NOTHING, color: "red" } }
@@ -1140,7 +1202,7 @@ mod tests {
     #[test]
     fn dragging_to_the_drag_point_sets_exactly_that_aim() {
         for band in [1u8, 2, 3, 4, 6] {
-            for &screen in &layout::SWEEP_SCREENS {
+            for &screen in &SCREENS {
                 let (s, l) = geom(band, screen);
                 for aim in s.round.min_aim..=s.round.max_aim {
                     let p = l.scene.drag_point_for(aim);
@@ -1153,7 +1215,7 @@ mod tests {
     #[test]
     fn pointing_at_a_stone_aims_the_first_hop_there() {
         for band in [1u8, 3, 6] {
-            for &screen in &layout::SWEEP_SCREENS {
+            for &screen in &SCREENS {
                 let (s, l) = geom(band, screen);
                 let g = &l.scene;
                 for aim in s.round.min_aim..=s.round.max_aim {
@@ -1177,7 +1239,7 @@ mod tests {
     #[test]
     fn the_whole_path_and_the_pull_fit_on_screen() {
         for band in [1u8, 2, 3, 4, 6, 9] {
-            for &screen in &layout::SWEEP_SCREENS {
+            for &screen in &SCREENS {
                 let (s, l) = geom(band, screen);
                 let g = &l.scene;
                 assert!(g.x_of(s.round.span) <= g.rect.right(), "band {band} {screen:?}");

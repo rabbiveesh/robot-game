@@ -1,7 +1,4 @@
-# macroquad/miniquad call host functions (init_webgl, glGenVertexArrays, now, …)
-# that the JS bundle provides at runtime. They're legitimately undefined at link
-# time — wasm imports, not missing code. Rust 1.96's wasm-ld stopped emitting
-# them as imports by default and now errors, so opt back in to importing
-# undefined symbols. Native (test) builds are unaffected: this is wasm-only.
+# getrandom (pulled in by Bevy) needs to be told to use the browser's crypto
+# API on wasm32-unknown-unknown. Native builds are unaffected.
 [target.wasm32-unknown-unknown]
-rustflags = ["-C", "link-arg=--allow-undefined"]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

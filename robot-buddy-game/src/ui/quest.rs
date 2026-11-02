@@ -1,32 +1,38 @@
-//! Quest runner UI. Pure layout + render. Opt-in (feature-flagged) while the
+//! Quest runner UI, as a Bevy UI panel. Opt-in (feature-flagged) while the
 //! quest path is being playtested.
 //!
 //! Self-contained: a quest plays as a sequence of narrative beats and inline
 //! multiple-choice math moments, so it never has to hand control to the
 //! challenge state and come back. The game builds a `QuestView` from the domain
-//! `QuestSession` (+ the generated puzzle choices) each frame; this module lays
-//! it out (see `ui::layout`), draws it, and reports taps — both from the same
-//! `Frame`.
+//! `QuestSession` (+ the generated puzzle choices) each frame; this module
+//! turns it into nodes and its taps back into a [`QuestClick`].
+
+use bevy::ecs::spawn::SpawnWith;
+use bevy::prelude::{default, AlignSelf, Bundle, ChildSpawner, Children, JustifyContent, Node, SpawnRelated, UiRect, Val};
+use bevy::text::Justify;
+use bevy::ui::{percent, px, BackgroundColor, BorderColor};
 
 use crate::prelude::*;
 
+use super::kit::{self, backdrop, button, col, fitted, Panel};
+use super::views::UiViews;
+use super::UiAction;
 use crate::input::FrameInput;
-use crate::ui::layout::{self, button, col, paint, row, spacer, text, Align, Fit, Frame, Justify, Kind, Node};
 use robot_buddy_domain::economy::shop::Currency;
-pub use crate::ui::layout::UiRect;
 
 /// What the current quest step looks like to the player. Built by the game from
 /// the domain step (+ generated puzzle choices for a MathPuzzle).
-pub enum QuestView<'a> {
-    Narrative { speaker: &'a str, lines: &'a [String] },
+#[derive(Clone, PartialEq, Debug)]
+pub enum QuestView {
+    Narrative { speaker: String, lines: Vec<String> },
     Travel { label: String },
-    Puzzle { prompt: &'a str, choices: &'a [i32] },
+    Puzzle { prompt: String, choices: Vec<i32> },
     /// A branching decision — the player taps one of the labelled options.
-    Choice { prompt: &'a str, options: &'a [String] },
+    Choice { prompt: String, options: Vec<String> },
     Reward { dum_dums: u32 },
 }
 
-impl QuestView<'_> {
+impl QuestView {
     /// Narrative / travel / reward beats (and a degenerate option-less Choice,
     /// so it can never soft-lock) advance with a Continue button.
     pub fn has_continue(&self) -> bool {
@@ -47,34 +53,21 @@ impl QuestView<'_> {
     }
 }
 
+/// The panel: the beat, plus the quest's title and Sparky's last remark.
+#[derive(Clone, PartialEq, Debug)]
+pub struct QuestPanelView {
+    pub view: QuestView,
+    pub title: String,
+    pub message: Option<String>,
+    pub screen_h: f32,
+}
+
+/// The quest panel's buttons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuestId {
-    Panel,
-    Title,
-    Body,
-    Message,
     Answer(usize),
-    AnswerLabel(usize),
     Option(usize),
-    OptionLabel(usize),
     Continue,
-    ContinueLabel,
-}
-
-pub struct QuestLayout {
-    pub frame: Frame<QuestId>,
-}
-
-impl QuestLayout {
-    pub fn continue_btn(&self) -> Option<UiRect> {
-        self.frame.rect(QuestId::Continue)
-    }
-    pub fn option(&self, index: usize) -> Option<UiRect> {
-        self.frame.rect(QuestId::Option(index))
-    }
-    pub fn answer(&self, index: usize) -> Option<UiRect> {
-        self.frame.rect(QuestId::Answer(index))
-    }
 }
 
 pub enum QuestClick {
@@ -87,59 +80,89 @@ const PANEL_W: f32 = 720.0;
 const PANEL_H: f32 = 420.0;
 const MARGIN: f32 = 20.0;
 
-fn actions(view: &QuestView) -> Node<QuestId> {
-    match view {
-        QuestView::Puzzle { choices, .. } => row().gap(18.0).justify(Justify::Center).min_h(60.0).children(
-            choices.iter().enumerate().map(|(i, v)| {
-                button(QuestId::Answer(i), QuestId::AnswerLabel(i), v.to_string(), 34, Fit::shrink(18))
-                    .size(84.0, 84.0)
-                    .min_w(48.0)
-            }),
-        ),
-        QuestView::Choice { options, .. } if !options.is_empty() => {
-            // Stacked full-width buttons.
-            col().gap(12.0).children(options.iter().enumerate().map(|(i, label)| {
-                button(QuestId::Option(i), QuestId::OptionLabel(i), format!("{}. {}", i + 1, label), 22, Fit::shrink_then_wrap(14, 2))
-                    .h(46.0)
-                    .min_h(36.0)
-            }))
-        }
-        _ => button(QuestId::Continue, QuestId::ContinueLabel, "Continue", 22, Fit::shrink(16))
-            .size(180.0, 44.0)
-            .fixed()
-            .align_self(Align::Center),
+const DARK_BG: Color = Color::new(0.078, 0.078, 0.180, 1.0);
+const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0);
+const TILE_BG: Color = Color::new(0.129, 0.588, 0.953, 1.0);
+const TILE_EDGE: Color = Color::new(1.0, 1.0, 1.0, 0.4);
+
+pub struct QuestPanel;
+
+impl Panel for QuestPanel {
+    type View = QuestPanelView;
+    const Z: i32 = 40;
+    fn view(views: &UiViews) -> Option<&QuestPanelView> {
+        views.quest.as_ref()
+    }
+    fn bundle(v: &QuestPanelView) -> impl Bundle {
+        let v = v.clone();
+        (backdrop(0.5, MARGIN), Children::spawn(SpawnWith(move |p: &mut ChildSpawner| spawn_panel(p, &v))))
     }
 }
 
-/// Lay out the current beat. The panel grows with a long body (up to the
-/// screen), and the body shrinks its font before anything is clipped.
-pub fn layout(view: &QuestView, title: &str, message: Option<&str>, screen: (f32, f32)) -> QuestLayout {
-    let panel = col()
-        .id(QuestId::Panel)
-        .w_pct(1.0)
-        .max_w(PANEL_W)
-        .min_h(PANEL_H.min(screen.1 - 2.0 * MARGIN))
-        .pad_edges(28.0, 14.0, 28.0, 20.0)
-        .gap(12.0)
-        .child(text(title, 26, Fit::shrink(16)).id(QuestId::Title).center_text().fixed())
-        .child(text(view.body(), 24, Fit::wrap(14)).id(QuestId::Body))
-        .child(spacer())
+/// The panel grows with a long body (up to the screen).
+fn spawn_panel(p: &mut ChildSpawner, v: &QuestPanelView) {
+    let panel = Node {
+        width: percent(100),
+        max_width: px(PANEL_W),
+        min_height: px(PANEL_H.min(v.screen_h - 2.0 * MARGIN)),
+        max_height: percent(100),
+        padding: UiRect::new(px(28), px(28), px(14), px(20)),
+        row_gap: px(12),
+        border: UiRect::all(px(4)),
+        ..col()
+    };
+    p.spawn((panel, BackgroundColor(kit::color(DARK_BG)), BorderColor::all(kit::color(GOLD)))).with_children(|p| {
+        p.spawn(Node { flex_shrink: 0.0, ..col() }).with_child(fitted(v.title.clone(), 26.0, 16.0, false, GOLD, Justify::Center));
+        p.spawn(kit::filled(v.view.body(), 24.0, 14.0, WHITE, Justify::Left));
         // Reserved even when empty, so the buttons don't jump on a retry.
-        .child(text(message.unwrap_or(""), 22, Fit::wrap_lines(12, 2)).id(QuestId::Message).center_text().h(30.0).fixed())
-        .child(actions(view));
-    let bounds = layout::screen_rect(screen);
-    QuestLayout { frame: layout::layout(&layout::centered_on_screen(panel, MARGIN), bounds) }
+        // Sits at the bottom with the buttons.
+        p.spawn(Node { height: px(30), flex_shrink: 0.0, margin: UiRect::top(Val::Auto), ..col() })
+            .with_child(kit::filled(v.message.clone().unwrap_or_default(), 22.0, 12.0, GOLD, Justify::Center));
+        actions(p, &v.view);
+    });
 }
 
-pub fn handle_click(mx: f32, my: f32, layout: &QuestLayout, view: &QuestView) -> Option<QuestClick> {
-    match layout.frame.hit_at(mx, my)? {
+fn tile(p: &mut ChildSpawner, id: QuestId, node: Node, label: String, size: f32, min: f32, wrap: bool) {
+    p.spawn(button(UiAction::Quest(id), Node { ..node }, TILE_BG, TILE_EDGE))
+        .with_child(fitted(label, size, min, wrap, WHITE, Justify::Center));
+}
+
+fn actions(p: &mut ChildSpawner, view: &QuestView) {
+    match view {
+        QuestView::Puzzle { choices, .. } => {
+            let row = Node { column_gap: px(18), justify_content: JustifyContent::Center, min_height: px(60), flex_shrink: 0.0, ..default() };
+            p.spawn(row).with_children(|p| {
+                for (i, v) in choices.iter().enumerate() {
+                    let node = Node { width: px(84), height: px(84), min_width: px(48), ..kit::centered() };
+                    tile(p, QuestId::Answer(i), node, v.to_string(), 34.0, 18.0, false);
+                }
+            });
+        }
+        QuestView::Choice { options, .. } if !options.is_empty() => {
+            // Stacked full-width buttons.
+            p.spawn(Node { row_gap: px(12), flex_shrink: 0.0, ..col() }).with_children(|p| {
+                for (i, label) in options.iter().enumerate() {
+                    let node = Node { height: px(46), min_height: px(36), ..kit::centered() };
+                    tile(p, QuestId::Option(i), node, format!("{}. {}", i + 1, label), 22.0, 14.0, true);
+                }
+            });
+        }
+        _ => {
+            let node = Node { width: px(180), height: px(44), flex_shrink: 0.0, align_self: AlignSelf::Center, ..kit::centered() };
+            tile(p, QuestId::Continue, node, "Continue".into(), 22.0, 16.0, false);
+        }
+    }
+}
+
+pub fn handle_click(input: &FrameInput, view: &QuestView) -> Option<QuestClick> {
+    let Some(UiAction::Quest(id)) = input.ui_press else { return None };
+    match id {
         QuestId::Continue => Some(QuestClick::Continue),
         QuestId::Answer(i) => match view {
             QuestView::Puzzle { choices, .. } => choices.get(i).map(|&v| QuestClick::Answer(v)),
             _ => None,
         },
         QuestId::Option(i) => Some(QuestClick::Choose(i)),
-        _ => None,
     }
 }
 
@@ -153,51 +176,5 @@ pub fn handle_key(input: &FrameInput, view: &QuestView) -> Option<QuestClick> {
         QuestView::Puzzle { choices, .. } => choices.get(pressed).map(|&v| QuestClick::Answer(v)),
         QuestView::Choice { options, .. } if pressed < options.len() => Some(QuestClick::Choose(pressed)),
         _ => None,
-    }
-}
-
-// ─── Drawing ────────────────────────────────────────────
-
-const DARK_BG: Color = Color::new(0.078, 0.078, 0.180, 1.0);
-const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0);
-const TILE_BG: Color = Color::new(0.129, 0.588, 0.953, 1.0);
-
-pub fn draw(layout: &QuestLayout) {
-    let f = &layout.frame;
-    paint::dim(f.bounds, 0.5);
-    for el in f.elements() {
-        let Some(id) = el.id else { continue };
-        match (&el.kind, id) {
-            (Kind::Text(t), QuestId::Title | QuestId::Message) => paint::text(t, GOLD),
-            (Kind::Text(t), _) => paint::text(t, WHITE),
-            (_, QuestId::Panel) => paint::boxed(el.rect, DARK_BG, 4.0, GOLD),
-            (_, QuestId::Answer(_) | QuestId::Option(_) | QuestId::Continue) => {
-                paint::boxed(el.rect, TILE_BG, 2.0, Color::new(1.0, 1.0, 1.0, 0.4))
-            }
-            _ => {}
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // A Choice step must render one button per option and report the TAPPED
-    // index — not always 0 (the bug this fixes).
-    #[test]
-    fn choice_options_map_to_their_own_index() {
-        let opts = vec!["Confront".to_string(), "Set a trap".to_string()];
-        let view = QuestView::Choice { prompt: "How?", options: &opts };
-        let layout = layout(&view, "A quest", None, (960.0, 720.0));
-        assert!(layout.option(0).is_some() && layout.option(1).is_some(), "one button per option");
-        assert!(layout.option(2).is_none());
-        assert!(layout.continue_btn().is_none(), "a Choice has no Continue button");
-
-        // Tapping the second option's centre yields Choose(1), not Choose(0).
-        let (x, y) = layout.option(1).unwrap().center();
-        assert!(matches!(handle_click(x, y, &layout, &view), Some(QuestClick::Choose(1))));
-        let (x, y) = layout.option(0).unwrap().center();
-        assert!(matches!(handle_click(x, y, &layout, &view), Some(QuestClick::Choose(0))));
     }
 }

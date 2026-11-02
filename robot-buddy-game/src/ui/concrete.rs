@@ -44,8 +44,9 @@ use robot_buddy_domain::logic::manipulate_concrete::{
 use robot_buddy_domain::types::Operation;
 
 use crate::input::FrameInput;
-use crate::ui::layout::paint::{self, Canvas};
-use crate::ui::layout::{FontMetrics, TextMetrics, UiRect};
+use crate::ui::canvas::{self as paint, Canvas};
+use crate::ui::metrics::{FontMetrics, TextMetrics};
+use crate::ui::rect::UiRect;
 
 /// The workspace's natural size: two blocks of five spaces, the gap between
 /// them, and room either side (the row sticks' handles on the left of the
@@ -143,6 +144,7 @@ struct Glow {
     age: f32,
 }
 
+#[derive(Clone)]
 pub struct Workspace {
     pub session: ConcreteSession,
     pub drag: Option<Drag>,
@@ -409,9 +411,17 @@ fn scale_in(area: UiRect) -> f32 {
 /// The room the workspace wants when it may be at most `max_w` wide. The
 /// panel may hand it less height; `layout` scales to whatever it gets.
 pub fn extent(_ws: &Workspace, max_w: f32) -> (f32, f32) {
+    extent_at(max_w)
+}
+
+/// [`extent`] for any workspace: it asks for the same shape whatever's in it.
+pub fn extent_at(max_w: f32) -> (f32, f32) {
     let s = (max_w / NATURAL_W).min(1.0);
     (NATURAL_W * s, NATURAL_H * s)
 }
+
+/// The widest the workspace ever asks to be.
+pub const MAX_W: f32 = NATURAL_W;
 
 fn rows_for(n: usize) -> usize {
     n.div_ceil(COLS)
@@ -792,10 +802,10 @@ pub fn handle_pointer(ws: &mut Workspace, input: &FrameInput, area: UiRect) -> P
 
 // ─── DRAWING ────────────────────────────────────────────
 //
-// Everything paints through `paint::Canvas` (ADR-004): the workspace's own art
-// on a canvas bound to its layout region, and what moves across the panel —
-// counters sliding in from a drop, the one in hand — on a canvas bound to the
-// whole frame.
+// Everything paints through a `Canvas`, in screen coordinates: the
+// workspace's own art in its panel art slot, and the counter in hand in a
+// slot over the whole screen (`ArtId::WorkspaceHand`), so it rides above the
+// panel wherever the finger goes.
 
 fn group_color(group: u8) -> Color {
     if group == 0 { BLUE } else { YELLOW }

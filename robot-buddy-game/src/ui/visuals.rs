@@ -7,10 +7,11 @@
 //! reserved space can't disagree with what's painted — and when the natural
 //! size is wider than the room, the whole visual is squeezed until it fits.
 //!
-//! Pure except [`draw`] (render-only, paints through `paint::Canvas`).
+//! Pure except [`draw`] (render-only).
 
 use crate::prelude::*;
-use crate::ui::layout::{paint, FontMetrics, TextMetrics, UiRect};
+use crate::ui::metrics::{FontMetrics, TextMetrics};
+use crate::ui::rect::UiRect;
 use robot_buddy_domain::learning::challenge_generator::Challenge;
 
 const BLUE_A: Color = Color::new(0.259, 0.647, 0.961, 1.0); // #42A5F5
@@ -186,19 +187,18 @@ pub fn draw(challenge: &Challenge, rect: UiRect) {
     let v = plan(challenge, rect.w);
     let dx = rect.x + (rect.w - v.bbox.w) / 2.0 - v.bbox.x;
     let dy = rect.y + (rect.h - v.bbox.h) / 2.0 - v.bbox.y;
-    let c = paint::canvas(rect);
     for prim in &v.prims {
         match prim {
-            Prim::Circle { x, y, r, color } => c.circle(x + dx, y + dy, *r, *color),
-            Prim::Ring { x, y, r, thickness, color } => c.circle_lines(x + dx, y + dy, *r, *thickness, *color),
-            Prim::Rect { r, color } => c.rect(UiRect::new(r.x + dx, r.y + dy, r.w, r.h), *color),
+            Prim::Circle { x, y, r, color } => draw_circle(x + dx, y + dy, *r, *color),
+            Prim::Ring { x, y, r, thickness, color } => draw_circle_lines(x + dx, y + dy, *r, *thickness, *color),
+            Prim::Rect { r, color } => draw_rectangle(r.x + dx, r.y + dy, r.w, r.h, *color),
             Prim::RectLines { r, thickness, color } => {
-                c.rect_lines(UiRect::new(r.x + dx, r.y + dy, r.w, r.h), *thickness, *color)
+                draw_rectangle_lines(r.x + dx, r.y + dy, r.w, r.h, *thickness, *color)
             }
             Prim::Line { x1, y1, x2, y2, thickness, color } => {
-                c.line(x1 + dx, y1 + dy, x2 + dx, y2 + dy, *thickness, *color)
+                draw_line(x1 + dx, y1 + dy, x2 + dx, y2 + dy, *thickness, *color)
             }
-            Prim::Text { text, x, baseline, size, color } => c.text(text, x + dx, baseline + dy, *size, *color),
+            Prim::Text { text, x, baseline, size, color } => { draw_text(text, x + dx, baseline + dy, *size as f32, *color); }
         }
     }
 }

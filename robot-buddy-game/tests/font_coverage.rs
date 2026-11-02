@@ -1,6 +1,6 @@
 //! Guards that the bundled font can actually draw what we ask it to.
 //!
-//! macroquad renders missing glyphs as tofu, and the bundled font is a *subset*
+//! Missing glyphs render as tofu, and the bundled font is a *subset*
 //! of GNU Unifont — so a new emoji or symbol added to the code (or a name the
 //! player types) could silently render as a blank box. These tests fail loudly
 //! instead:
@@ -103,60 +103,6 @@ fn every_rendered_literal_has_a_glyph() {
         missing
             .iter()
             .map(|(ch, f)| format!("  {:?} (U+{:04X}) in {}", ch, *ch as u32, f.display()))
-            .collect::<Vec<_>>()
-            .join("\n"),
-    );
-}
-
-#[test]
-fn prelude_overrides_macroquads_text_fns() {
-    // The whole point of crate::prelude is that `draw_text`/`measure_text`
-    // resolve to the bundled-font wrappers, not macroquad's. Both have identical
-    // signatures, so a build can't catch a regression here — compare addresses.
-    use macroquad::color::Color;
-    use macroquad::text::{Font, TextDimensions};
-
-    let prelude_draw: fn(&str, f32, f32, f32, Color) -> TextDimensions =
-        robot_buddy_game::prelude::draw_text;
-    let ours_draw: fn(&str, f32, f32, f32, Color) -> TextDimensions =
-        robot_buddy_game::text::draw_text;
-    assert_eq!(
-        prelude_draw as usize, ours_draw as usize,
-        "crate::prelude::draw_text must be the bundled-font wrapper, not macroquad's"
-    );
-
-    let prelude_measure: fn(&str, Option<&Font>, u16, f32) -> TextDimensions =
-        robot_buddy_game::prelude::measure_text;
-    let ours_measure: fn(&str, Option<&Font>, u16, f32) -> TextDimensions =
-        robot_buddy_game::text::measure_text;
-    assert_eq!(
-        prelude_measure as usize, ours_measure as usize,
-        "crate::prelude::measure_text must be the bundled-font wrapper, not macroquad's"
-    );
-}
-
-#[test]
-fn no_file_imports_macroquad_prelude_glob() {
-    // Force every module through crate::prelude (which overrides the text fns).
-    // A bare `use macroquad::prelude::*` would silently reintroduce macroquad's
-    // tofu-rendering draw_text.
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-    let offenders: Vec<PathBuf> = rust_sources(&src)
-        .into_iter()
-        .filter(|f| f.file_name().is_none_or(|n| n != "prelude.rs"))
-        .filter(|f| {
-            std::fs::read_to_string(f)
-                .unwrap()
-                .contains("use macroquad::prelude::*")
-        })
-        .collect();
-
-    assert!(
-        offenders.is_empty(),
-        "use `crate::prelude::*` instead of `macroquad::prelude::*` in:\n{}",
-        offenders
-            .iter()
-            .map(|f| format!("  {}", f.display()))
             .collect::<Vec<_>>()
             .join("\n"),
     );

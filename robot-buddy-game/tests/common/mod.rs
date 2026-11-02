@@ -2,16 +2,19 @@
 //!
 //! Wraps Game with primitive frame-driving helpers (press, type_chars,
 //! advance, run_until) and a few story-level helpers built on top.
-//! Render is never called, so no macroquad context is needed.
+//! Render is never called, so no window is needed.
 
 #![allow(dead_code)] // helpers are added as tests need them
 
-use macroquad::prelude::KeyCode;
+use robot_buddy_game::input::KeyCode;
 use robot_buddy_game::game::{Game, GameEvent, GameState};
 use robot_buddy_game::input::FrameInput;
 use robot_buddy_game::npc::NpcKind;
 use robot_buddy_game::save::InMemoryBackend;
 use robot_buddy_game::ui;
+use robot_buddy_game::ui::probe::UiProbe;
+use robot_buddy_game::ui::rect::UiRect;
+use robot_buddy_game::ui::{ArtId, UiAction};
 
 pub const SCREEN: (f32, f32) = (960.0, 720.0);
 pub const DT: f32 = 1.0 / 60.0;
@@ -23,6 +26,11 @@ const DEFAULT_BUDGET: usize = 600;
 
 pub struct Harness {
     pub game: Game,
+    /// Bevy's layout of the panels, built on the first tap.
+    probe: Option<UiProbe>,
+    /// Where the art slots a step reads were laid out (the hands-on
+    /// workspace), and the challenge panel they were laid out for.
+    art_cache: Option<(ui::challenge::ChallengeView, Vec<(ArtId, UiRect)>)>,
 }
 
 impl Harness {
@@ -32,6 +40,8 @@ impl Harness {
     pub fn new(seed: u64) -> Self {
         Harness {
             game: Game::with_backend(seed, Box::new(InMemoryBackend::default())),
+            probe: None,
+            art_cache: None,
         }
     }
 
@@ -41,14 +51,39 @@ impl Harness {
     pub fn with_backend(seed: u64, backend: InMemoryBackend) -> Self {
         let mut game = Game::with_backend(seed, Box::new(backend));
         game.refresh_save_slots();
-        Harness { game }
+        Harness { game, probe: None, art_cache: None }
     }
 
     // ─── Primitive frame drivers ─────────────────────────
 
-    /// One frame with the given input.
+    /// One frame with the given input. Art slots a step reads (where the
+    /// hands-on workspace sits) come from Bevy's layout of the panels, as the
+    /// app hands them over.
     pub fn step(&mut self, input: &FrameInput) {
-        self.game.step(input, DT, SCREEN);
+        let mut input = input.clone();
+        if input.art.is_empty() {
+            input.art = self.art_slots();
+        }
+        self.game.step(&input, DT, SCREEN);
+    }
+
+    /// The art slots on screen, laid out only when the challenge panel
+    /// changes (and only while there's a workspace to drag in).
+    fn art_slots(&mut self) -> Vec<(ArtId, UiRect)> {
+        if self.game.challenge_workspace().is_none() {
+            return vec![];
+        }
+        let views = self.game.ui_views(SCREEN);
+        let Some(view) = views.challenge.clone() else { return vec![] };
+        if let Some((seen, slots)) = &self.art_cache {
+            if *seen == view {
+                return slots.clone();
+            }
+        }
+        let snap = self.probe.get_or_insert_with(|| UiProbe::new(SCREEN)).show(views);
+        let slots: Vec<(ArtId, UiRect)> = snap.arts.iter().map(|&(id, r)| (id, UiRect::new(r.x, r.y, r.w, r.h))).collect();
+        self.art_cache = Some((view, slots.clone()));
+        slots
     }
 
     /// One frame with no input.
@@ -84,6 +119,31 @@ impl Harness {
     /// One frame with a left-click at (x, y).
     pub fn click(&mut self, x: f32, y: f32) {
         self.step(&FrameInput::empty().with_mouse_click(x, y));
+    }
+
+    /// Tap a panel button by name, the way a kid's finger would: Bevy lays
+    /// the panels out as they stand, the button has to be there and on
+    /// screen, and the screen it's on has to be sound (nothing off screen,
+    /// overlapping or overflowing). Then the tap lands on its centre.
+    pub fn tap(&mut self, action: UiAction) {
+        let (x, y) = self.button_center(action);
+        self.step(&FrameInput::empty().with_mouse_click(x, y).with_ui_press(action));
+    }
+
+    /// Where a finger would tap `action`'s button on screen right now (the
+    /// middle of its visible part). Panics if the screen is broken or the
+    /// button isn't there, or is too little on screen to tap.
+    pub fn button_center(&mut self, action: UiAction) -> (f32, f32) {
+        let views = self.game.ui_views(SCREEN);
+        let snap = self.probe.get_or_insert_with(|| UiProbe::new(SCREEN)).show_for(views, action);
+        let problems = snap.problems();
+        assert!(problems.is_empty(), "tapping {action:?} on a broken screen:\n  {}", problems.join("\n  "));
+        let b = snap.button(action).unwrap_or_else(|| {
+            panic!("no {action:?} button on screen (buttons: {:?})", snap.buttons.iter().map(|b| b.action).collect::<Vec<_>>())
+        });
+        let seen = b.visible();
+        assert!(seen.w >= 20.0 && seen.h >= 20.0, "{action:?} is too little on screen to tap ({seen:?})");
+        seen.center()
     }
 
     /// Step (with no input) until `pred(&Game)` returns true. Panics if the
@@ -316,28 +376,28 @@ impl Harness {
 
     /// Tap the active challenge's "Show me" button.
     pub fn press_show_me(&mut self) {
-        let (x, y) = self.game.challenge_layout(SCREEN)
-            .and_then(|l| l.show_me())
-            .expect("press_show_me: no Show me button")
-            .center();
-        self.click(x, y);
+        self.tap(UiAction::Challenge(ui::challenge::ChallengeId::ShowMe));
     }
 
-    fn workspace_layout(&self) -> ui::concrete::Layout {
+    /// Where Bevy put the workspace (the challenge panel as it stands).
+    pub fn workspace_area(&mut self) -> UiRect {
+        self.art_slots().into_iter().find(|(id, _)| *id == ArtId::Workspace)
+            .map(|(_, r)| r).expect("the workspace should be laid out")
+    }
+
+    fn workspace_layout(&mut self) -> ui::concrete::Layout {
+        let area = self.workspace_area();
         let ws = self.game.challenge_workspace().expect("no hands-on workspace open");
-        let area = self.game.challenge_layout(SCREEN)
-            .and_then(|l| l.workspace())
-            .expect("the workspace should be laid out");
         ui::concrete::layout(ws, area)
     }
 
     /// Where a counter the kid could pick up right now sits.
-    pub fn a_grabbable_counter(&self) -> (f32, f32) {
+    pub fn a_grabbable_counter(&mut self) -> (f32, f32) {
         self.workspace_layout().grabbable.first().expect("nothing left to pick up").center
     }
 
     /// The middle of where counters have to land (frames or basket).
-    pub fn drop_target(&self) -> (f32, f32) {
+    pub fn drop_target(&mut self) -> (f32, f32) {
         self.workspace_layout().drop_zone.center()
     }
 
@@ -428,7 +488,7 @@ impl Harness {
             if !still_in_intro {
                 return;
             }
-            self.press(macroquad::prelude::KeyCode::Space);
+            self.press(robot_buddy_game::input::KeyCode::Space);
         }
         panic!("kenken intro never finished after enough advances");
     }
@@ -577,39 +637,25 @@ impl Harness {
 
     // ─── Shop helpers ────────────────────────────────────
 
-    /// Click the catalog row for the item with `item_id` in the open shop.
+    /// Tap the catalog row for the item with `item_id` in the open shop.
     pub fn select_shop_item(&mut self, item_id: &str) {
         let idx = {
             let ash = self.game.active_shop().expect("select_shop_item: shop not open");
             ash.catalog.iter().position(|i| i.id == item_id)
                 .unwrap_or_else(|| panic!("no shop item {item_id}"))
         };
-        // Page through the shelf like a kid would until the row is on screen.
-        for _ in 0..8 {
-            let layout = self.game.shop_layout(SCREEN).expect("shop open");
-            if let Some(row) = layout.item(idx) {
-                let (x, y) = row.center();
-                self.click(x, y);
-                return;
-            }
-            let more = layout.frame.rect(ui::shop::ShopId::NextPage)
-                .expect("item row not visible and no More button (already buying?)");
-            let (x, y) = more.center();
-            self.click(x, y);
-        }
-        panic!("never found the {item_id} row");
+        self.tap(UiAction::Shop(ui::shop::ShopId::Item(idx)));
     }
 
     /// Tap the answer tile with value `value` during a purchase subtraction.
     pub fn answer_shop_math(&mut self, value: u32) {
-        let (x, y) = {
+        let i = {
             let model = self.game.shop_model().expect("answer_shop_math: shop not open");
-            assert!(!model.view.choices().is_empty(), "answer_shop_math: no sum on the counter");
-            ui::shop::layout(&model, SCREEN).answer(&model.view, value)
-                .unwrap_or_else(|| panic!("no answer tile {value}"))
-                .center()
+            let choices = model.view.choices();
+            assert!(!choices.is_empty(), "answer_shop_math: no sum on the counter");
+            choices.iter().position(|&c| c == value).unwrap_or_else(|| panic!("no answer tile {value}"))
         };
-        self.click(x, y);
+        self.tap(UiAction::Shop(ui::shop::ShopId::Answer(i)));
     }
 
     /// Buy `item_id` end-to-end: select it, then tap the correct remainder.
@@ -622,23 +668,20 @@ impl Harness {
         self.answer_shop_math(answer);
     }
 
-    /// Click the shop's "Done" button (twice if the colour picker is up —
+    /// Tap the shop's "Done" button (twice if the colour picker is up —
     /// the first Done backs out of the swatches) and return to Playing.
     pub fn close_shop(&mut self) {
         for _ in 0..2 {
-            let Some(layout) = self.game.shop_layout(SCREEN) else { break };
-            let (x, y) = layout.done().expect("Done laid out").center();
-            self.click(x, y);
+            if self.game.active_shop().is_none() { break }
+            self.tap(UiAction::Shop(ui::shop::ShopId::Done));
         }
         self.wait_until(|g| g.state == GameState::Playing);
     }
 
     /// Tap the swatch for outfit colour `color` in the shop's colour picker.
     pub fn pick_shop_color(&mut self, color: &str) {
-        let i = outfit_color_index(color);
-        let (x, y) = self.game.shop_layout(SCREEN).expect("pick_shop_color: shop not open")
-            .swatch(i).expect("pick_shop_color: the colour picker isn't up").center();
-        self.click(x, y);
+        assert!(self.game.active_shop().is_some(), "pick_shop_color: shop not open");
+        self.tap(UiAction::Shop(ui::shop::ShopId::Swatch(outfit_color_index(color))));
     }
 
     // ─── Shelly's Pearl Hop helpers ──────────────────────
@@ -744,16 +787,14 @@ impl Harness {
 
     /// Tap Pearl Hop's Leave button.
     pub fn leave_pearl_hop_by_tap(&mut self) {
-        let (x, y) = self.game.pearl_hop_layout(SCREEN).expect("Pearl Hop isn't open")
-            .leave().expect("Leave is always on screen").center();
-        self.click(x, y);
+        assert!(self.game.active_pearl_hop().is_some(), "Pearl Hop isn't open");
+        self.tap(UiAction::PearlHop(ui::pearl_hop::HopId::Leave));
     }
 
     /// Tap "Again!" after a win.
     pub fn pearl_hop_again(&mut self) {
-        let (x, y) = self.game.pearl_hop_layout(SCREEN).expect("Pearl Hop isn't open")
-            .again().expect("Again! shows once she has the pearl").center();
-        self.click(x, y);
+        assert!(self.game.active_pearl_hop().is_some(), "Pearl Hop isn't open");
+        self.tap(UiAction::PearlHop(ui::pearl_hop::HopId::Again));
     }
 
     /// Stand the player on a tile outright (for setting up on a far-off map).
@@ -770,17 +811,11 @@ impl Harness {
 
     // ─── Descent helpers ─────────────────────────────────
 
-    /// Click one kick button in the open descent. `down` sinks, else rises.
+    /// Tap one kick button in the open descent. `down` sinks, else rises.
     pub fn kick(&mut self, n: u8, down: bool) {
-        let (x, y) = {
-            let ad = self.game.active_descent().expect("kick: not diving");
-            let layout = ui::descent::layout(&ad.session, SCREEN);
-            let b = layout.kicks.iter().find(|b| b.n == n && b.down == down)
-                .unwrap_or_else(|| panic!("no {} kick of {n} in this shaft",
-                    if down { "sink" } else { "rise" }));
-            (b.rect.x + b.rect.w / 2.0, b.rect.y + b.rect.h / 2.0)
-        };
-        self.click(x, y);
+        assert!(self.game.active_descent().is_some(), "kick: not diving");
+        use ui::descent::DescentId;
+        self.tap(UiAction::Descent(if down { DescentId::Sink(n) } else { DescentId::Rise(n) }));
     }
 
     /// Play the shaft's shortest route by tapping the real kick buttons, then
@@ -874,7 +909,7 @@ impl Harness {
 
     // ─── Give-Swag helpers ───────────────────────────────
 
-    /// Click the row for `item_id` in the open "Give Swag" picker, handing it
+    /// Tap the row for `item_id` in the open "Give Swag" picker, handing it
     /// to whoever the kid is talking to.
     pub fn give_swag(&mut self, item_id: &str) {
         let idx = {
@@ -883,27 +918,15 @@ impl Harness {
                 .unwrap_or_else(|| panic!("the kid isn't wearing {item_id} (has: {:?})",
                     asw.items.iter().map(|i| &i.id).collect::<Vec<_>>()))
         };
-        for _ in 0..8 {
-            let layout = self.game.swag_layout(SCREEN).expect("picker open");
-            if let Some(row) = layout.item(idx) {
-                let (x, y) = row.center();
-                self.click(x, y);
-                return;
-            }
-            let (x, y) = layout.frame.rect(ui::swag::SwagId::NextPage)
-                .expect("row not visible and no More button").center();
-            self.click(x, y);
-        }
-        panic!("never found the {item_id} row");
+        self.tap(UiAction::Swag(ui::swag::SwagId::Item(idx)));
     }
 
-    /// Click the swag picker's "Done" button (twice if a buddy's colour
+    /// Tap the swag picker's "Done" button (twice if a buddy's colour
     /// swatches are up) and return to Playing.
     pub fn close_swag(&mut self) {
         for _ in 0..2 {
-            let Some(layout) = self.game.swag_layout(SCREEN) else { break };
-            let (x, y) = layout.done().expect("Done laid out").center();
-            self.click(x, y);
+            if self.game.active_swag().is_none() { break }
+            self.tap(UiAction::Swag(ui::swag::SwagId::Done));
         }
         self.wait_until(|g| g.state == GameState::Playing);
     }
@@ -911,10 +934,8 @@ impl Harness {
     /// Tap the swatch for outfit colour `color` in the swag panel's colour
     /// picker (up after handing over Color Change, or from "New color?").
     pub fn pick_swag_color(&mut self, color: &str) {
-        let i = outfit_color_index(color);
-        let (x, y) = self.game.swag_layout(SCREEN).expect("pick_swag_color: panel not open")
-            .swatch(i).expect("pick_swag_color: no colour swatches up").center();
-        self.click(x, y);
+        assert!(self.game.active_swag().is_some(), "pick_swag_color: panel not open");
+        self.tap(UiAction::Swag(ui::swag::SwagId::Swatch(outfit_color_index(color))));
     }
 
     /// Put the kid on another map outright, with its roster, standing on
@@ -942,31 +963,27 @@ impl Harness {
         self.click(sx, sy);
     }
 
-    /// Click the "Parent options" reveal row in the open settings overlay.
+    /// Tap the "Parent options" reveal row in the open settings overlay.
     pub fn click_parent_options(&mut self) {
-        let (x, y) = robot_buddy_game::ui::settings_overlay::parent_toggle_center(SCREEN);
-        self.click(x, y);
+        self.tap(UiAction::Settings(ui::settings_overlay::SettingsId::Parent));
     }
 
-    /// Open the parent overlay (P, works mid-minigame) and click "Back to
+    /// Open the parent overlay (P, works mid-minigame) and tap "Back to
     /// title screen".
     pub fn parent_back_to_title(&mut self) {
         self.press(KeyCode::P);
-        let (x, y) = robot_buddy_game::ui::settings_overlay::back_to_title_center(SCREEN, true);
-        self.click(x, y);
+        self.tap(UiAction::Settings(ui::settings_overlay::SettingsId::BackToTitle));
         assert_eq!(self.game.state, GameState::Title);
     }
 
-    /// Click a feature toggle in the (revealed) parent section.
-    pub fn toggle_feature_in_settings(&mut self, feature: robot_buddy_game::ui::settings_overlay::Feature) {
-        let (x, y) = robot_buddy_game::ui::settings_overlay::feature_toggle_center(SCREEN, feature);
-        self.click(x, y);
+    /// Tap a feature toggle in the (revealed) parent section.
+    pub fn toggle_feature_in_settings(&mut self, feature: ui::settings_overlay::Feature) {
+        self.tap(UiAction::Settings(ui::settings_overlay::SettingsId::Feature(feature)));
     }
 
-    /// Click an arcade-pace button in the open parent panel.
+    /// Tap an arcade-pace button in the open parent panel.
     pub fn set_arcade_pace(&mut self, pace: robot_buddy_domain::types::GamePace) {
-        let (x, y) = robot_buddy_game::ui::settings_overlay::pace_button_center(SCREEN, pace);
-        self.click(x, y);
+        self.tap(UiAction::Settings(ui::settings_overlay::SettingsId::Pace(pace)));
     }
 
     // ─── Quest helpers ───────────────────────────────────

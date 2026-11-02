@@ -66,41 +66,23 @@ pub enum Body {
     Clam(ClamFace),
 }
 
-/// A camera whose matrix is screen space times the posture's transform.
-struct PostureCamera(Mat4);
-
-impl Camera for PostureCamera {
-    fn matrix(&self) -> Mat4 {
-        self.0
+/// Draw `body` in `posture`, wearing `outfit`. The world only ever passes
+/// plain postures, which draw in whatever camera is active.
+pub fn draw_dressed(posture: Posture, body: Body, dir: Dir, outfit: &Outfit, time: f32) {
+    if posture.is_plain() {
+        return draw_body(posture.x - PIVOT.0, posture.y - PIVOT.1, body, dir, outfit, time);
     }
-    fn depth_enabled(&self) -> bool {
-        false
-    }
-    fn render_pass(&self) -> Option<RenderPass> {
-        None
-    }
-    fn viewport(&self) -> Option<(i32, i32, i32, i32)> {
-        None
-    }
+    let p = posture;
+    let squash = p.squash.max(0.2);
+    let xf = Affine2::from_translation(vec2(p.x, p.y))
+        * Affine2::from_angle(p.spin.to_radians())
+        * Affine2::from_scale(vec2(p.scale * squash, p.scale / squash))
+        * Affine2::from_translation(vec2(-PIVOT.0, -PIVOT.1));
+    with_transform(xf, || draw_body(0.0, 0.0, body, dir, outfit, time));
 }
 
-/// Draw `body` in `posture`, wearing `outfit`. Under a transformed posture
-/// the current camera must be the screen's (UI screens); the world only ever
-/// passes plain postures, which draw in whatever camera is active.
-pub fn draw_dressed(posture: Posture, body: Body, dir: Dir, outfit: &Outfit, time: f32) {
-    let plain = posture.is_plain();
-    let (ox, oy) = if plain { (posture.x - PIVOT.0, posture.y - PIVOT.1) } else { (0.0, 0.0) };
-    if !plain {
-        let p = posture;
-        let squash = p.squash.max(0.2);
-        let m = Mat4::orthographic_rh_gl(0.0, screen_width(), screen_height(), 0.0, -1.0, 1.0)
-            * Mat4::from_translation(vec3(p.x, p.y, 0.0))
-            * Mat4::from_rotation_z(p.spin.to_radians())
-            * Mat4::from_scale(vec3(p.scale * squash, p.scale / squash, 1.0))
-            * Mat4::from_translation(vec3(-PIVOT.0, -PIVOT.1, 0.0));
-        push_camera_state();
-        set_camera(&PostureCamera(m));
-    }
+/// The body and its swag at tile (ox, oy).
+fn draw_body(ox: f32, oy: f32, body: Body, dir: Dir, outfit: &Outfit, time: f32) {
     match body {
         Body::Npc { sprite, asleep } => sprite.draw_sprite(ox, oy, dir, time, asleep),
         Body::Robot { frame } => super::robot::draw_robot(ox, oy, dir, frame, time),
@@ -108,8 +90,5 @@ pub fn draw_dressed(posture: Posture, body: Body, dir: Dir, outfit: &Outfit, tim
     }
     if !outfit.worn.is_empty() {
         draw_swag(ox, oy, dir, 0.0, outfit.worn, outfit.color, outfit.fit);
-    }
-    if !plain {
-        pop_camera_state();
     }
 }

@@ -18,7 +18,7 @@ use crate::input::FrameInput;
 
 // ─── Layout types ───────────────────────────────────────
 
-pub use crate::ui::layout::UiRect;
+pub use crate::ui::rect::UiRect;
 
 pub struct ChoiceBound {
     pub rect: UiRect,

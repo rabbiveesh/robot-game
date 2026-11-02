@@ -35,8 +35,7 @@ impl Game {
     pub(super) fn step_shooter(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         // Bail out any time — no reward, no penalty. The kid can just walk away,
         // by key or by tapping Leave (a tablet has no ESC).
-        let tapped_leave = input.mouse_clicked
-            && ui::shooter::leave_hit(screen, input.mouse_pos.0, input.mouse_pos.1);
+        let tapped_leave = ui::shooter::leave_hit(input);
         if input.pressed(KeyCode::Escape) || tapped_leave {
             self.activity.shooter = None;
             self.set_state(GameState::Playing);
@@ -76,7 +75,7 @@ impl Game {
                 }
                 // Click/tap to shoot: snap the ship to the tapped column and fire
                 // from there. Lets a kid aim by pointing instead of nudging.
-                if input.mouse_clicked {
+                if input.mouse_clicked && !input.click_on_ui {
                     let (mx, my) = input.mouse_pos;
                     if let Some(fx) = ui::shooter::field_x_at(screen, mx, my) {
                         let dx = fx - s.ship_x;

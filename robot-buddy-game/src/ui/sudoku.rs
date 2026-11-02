@@ -16,7 +16,7 @@ use robot_buddy_domain::logic::sudoku::{
 
 use crate::input::FrameInput;
 
-pub use crate::ui::layout::UiRect;
+pub use crate::ui::rect::UiRect;
 
 pub struct PickerBound {
     pub rect: UiRect,

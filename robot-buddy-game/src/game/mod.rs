@@ -1,8 +1,8 @@
 //! The Game struct: all state, all logic, all rendering.
 //!
-//! Production: `main()` captures input from macroquad, calls `step()`, awaits next_frame.
-//! Tests: build a `FrameInput` synthetically and call `step()` directly. (Tests still need
-//! a macroquad window today because draw calls run unconditionally — Phase 4 will split.)
+//! Production: `crate::app` captures input from Bevy, calls `step()`, then `render()`
+//! records draw calls that Bevy paints.
+//! Tests: build a `FrameInput` synthetically and call `step()` directly; no window.
 
 use crate::prelude::*;
 use ::rand::{Rng, SeedableRng};
@@ -126,7 +126,7 @@ pub enum GameState {
 /// All default OFF so the test suite and normal play are unaffected; flip them
 /// on in the dev control room (or in production wiring) to playtest. A drop of
 /// tech debt traded for being able to try these before they're fully baked.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FeatureFlags {
     /// Random encounters fire as the kid explores.
     pub encounters: bool,
@@ -290,8 +290,6 @@ pub struct ActiveShop {
     pub picking_color: bool,
     /// The quote on the counter while the kid works out a pearl trade.
     pub trading: Option<domain_shop::TradeQuote>,
-    /// Catalog page on screen, when the window is too short for the shelf.
-    pub page: usize,
 }
 
 /// A live "Give Swag" session: the kid is picking which of the pieces they're
@@ -307,7 +305,6 @@ pub struct ActiveSwag {
     pub items: Vec<ShopItem>,
     pub message: Option<String>,
     /// List page on screen, when the window is too short for every piece.
-    pub page: usize,
     /// Swatches are up: the kid is picking the recipient's Color Change colour.
     pub picking_color: bool,
     /// Opened straight to the swatches from the buddy's "New color?" option,
@@ -813,13 +810,6 @@ impl Game {
         ch.choices.iter().position(|c| c.correct)
     }
 
-    /// The active challenge's layout, exactly as `step` hit-tests it. Tests
-    /// click through this (Show me, the workspace's counters).
-    pub fn challenge_layout(&self, screen: (f32, f32)) -> Option<ui::challenge::ChallengeLayout> {
-        let ac = self.activity.challenge.as_ref()?;
-        Some(ui::challenge::layout(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen))
-    }
-
     /// The hands-on "Show me" workspace, if one is open.
     pub fn challenge_workspace(&self) -> Option<&ui::concrete::Workspace> {
         self.activity.challenge.as_ref().and_then(|ac| ac.workspace.as_ref())
@@ -949,7 +939,7 @@ impl Game {
         self.dialogue.start(lines);
     }
 
-    /// Run one frame of pure logic — no rendering, no macroquad calls. Tests
+    /// Run one frame of pure logic — no rendering, no engine calls. Tests
     /// can call this without a window. Production main calls step() then render().
     pub fn step(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         self.game_time += dt;
@@ -1119,7 +1109,7 @@ impl Game {
         }
 
         // Settings overlay input
-        self.handle_settings_input(input, screen);
+        self.handle_settings_input(input);
 
         // Debug-overlay export (uses last-frame's stashed button rect, or E key).
         if self.debug_overlay.is_export_clicked(input)
@@ -1138,21 +1128,21 @@ impl Game {
         match self.state {
             GameState::Title => { self.step_title(input, screen); true }
             GameState::NewGame => { self.step_new_game(input, dt, screen); true }
-            GameState::Intake => { self.step_intake(input, dt, screen); false }
+            GameState::Intake => { self.step_intake(input, dt); false }
             GameState::Playing => { self.step_playing(input, dt, screen); false }
             GameState::InteractionMenu => false,
             GameState::Dialogue => { self.step_dialogue(input); false }
-            GameState::Challenge => { self.step_challenge(input, dt, screen); false }
+            GameState::Challenge => { self.step_challenge(input, dt); false }
             GameState::KenKen => { self.step_kenken(input, dt, screen); false }
             GameState::Pattern => { self.step_pattern(input, dt, screen); false }
             GameState::Balance => { self.step_balance(input, dt, screen); false }
             GameState::Sudoku => { self.step_sudoku(input, dt, screen); false }
             GameState::Shooter => { self.step_shooter(input, dt, screen); false }
-            GameState::Shop => { self.step_shop(input, screen); false }
-            GameState::Swag => { self.step_swag(input, screen); false }
-            GameState::Descent => { self.step_descent(input, dt, screen); false }
+            GameState::Shop => { self.step_shop(input); false }
+            GameState::Swag => { self.step_swag(input); false }
+            GameState::Descent => { self.step_descent(input, dt); false }
             GameState::PearlHop => { self.step_pearl_hop(input, dt, screen); false }
-            GameState::Quest => { self.step_quest(input, screen); false }
+            GameState::Quest => { self.step_quest(input); false }
         }
     }
 
@@ -1295,7 +1285,7 @@ impl Game {
         }
     }
 
-    fn step_intake(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+    fn step_intake(&mut self, input: &FrameInput, dt: f32) {
         let mut iq = match self.intake.take() {
             Some(s) => s,
             None => return,
@@ -1341,12 +1331,7 @@ impl Game {
                     }
 
                     if !dismiss && input.mouse_clicked {
-                        let (mx, my) = input.mouse_pos;
-                        if let Some(action) = ui::challenge::handle_click(
-                            mx, my, &ac.state, &ac.challenge,
-                            // Same pure layout render paints — hit rects can't drift.
-                            &ui::challenge::layout(&ac.state, &ac.challenge, None, screen),
-                        ) {
+                        if let Some(action) = ui::challenge::handle_click(input.ui_press, &ac.state, &ac.challenge) {
                             ac.state = challenge_reducer(ac.state.clone(), action);
                             speak_challenge_feedback(&ac.state, "Sparky");
                         } else if ac.state.phase == Phase::Complete {
@@ -1554,8 +1539,9 @@ impl Game {
     fn step_playing(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         // ── Movement: collect intents, resolve, apply ───────────────────
         // A tap on the map sets a walk path (click-to-walk); keyboard input
-        // overrides it. The debug overlay owns clicks when it's up.
-        if input.mouse_clicked && !self.debug_overlay.visible {
+        // overrides it. The debug overlay owns clicks when it's up, and a tap
+        // on a panel is never also a step.
+        if input.mouse_clicked && !input.click_on_ui && !self.debug_overlay.visible {
             let (mx, my) = input.mouse_pos;
             self.set_path_from_click(mx, my, screen);
         }
@@ -1994,7 +1980,7 @@ impl Game {
         }
     }
 
-    fn step_challenge(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
+    fn step_challenge(&mut self, input: &FrameInput, dt: f32) {
         // Whoever's tagging along narrates the challenge feedback. Bound up
         // front so it doesn't clash with the mutable borrow of active_challenge.
         let buddy = self.current_buddy_name();
@@ -2009,10 +1995,12 @@ impl Game {
             // The hands-on workspace gets first claim on the pointer: a press on
             // a counter is a pickup, not a click on the panel beneath it.
             let mut pointer_busy = false;
-            let area = ui::challenge::layout(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen)
-                .workspace();
-            if let (Some(ws), Some(area)) = (ac.workspace.as_mut(), area) {
+            if let Some(ws) = ac.workspace.as_mut() {
                 ws.tick(dt);
+            }
+            // Where the panel put the workspace (last frame's layout).
+            let area = input.art_rect(ui::ArtId::Workspace);
+            if let (Some(ws), Some(area)) = (ac.workspace.as_mut(), area) {
                 match ui::concrete::handle_pointer(ws, input, area) {
                     ui::concrete::Pointer::Idle => {}
                     ui::concrete::Pointer::Busy => pointer_busy = true,
@@ -2054,12 +2042,7 @@ impl Game {
             }
 
             if !dismiss && !pointer_busy && input.mouse_clicked {
-                let (mx, my) = input.mouse_pos;
-                if let Some(action) = ui::challenge::handle_click(
-                    mx, my, &ac.state, &ac.challenge,
-                    // Same pure layout render paints — hit rects can't drift.
-                    &ui::challenge::layout(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen),
-                ) {
+                if let Some(action) = ui::challenge::handle_click(input.ui_press, &ac.state, &ac.challenge) {
                     let show_me = matches!(action, ChallengeAction::ShowMe);
                     note_action(ac, &action, self.game_time);
                     ac.state = challenge_reducer(ac.state.clone(), action);
@@ -2377,7 +2360,7 @@ impl Game {
         self.set_state(GameState::Quest);
     }
 
-    fn step_quest(&mut self, input: &FrameInput, screen: (f32, f32)) {
+    fn step_quest(&mut self, input: &FrameInput) {
         // Pull the current step (clone) so we can mutate the session afterward.
         let step = match self.activity.quest.as_ref().and_then(|aq| aq.session.current_step().cloned()) {
             Some(s) => s,
@@ -2391,13 +2374,7 @@ impl Game {
         let intent = {
             let aq = self.activity.quest.as_ref().unwrap();
             let Some(view) = quest_view(aq) else { return };
-            if input.mouse_clicked {
-                let (mx, my) = input.mouse_pos;
-                let layout = ui::quest::layout(&view, &aq.session.quest.title, aq.message.as_deref(), screen);
-                ui::quest::handle_click(mx, my, &layout, &view)
-            } else {
-                ui::quest::handle_key(input, &view)
-            }
+            ui::quest::handle_click(input, &view).or_else(|| ui::quest::handle_key(input, &view))
         };
         let Some(intent) = intent else { return };
 
@@ -2565,7 +2542,6 @@ impl Game {
                         source_npc: source,
                         picking_color: false,
                         trading: None,
-                        page: 0,
                     });
                     self.set_state(GameState::Shop);
                 }
@@ -2623,10 +2599,10 @@ impl Game {
         }
     }
 
-    fn handle_settings_input(&mut self, input: &FrameInput, screen: (f32, f32)) {
+    fn handle_settings_input(&mut self, input: &FrameInput) {
         if self.settings_open {
             use ui::settings_overlay::{Feature, SettingsResult};
-            if let Some(result) = ui::settings_overlay::handle_input(input, screen, self.settings_model()) {
+            if let Some(result) = ui::settings_overlay::handle_input(input) {
                 match result {
                     // These stay in the overlay — just mutate state, don't close.
                     SettingsResult::ToggleParentPanel => {
@@ -3438,14 +3414,6 @@ impl Game {
                 }
             }
 
-            if let Some(ref iq) = self.intake {
-                if let Some(ref ac) = iq.challenge {
-                    {
-                        let layout = ui::challenge::layout(&ac.state, &ac.challenge, None, screen);
-                        ui::challenge::draw(&layout, &ac.state, &ac.challenge, None, self.game_time);
-                    }
-                }
-            }
         } else {
             set_camera(&Camera2D {
                 zoom: vec2(2.0 / sw, 2.0 / sh),
@@ -3673,8 +3641,42 @@ impl Game {
         );
     }
 
-    /// Draw everything for the current frame. Only called in production — tests
-    /// skip this so they don't need a macroquad context.
+    /// Record everything drawn this frame (see `crate::draw`). Only called in
+    /// production and by the screenshots example.
+    /// What the Bevy UI panels show this frame (see `ui::views`).
+    pub fn ui_views(&self, screen: (f32, f32)) -> ui::views::UiViews {
+        let in_world = !matches!(self.state, GameState::Title | GameState::NewGame);
+        ui::views::UiViews {
+            dialogue: self.dialogue.view().filter(|_| in_world),
+            dialogue_reveal: self.dialogue.revealed(),
+            quest: self.activity.quest.as_ref().filter(|_| in_world).and_then(|aq| {
+                Some(ui::quest::QuestPanelView {
+                    view: quest_view(aq)?,
+                    title: aq.session.quest.title.clone(),
+                    message: aq.message.clone(),
+                    screen_h: screen.1,
+                })
+            }),
+            shop: self.shop_panel_view().filter(|_| in_world),
+            swag: self.swag_panel_view().filter(|_| in_world),
+            settings: self.settings_open.then(|| ui::settings_overlay::SettingsView::new(self.settings_model(), screen)),
+            pearl_hop: self.pearl_hop_view().map(|v| ui::pearl_hop::HopPanelView::new(&v)),
+            shooter_footer: self.activity.shooter.as_ref()
+                .filter(|a| a.session.phase != ShooterPhase::Complete)
+                .map(|_| ui::shooter::FooterView),
+            descent: self.activity.descent.as_ref().map(|ad| ui::descent::DescentView::new(&ad.session, ad.message.as_deref())),
+            challenge: self
+                .shown_challenge()
+                .filter(|_| in_world)
+                .map(|ac| ui::challenge::ChallengeView::new(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen)),
+        }
+    }
+
+    /// The challenge on screen: a normal one, or the intake quiz's.
+    fn shown_challenge(&self) -> Option<&ActiveChallenge> {
+        self.activity.challenge.as_ref().or_else(|| self.intake.as_ref().and_then(|iq| iq.challenge.as_ref()))
+    }
+
     pub fn render(&mut self, screen: (f32, f32), input: &FrameInput) {
         match self.state {
             GameState::Title => {
@@ -3701,14 +3703,7 @@ impl Game {
             ui::interaction_menu::draw(&layout, input.mouse_pos);
         }
 
-        self.dialogue.draw(screen);
 
-        // Challenge overlay (separate from intake's in-render_world drawing).
-        if let Some(ref ac) = self.activity.challenge {
-            let ws = ac.workspace.as_ref();
-            let layout = ui::challenge::layout(&ac.state, &ac.challenge, ws, screen);
-            ui::challenge::draw(&layout, &ac.state, &ac.challenge, ws, self.game_time);
-        }
 
         // KenKen overlay
         if let Some(ref ak) = self.activity.kenken {
@@ -3739,32 +3734,13 @@ impl Game {
             ui::shooter::draw(&a.session, a.ship_draw_x, self.track_toast_text(), screen, self.game_time);
         }
 
-        self.render_shop_overlay(screen);
 
-        // Shelly's Pearl Hop — a full-screen minigame.
-        if let (Some(view), Some(layout)) = (self.pearl_hop_view(), self.pearl_hop_layout(screen)) {
+        // Shelly's Pearl Hop — a full-screen minigame; its buttons and caption
+        // are a panel on top.
+        if let Some(view) = self.pearl_hop_view() {
+            let layout = ui::pearl_hop::layout(&view, screen);
             let art = self.pearl_hop_art(&layout);
             ui::pearl_hop::draw(&view, &layout, &art, self.game_time);
-        }
-
-        // Descent overlay
-        if let Some(ref ad) = self.activity.descent {
-            let layout = ui::descent::layout(&ad.session, screen);
-            ui::descent::draw(&ad.session, &layout, ad.message.as_deref(), self.game_time);
-        }
-
-        self.render_swag_overlay(screen);
-
-        // Quest overlay
-        if let Some(ref aq) = self.activity.quest {
-            if let Some(view) = quest_view(aq) {
-                let layout = ui::quest::layout(&view, &aq.session.quest.title, aq.message.as_deref(), screen);
-                ui::quest::draw(&layout);
-            }
-        }
-
-        if self.settings_open {
-            ui::settings_overlay::draw(screen, self.settings_model());
         }
     }
 
@@ -3904,19 +3880,19 @@ impl Game {
 
 /// Build the player-facing view of the quest's current step (borrows the step
 /// + generated choices). `None` once the quest is complete/inactive.
-fn quest_view(aq: &ActiveQuest) -> Option<ui::quest::QuestView<'_>> {
+fn quest_view(aq: &ActiveQuest) -> Option<ui::quest::QuestView> {
     use ui::quest::QuestView;
     let step = aq.session.current_step()?;
     Some(match step {
-        QuestStep::Dialogue { speaker, lines } => QuestView::Narrative { speaker, lines },
+        QuestStep::Dialogue { speaker, lines } => QuestView::Narrative { speaker: speaker.clone(), lines: lines.clone() },
         QuestStep::Travel { map, x, y } => {
             QuestView::Travel { label: format!("Head to {map} at ({x}, {y})...") }
         }
         QuestStep::MathPuzzle { context, .. } => {
-            let choices = aq.puzzle.as_ref().map(|p| p.choices.as_slice()).unwrap_or(&[]);
-            QuestView::Puzzle { prompt: context, choices }
+            let choices = aq.puzzle.as_ref().map(|p| p.choices.clone()).unwrap_or_default();
+            QuestView::Puzzle { prompt: context.clone(), choices }
         }
-        QuestStep::Choice { prompt, options } => QuestView::Choice { prompt, options },
+        QuestStep::Choice { prompt, options } => QuestView::Choice { prompt: prompt.clone(), options: options.clone() },
         QuestStep::Reward { dum_dums } => QuestView::Reward { dum_dums: *dum_dums },
     })
 }

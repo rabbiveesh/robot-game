@@ -23,7 +23,7 @@ pub const INTRO_STEPS: u8 = 3;
 
 // ─── Layout types ───────────────────────────────────────
 
-pub use crate::ui::layout::UiRect;
+pub use crate::ui::rect::UiRect;
 
 pub struct PickerBound {
     pub rect: UiRect,

@@ -1,36 +1,46 @@
 //! The outfit-colour swatch grid, shared by every panel that picks a Color
 //! Change colour: Bolt's counter (for the kid) and the Give-Swag panel (for a
 //! buddy). One grid, so the kid picks a colour the same way for anybody.
-//!
-//! Layout-only nodes plus a painter; the panel supplies its own ids.
+
+use bevy::prelude::{default, AlignItems, ChildSpawner, JustifyContent, Node, UiRect};
+use bevy::ui::px;
 
 use crate::prelude::*;
-use crate::ui::layout::{col, paint, region, row, Align, Justify, Node, UiRect};
+use super::kit::{button, col};
+use super::UiAction;
 
 /// Swatches per row.
 const PER_ROW: usize = 4;
 
-/// `count` tappable swatches in rows of four, `id(i)` naming swatch `i`.
-/// Rows shrink toward 56px on a short screen and the swatches stretch to them;
-/// `min_h(0)` lets the grid squeeze its rows (CSS won't shrink a column below
-/// its rows' preferred heights otherwise).
-pub fn grid<Id: Copy>(count: usize, id: impl Fn(usize) -> Id) -> Node<Id> {
-    col().gap(18.0).min_h(0.0).children((0..count).step_by(PER_ROW).map(|start| {
-        let end = (start + PER_ROW).min(count);
-        row().gap(18.0).justify(Justify::Center).align(Align::Stretch).h(90.0).min_h(56.0).children(
-            (start..end).map(|i| region(90.0, 0.0).auto_h().id(id(i)).hit().min_w(40.0)),
-        )
-    }))
-}
-
 const GOLD: Color = Color::new(1.0, 0.835, 0.310, 1.0);
 
-/// Paint one swatch; the colour being worn right now gets a thick gold frame.
-pub fn paint_swatch(r: UiRect, color: Color, worn: bool) {
-    paint::fill(r, color);
-    if worn {
-        paint::outline(r.expand(3.0), 6.0, GOLD);
-    } else {
-        paint::outline(r, 2.0, Color::new(1.0, 1.0, 1.0, 0.4));
-    }
+/// Tappable swatches in rows of four, `action(i)` naming swatch `i`; the
+/// colour worn right now gets a thick gold frame. Rows shrink toward 56px on a
+/// short screen and the swatches stretch to them.
+pub fn grid(p: &mut ChildSpawner, colors: &[Color], current: usize, action: impl Fn(usize) -> UiAction) {
+    p.spawn(Node { row_gap: px(18), min_height: px(0), ..col() }).with_children(|p| {
+        for start in (0..colors.len()).step_by(PER_ROW) {
+            let row = Node {
+                column_gap: px(18),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Stretch,
+                height: px(90),
+                min_height: px(56),
+                ..default()
+            };
+            p.spawn(row).with_children(|p| {
+                for (i, &c) in colors.iter().enumerate().skip(start).take(PER_ROW) {
+                    let worn = i == current;
+                    let node = Node {
+                        width: px(90),
+                        min_width: px(40),
+                        border: UiRect::all(px(if worn { 6.0 } else { 2.0 })),
+                        ..default()
+                    };
+                    let edge = if worn { GOLD } else { Color::new(1.0, 1.0, 1.0, 0.4) };
+                    p.spawn(button(action(i), node, c, edge));
+                }
+            });
+        }
+    });
 }
