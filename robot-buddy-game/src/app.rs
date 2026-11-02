@@ -90,6 +90,18 @@ pub fn primary_window() -> Window {
     }
 }
 
+/// Unix seconds, for stamping records.
+fn wall_clock() -> f64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Date::now() / 1000.0
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.as_secs_f64())
+    }
+}
+
 /// A seed from the wall clock, so each launch plays differently.
 pub fn clock_seed() -> u64 {
     #[cfg(target_arch = "wasm32")]
@@ -153,13 +165,39 @@ fn capture(
     let last = out.0.mouse_pos;
     let cursor = window.single().ok().and_then(|w| w.cursor_position());
     input.mouse_pos = cursor.map_or(last, |p| (p.x, p.y));
-    if mouse.just_pressed(MouseButton::Left) {
+    input.mouse_clicked = mouse.just_pressed(MouseButton::Left);
+    input.mouse_down = mouse.pressed(MouseButton::Left);
+    input.mouse_released = mouse.just_released(MouseButton::Left);
+    // The first finger down is the pointer: it presses, drags and lets go.
+    if let Some(t) = touches.iter_just_pressed().next() {
+        input.mouse_pos = (t.position().x, t.position().y);
         input.mouse_clicked = true;
-    } else if let Some(t) = touches.iter_just_pressed().next() {
-        let p = t.position();
-        input = input.with_mouse_click(p.x, p.y);
+        input.mouse_down = true;
+    } else if let Some(t) = touches.iter().next() {
+        input.mouse_pos = (t.position().x, t.position().y);
+        input.mouse_down = true;
+    } else if let Some(t) = touches.iter_just_released().next() {
+        input.mouse_pos = (t.position().x, t.position().y);
+        input.mouse_released = true;
+    }
+    input.now = wall_clock();
+    crate::trace::next_frame();
+    if crate::trace::enabled() {
+        trace_frame_input(&out.0, &input);
     }
     out.0 = input;
+}
+
+/// One line whenever the pointer part of the frame's input is interesting:
+/// a press, a release, the held state flipping, or movement while held.
+fn trace_frame_input(prev: &FrameInput, now: &FrameInput) {
+    let moved_while_down = now.mouse_down && now.mouse_pos != prev.mouse_pos;
+    if now.mouse_clicked || now.mouse_released || now.mouse_down != prev.mouse_down || moved_while_down {
+        crate::trace!(
+            "frame clicked={} down={} released={} pos=({:.0},{:.0}) ui={:?}",
+            now.mouse_clicked, now.mouse_down, now.mouse_released, now.mouse_pos.0, now.mouse_pos.1, now.ui_press,
+        );
+    }
 }
 
 fn run_frame(
@@ -224,7 +262,7 @@ fn paint(
             Cmd::Layer(n) => {
                 layer = *n;
                 size = match ArtId::ALL.iter().find(|a| a.layer() == layer) {
-                    Some(&id) => art.0.iter().find(|(a, ..)| *a == id).map_or((1.0, 1.0), |&(_, w, h)| (w, h)),
+                    Some(&id) => art.0.iter().find(|(a, _)| *a == id).map_or((1.0, 1.0), |&(_, r)| (r.w, r.h)),
                     None => screen,
                 };
             }

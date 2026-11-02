@@ -1,25 +1,8 @@
 use serde::Serialize;
 use std::collections::HashMap;
+use robot_buddy_domain::learning::attempt_log::AttemptRecord;
 use robot_buddy_domain::learning::learner_profile::LearnerProfile;
 use robot_buddy_domain::types::{CraStage, Operation};
-
-/// A single challenge attempt record for the session log.
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ChallengeRecord {
-    pub question: String,
-    pub correct_answer: i32,
-    pub player_answer: Option<i32>,
-    pub correct: bool,
-    pub operation: String,
-    pub band: u8,
-    pub sampled_band: u8,
-    pub hint_used: bool,
-    pub told_me: bool,
-    pub attempts: u32,
-    pub source: String,          // "sparky", "npc", "chest"
-    pub play_time_at_event: f32, // seconds since game start
-}
 
 /// A give event record.
 #[derive(Clone, Serialize)]
@@ -36,7 +19,7 @@ pub struct GiveRecord {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum SessionEvent {
     #[serde(rename = "CHALLENGE_COMPLETED")]
-    ChallengeCompleted(ChallengeRecord),
+    ChallengeCompleted(AttemptRecord),
     #[serde(rename = "GIFT_GIVEN")]
     GiftGiven(GiveRecord),
 }
@@ -51,7 +34,7 @@ impl SessionLog {
         SessionLog { events: Vec::new() }
     }
 
-    pub fn record_challenge(&mut self, record: ChallengeRecord) {
+    pub fn record_challenge(&mut self, record: AttemptRecord) {
         self.events.push(SessionEvent::ChallengeCompleted(record));
     }
 
@@ -75,6 +58,9 @@ pub struct SessionExport {
     pub export_date: String,
     pub player_name: String,
     pub session_events: Vec<SessionEvent>,
+    /// The saved attempt log — every challenge across sessions, newest last.
+    /// What `cargo run -p robot-buddy-domain --bin analyze` reads.
+    pub attempt_history: Vec<AttemptRecord>,
     pub summary: SessionSummary,
     pub metadata: ExportMetadata,
 }
@@ -112,6 +98,7 @@ pub struct ExportMetadata {
 pub fn build_export(
     player_name: &str,
     session_log: &SessionLog,
+    attempt_history: &[AttemptRecord],
     gifts_given: &HashMap<String, u32>,
     dum_dums: u32,
     play_time: f32,
@@ -126,6 +113,7 @@ pub fn build_export(
         export_date: current_iso_date(),
         player_name: player_name.to_string(),
         session_events: session_log.events.clone(),
+        attempt_history: attempt_history.to_vec(),
         summary: SessionSummary {
             challenges_attempted: attempted,
             challenges_correct: correct,

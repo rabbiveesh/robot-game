@@ -1,7 +1,7 @@
 //! Panels and HUD.
 //!
 //! Panels that are Bevy UI (dialogue, challenge, shop, swag, quest, settings,
-//! leap, descent, the shooter's footer) are written in two halves: a pure
+//! Pearl Hop's buttons and caption, descent, the shooter's footer) are written in two halves: a pure
 //! *view* the game builds from its state (`Game::ui_views`), and a *bundle*
 //! function turning that view into Bevy UI nodes. Bevy lays them out, draws
 //! them, and turns taps into [`UiAction`]s that `Game::step` reads from
@@ -9,19 +9,21 @@
 //! shop mirror…) is drawn by `Game::render` into an [`ArtId`] slot. See
 //! `docs/adr/006-bevy-ui-panels.md`.
 //!
-//! The rest (HUD, title screen, the logic-puzzle boards) still draw by hand
-//! through `crate::draw`.
+//! The rest (HUD, title screen, the logic-puzzle boards, the Pearl Hop
+//! lagoon) still draw by hand through `crate::draw`.
 
 pub mod kit;
 pub mod probe;
 pub mod views;
 pub mod metrics;
 pub mod rect;
+pub mod canvas;
 pub mod dialogue;
 pub mod challenge;
+pub mod concrete;
 pub mod balance;
 pub mod kenken;
-pub mod leap;
+pub mod pearl_hop;
 pub mod patterns;
 pub mod quest;
 pub mod shooter;
@@ -46,7 +48,7 @@ pub enum UiAction {
     Quest(quest::QuestId),
     Settings(settings_overlay::SettingsId),
     Shooter(shooter::FooterId),
-    Leap(leap::LeapId),
+    PearlHop(pearl_hop::HopId),
     Descent(descent::DescentId),
 }
 
@@ -67,16 +69,30 @@ pub enum ArtId {
     SwagPreview,
     /// The dive shaft: a vertical number line with the diver on it.
     DescentShaft,
+    /// The hands-on workspace (Concrete-stage Show me): frames, tray and
+    /// counters the kid drags.
+    Workspace,
+    /// The whole screen over the challenge panel: the counter in the kid's
+    /// hand rides here, wherever the finger goes.
+    WorkspaceHand,
+    /// Pearl Hop's Leave button: a back arrow.
+    HopLeaveIcon,
+    /// Pearl Hop's Again! button: a pearl.
+    HopAgainIcon,
 }
 
 impl ArtId {
-    pub const ALL: [ArtId; 6] = [
+    pub const ALL: [ArtId; 10] = [
         ArtId::ChallengeVisual,
         ArtId::ChallengeStars,
         ArtId::ShopPreview,
         ArtId::ShopPile,
         ArtId::SwagPreview,
         ArtId::DescentShaft,
+        ArtId::Workspace,
+        ArtId::WorkspaceHand,
+        ArtId::HopLeaveIcon,
+        ArtId::HopAgainIcon,
     ];
 
     /// The render layer this slot's art is drawn on (0 is the screen).
@@ -99,7 +115,7 @@ impl bevy::app::Plugin for PanelsPlugin {
             .add_panel::<quest::QuestPanel>()
             .add_panel::<shop::ShopPanel>()
             .add_panel::<swag::SwagPanel>()
-            .add_panel::<leap::LeapPanel>()
+            .add_panel::<pearl_hop::HopPanel>()
             .add_panel::<descent::DescentPanel>()
             .add_panel::<shooter::FooterPanel>();
     }

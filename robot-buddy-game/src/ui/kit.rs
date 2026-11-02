@@ -20,7 +20,7 @@ use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::render::render_resource::{TextureFormat, TextureUsages};
 use bevy::text::{LineBreak, LineHeight, TextLayoutInfo};
-use bevy::ui::UiSystems;
+use bevy::ui::{UiGlobalTransform, UiSystems};
 use bevy::window::WindowResized;
 
 use super::views::UiViews;
@@ -275,26 +275,29 @@ struct ArtImage;
 #[derive(Resource)]
 pub struct NoArtTextures;
 
-/// Art slots on screen, logical sizes — read into the next `FrameInput`.
+/// Art slots on screen, where they sit in logical pixels — read into the
+/// next `FrameInput`.
 #[derive(Resource, Default)]
-pub struct ArtSizes(pub Vec<(ArtId, f32, f32)>);
+pub struct ArtSizes(pub Vec<(ArtId, super::rect::UiRect)>);
 
 /// Give every art slot an offscreen camera on its own render layer, drawing
 /// into a texture the slot shows. A slot's texture follows its laid-out size.
 fn art_targets(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
-    slots: Query<(Entity, &Art, &ComputedNode, Option<&ArtTarget>, Option<&Children>)>,
+    slots: Query<(Entity, &Art, &ComputedNode, &UiGlobalTransform, Option<&ArtTarget>, Option<&Children>)>,
     mut shown: Query<&mut ImageNode, With<ArtImage>>,
     mut cameras: Query<(&mut RenderTarget, &mut Projection)>,
     mut sizes: ResMut<ArtSizes>,
     headless: Option<Res<NoArtTextures>>,
 ) {
     sizes.0.clear();
-    for (e, art, node, target, children) in &slots {
+    for (e, art, node, at, target, children) in &slots {
         let px = node.size().round().as_uvec2().max(UVec2::ONE);
         let logical = node.size() * node.inverse_scale_factor();
-        sizes.0.push((art.0, logical.x, logical.y));
+        let centre = at.translation * node.inverse_scale_factor();
+        let top_left = centre - logical / 2.0;
+        sizes.0.push((art.0, super::rect::UiRect::new(top_left.x, top_left.y, logical.x, logical.y)));
         if headless.is_some() || target.is_some_and(|t| t.size == px) {
             continue;
         }

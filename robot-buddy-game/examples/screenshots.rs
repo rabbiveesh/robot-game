@@ -275,23 +275,6 @@ fn record() -> Shots {
         shots.snap_game("20_dogfish_house", &mut h);
     }
 
-    // ── Shelly's leap strip, before and after a size is picked ──
-    {
-        let mut h = Harness::new(21);
-        h.start_dev_game();
-        h.game.profile.math_band = 2;
-        h.game.map = Map::reef();
-        h.game.npcs.clear();
-        h.game.npcs_offstage.clear();
-        h.warp_to(5, 13);
-        h.advance(30);
-        shots.snap_game("21_leap_choosing", &mut h);
-        let size = h.game.leap_session().unwrap().puzzle.size;
-        h.pick_leap_size(size);
-        h.advance(10);
-        shots.snap_game("22_leap_committed", &mut h);
-    }
-
     // ── The dive shaft (a deep one, with ledges) ──
     {
         let mut h = Harness::new(9);
@@ -307,6 +290,29 @@ fn record() -> Shots {
         let first = h.game.active_descent().unwrap().session.puzzle.kicks[1];
         h.kick(first, true);
         shots.snap_game("23_descent", &mut h);
+    }
+
+    // ── Pearl Hop: Shelly's beacon on the reef, then every stage, aiming and won ──
+    {
+        let mut h = Harness::new(21);
+        h.start_dev_game();
+        h.game.map = Map::reef();
+        h.game.npcs = npc_mod::npcs_for_map("reef");
+        h.game.npcs_offstage.clear();
+        h.warp_to(6, 12);
+        h.advance(20);
+        shots.snap_game("24_reef_shelly_beacon", &mut h);
+        for band in [1u8, 2, 3, 6] {
+            h.game.profile.math_band = band;
+            h.open_pearl_hop();
+            h.skip_shelly_demo();
+            shots.snap_game(&format!("25_pearl_hop_band{band}"), &mut h);
+            let aim = h.winning_aim();
+            h.toss_shelly(aim);
+            h.advance(30);
+            shots.snap_game(&format!("26_pearl_hop_band{band}_won"), &mut h);
+            h.leave_pearl_hop_by_tap();
+        }
     }
 
     // ── Panels drawn directly: a 4-line dialogue and a wrapped word problem ──
@@ -363,11 +369,47 @@ fn record() -> Shots {
             );
             for (name, cs) in [("presented", &p), ("showme_feedback", &hinted_fed), ("taught", &taught)] {
                 shots.snap(&format!("14_challenge_band{band}_{name}"), |_| {}, |screen| UiViews {
-                    challenge: Some(challenge::ChallengeView::new(cs, &c, screen)),
+                    challenge: Some(challenge::ChallengeView::new(cs, &c, None, screen)),
                     ..default()
                 });
             }
         }
+    }
+
+    // ── Hands-on "Show me": the manipulatives bench, put together then take away ──
+    {
+        let mut h = Harness::new(7);
+        h.start_dev_game();
+        h.game.profile.math_band = 4; // numbers past ten: two frames
+        h.open_manipulatives_bench();
+        h.advance(30);
+        shots.snap_game("27_workspace_add_open", &mut h);
+
+        // Mid-drag: a counter in hand over the frames.
+        let (from, to) = (h.a_grabbable_counter(), h.drop_target());
+        h.step(&FrameInput::empty().with_mouse_click(from.0, from.1));
+        h.step(&FrameInput::empty().with_mouse_held(to.0, to.1));
+        shots.snap_game("28_workspace_carrying", &mut h);
+        h.step(&FrameInput::empty().with_mouse_release(to.0, to.1));
+
+        h.build_the_model();
+        h.advance(60);
+        shots.snap_game("29_workspace_add_built", &mut h);
+
+        let area = h.workspace_area();
+        let ten = h.game.challenge_workspace()
+            .and_then(|ws| robot_buddy_game::ui::concrete::layout(ws, area).badges.first().copied().flatten());
+        if let Some(badge) = ten {
+            h.click(badge.center().0, badge.center().1);
+            h.advance(60);
+            shots.snap_game("30_workspace_add_rod", &mut h);
+        }
+        h.answer_correctly();
+        h.wait_until(|g| g.state == GameState::Playing);
+
+        h.open_manipulatives_bench();
+        h.advance(30);
+        shots.snap_game("31_workspace_take_away_open", &mut h);
     }
     shots
 }

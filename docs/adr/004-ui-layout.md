@@ -143,7 +143,7 @@ engine (below), so there is nothing left to diff against.
   `get_text_center`, `screen_width/height`, `get_time`, camera and context fns;
 - the same resolved through `use … as alias` imports, passed as a function value, or
   inside a macro's tokens (`format!`, `vec![]`, custom macros);
-- `draw*` helpers from **unmigrated** modules (`leap::draw`, `sprites::…::draw_player`)
+- `draw*` helpers from **unmigrated** modules (`descent::draw`, `sprites::…::draw_player`)
   — allowed only if the callee is the file's own fn, the painter, or another
   migrated module;
 - hand-made rects: `UiRect::new`, `UiRect { .. }`, `.inset(..)`, `.expand(..)` outside
@@ -161,8 +161,9 @@ same advance widths, and Unifont has no kerning) would show only in screenshots.
 ### Migrated vs not
 
 Migrated: shop (catalog, buy, trade pile, color picker), swag, quest, challenge
-(incl. teaching and the CRA visuals), dialogue, settings.
-Not migrated (use the shared `UiRect` only): leap, descent, title screen, interaction
+(incl. teaching and the CRA visuals), dialogue, settings, Pearl Hop (its scene is one
+`Region` painted through a `Canvas`; `SceneGeom` derives every position from it).
+Not migrated (use the shared `UiRect` only): descent, title screen, interaction
 menu, kenken, sudoku, patterns, balance, shooter, HUD.
 
 ## Swapped in taffy (2026-10-22)

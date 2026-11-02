@@ -4,6 +4,7 @@ use robot_buddy_game::app::{clock_seed, primary_window, GamePlugin};
 use robot_buddy_game::game::Game;
 
 fn main() {
+    robot_buddy_game::trace::init();
     let mut game = Game::new(clock_seed());
     game.refresh_save_slots();
 

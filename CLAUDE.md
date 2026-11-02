@@ -48,7 +48,9 @@ robot-buddy-domain/              # Pure Rust domain (no browser deps)
     lib.rs                       # pub mod types/learning/challenge/economy/logic/world/text/quest
     types.rs                     # Shared enums (Operation, SubSkill, CraStage, Phase,
                                  #   GamePace — parent-set arcade speed)
-    learning/                    # Profile reducer, challenge gen, frustration, intake
+    learning/                    # Profile reducer, challenge gen, frustration, intake,
+                                 #   attempt_log (every challenge in detail, saved, bounded)
+                                 #   + attempt_analysis (the report `analyze` prints)
     challenge/                   # Lifecycle state machine
     economy/                     # Rewards, gifts, interaction options, shop, wardrobe
                                  #   (wardrobe = who wears which shop swag; swag given to a
@@ -59,12 +61,14 @@ robot-buddy-domain/              # Pure Rust domain (no browser deps)
                                  #   kenken, patterns, balance, sudoku, shooter,
                                  #   manipulate_concrete, number_line, base_ten,
                                  #   descent (the dive shaft that gates the trench),
-                                 #   leap (Shelly's pearl stones — skip-counting)
+                                 #   pearl_hop (Shelly's slingshot number path: count,
+                                 #   skip-count, X hops = divide, growing with the band)
     quest/                       # Quest data model + step reducer + micro-quest gen
     world/                       # movement resolver, random encounters
     text/                        # voice_parser (spoken-number → integer)
     bin/
       simulate.rs                # CLI learning simulator
+      analyze.rs                 # "is it working?" report over exported attempt logs
 
 robot-buddy-game/                # Bevy game (depends on domain)
   Cargo.toml
@@ -78,11 +82,14 @@ robot-buddy-game/                # Bevy game (depends on domain)
                                  #   draw::art paints into a panel's art slot
     game/                        # Game struct + step (pure logic) + render (records draws) + GameEvent
     input.rs                     # FrameInput — single input boundary (+ the game's KeyCode)
+    trace.rs                     # opt-in input trace (ROBOT_TRACE=1): per-frame input, drag decisions
     web.rs                       # browser APIs via web-sys: localStorage, speech, download, clock
     save.rs                      # SaveBackend trait + LocalStorageBackend (prod) + InMemoryBackend (tests)
     tilemap.rs, npc.rs, session.rs, settings.rs
-    sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit)
-    ui/                          # challenge, descent, dialogue, hud, interaction_menu, leap, shop, swag, swatches, title_screen, settings_overlay, visuals
+    sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit),
+                                 #   attract (the "game here!" beacon over minigame hosts),
+                                 #   dressed (THE way a character is drawn: body + swag, posed)
+    ui/                          # challenge, concrete (hands-on "Show me" workspace), descent, dialogue, hud, interaction_menu, pearl_hop, shop, swag, swatches, title_screen, settings_overlay, visuals
                                  #   Panels are Bevy UI (ADR-006): Game::ui_views → UiViews (views.rs)
                                  #   → each panel's bundle; taps come back as UiAction in FrameInput
       kit.rs                     # Panel trait, taps, Shrink (text that fits), art slots, scroll lists
@@ -115,7 +122,7 @@ ADRs document key design decisions, their context, and consequences. Read these 
 - **CRA Progression**: Concrete → Representational → Abstract. Tracked per math operation. A kid can be abstract for addition but concrete for division.
 - **Frustration Detection**: Analyzes rolling window of last 20 attempts + behavioral signals. Produces recommendations (drop band, encourage, switch to chat).
 - **Stealth Assessment**: Every interaction is a data point. The child never feels tested. Assessment happens through gameplay.
-- **Event Sourcing with Snapshots**: Events accumulate during a session. On save, snapshot the state + keep last 5 session logs. Bounded growth (~30KB cap).
+- **Event Sourcing with Snapshots**: Events accumulate during a session. On save, snapshot the state + keep last 5 session logs. Bounded growth: the profile part stays small; the attempt log (`attempt_log::MAX_ATTEMPTS` records, a few hundred bytes each) is the bulk, a few hundred KB per slot when full.
 
 ## Commands
 
@@ -136,8 +143,18 @@ cd robot-buddy-game/www && npx serve .
 # In the cloud: prefix with xvfb-run -a -s "-screen 0 1920x1080x24" (needs mesa-vulkan-drivers)
 SHOT_W=960 SHOT_H=720 SHOT_DIR=/tmp/shots cargo run -p robot-buddy-game --example screenshots --features screenshots
 
+# Debug how input feels on a real device (off by default; zero cost when off).
+# Native: per-frame FrameInput and each drag decision → stderr.
+ROBOT_TRACE=1 ./target/release/robot-buddy-game 2> input.log
+# Web: baked in at build time, lines go to the browser console
+ROBOT_TRACE=1 ./build-wasm.sh
+
 # Simulate adaptive learning
 cargo run -p robot-buddy-domain --bin simulate -- --profile gifted
+
+# Is it working? Report over parent exports (Settings → Parent options → Export session data;
+# each export carries the whole saved attempt log, overlaps are de-duplicated)
+cargo run -p robot-buddy-domain --bin analyze -- exports/*.json
 ```
 
 ## For Implementers

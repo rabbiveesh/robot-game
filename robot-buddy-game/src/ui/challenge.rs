@@ -5,6 +5,12 @@
 //! Bevy UI. Taps come back as [`ChallengeId`]s, so the buttons you see are
 //! exactly the buttons you can tap — a long wrapped word problem pushes both
 //! down together.
+//!
+//! "Show me" puts one of two things under the question: the static CRA picture
+//! (`visuals`), or — at the Concrete stage — the hands-on workspace
+//! (`concrete`), which the kid builds by dragging. The workspace draws in
+//! screen coordinates into its art slot; the counter in hand draws into a
+//! slot over the whole screen.
 
 use std::sync::Arc;
 
@@ -23,6 +29,7 @@ use robot_buddy_domain::types::Phase;
 
 use super::kit::{self, backdrop, button, col, fitted, text_centered, Art, Blink, HeightFor, Panel};
 use super::views::UiViews;
+use super::concrete::{self, Workspace};
 use super::{visuals, ArtId, UiAction};
 use crate::input::FrameInput;
 pub use crate::ui::rect::UiRect;
@@ -77,19 +84,24 @@ pub struct ChallengeView {
     pub compact: bool,
     /// For the visual (Show me / teaching), which is drawn as art.
     pub challenge: Arc<Challenge>,
+    /// "Show me" opened the hands-on workspace instead of the picture.
+    pub hands_on: bool,
+    /// The workspace as it is this frame, for its art.
+    pub workspace: Option<Arc<Workspace>>,
 }
 
 impl PartialEq for ChallengeView {
-    /// The visual is a function of the question, so it isn't compared.
+    /// The visual is a function of the question, and the workspace is only
+    /// art, so neither is compared.
     fn eq(&self, o: &Self) -> bool {
-        (self.phase, self.told_me, self.hint_used, self.correct, &self.question, &self.feedback)
-            == (o.phase, o.told_me, o.hint_used, o.correct, &o.question, &o.feedback)
+        (self.phase, self.told_me, self.hint_used, self.correct, &self.question, &self.feedback, self.hands_on)
+            == (o.phase, o.told_me, o.hint_used, o.correct, &o.question, &o.feedback, o.hands_on)
             && (&self.choices, self.correct_answer, self.compact) == (&o.choices, o.correct_answer, o.compact)
     }
 }
 
 impl ChallengeView {
-    pub fn new(cs: &ChallengeState, challenge: &Challenge, screen: (f32, f32)) -> Self {
+    pub fn new(cs: &ChallengeState, challenge: &Challenge, workspace: Option<&Workspace>, screen: (f32, f32)) -> Self {
         ChallengeView {
             phase: cs.phase,
             told_me: cs.told_me,
@@ -101,6 +113,8 @@ impl ChallengeView {
             correct_answer: challenge.correct_answer,
             compact: screen.1 < 600.0,
             challenge: Arc::new(challenge.clone()),
+            hands_on: workspace.is_some(),
+            workspace: workspace.map(|w| Arc::new(w.clone())),
         }
     }
 
@@ -133,7 +147,17 @@ impl Panel for ChallengePanel {
     }
     fn bundle(v: &ChallengeView) -> impl bevy::prelude::Bundle {
         let v = v.clone();
-        (backdrop(0.5, MARGIN), Children::spawn(SpawnWith(move |p: &mut ChildSpawner| spawn_panel(p, &v))))
+        (backdrop(0.5, MARGIN), Children::spawn(SpawnWith(move |p: &mut ChildSpawner| {
+            spawn_panel(p, &v);
+            if v.hands_on {
+                // The counter in hand rides over everything, the whole screen.
+                p.spawn((
+                    Node { position_type: PositionType::Absolute, left: px(0), top: px(0), width: percent(100), height: percent(100), ..default() },
+                    Art(ArtId::WorkspaceHand),
+                    bevy::picking::Pickable::IGNORE,
+                ));
+            }
+        })))
     }
 }
 
@@ -185,6 +209,22 @@ fn spawn_teaching(p: &mut ChildSpawner, v: &ChallengeView) {
     p.spawn(fixed()).with_child(fitted("Press SPACE or click to continue", 22.0, 14.0, false, HINT_GRAY, Justify::Center));
 }
 
+/// The hands-on workspace: its natural size (scaled to the panel's width),
+/// giving up height on a short screen down to `MIN_HEIGHT_SHARE` of it; the
+/// counters scale to whatever it gets.
+fn workspace(p: &mut ChildSpawner) {
+    let natural_h = concrete::extent_at(concrete::MAX_W).1;
+    let node = Node {
+        width: percent(100),
+        max_width: px(concrete::MAX_W),
+        min_height: px(natural_h * concrete::MIN_HEIGHT_SHARE),
+        flex_shrink: 1.0,
+        align_self: bevy::prelude::AlignSelf::Center,
+        ..default()
+    };
+    p.spawn((node, Art(ArtId::Workspace), HeightFor::new(|w| concrete::extent_at(w).1)));
+}
+
 fn spawn_answering(p: &mut ChildSpawner, v: &ChallengeView) {
     let answering = v.phase == Phase::Presented || v.phase == Phase::Feedback;
     let complete = v.phase == Phase::Complete;
@@ -192,7 +232,7 @@ fn spawn_answering(p: &mut ChildSpawner, v: &ChallengeView) {
 
     p.spawn(kit::fitted_squeezed(v.question.clone(), 42.0, 16.0, WHITE, Justify::Center));
     if v.hint_used {
-        visual(p, v);
+        if v.hands_on { workspace(p) } else { visual(p, v) }
     }
     // While the kid is answering, the feedback line is always there — empty
     // until they miss — so "Hmm, not quite!" appearing can't shove the answer
@@ -357,5 +397,18 @@ pub fn handle_click(press: Option<UiAction>, cs: &ChallengeState, challenge: &Ch
             let answer: i32 = challenge.choices.get(i)?.text.parse().unwrap_or(0);
             Some(ChallengeAction::AnswerSubmitted { answer })
         }
+    }
+}
+
+/// Paint the hands-on workspace: its own slot at `area`, and the counter in
+/// hand in the whole-screen slot at `hand` (both screen rects; the workspace
+/// lays out and hit-tests in screen coordinates).
+pub fn draw_workspace(ws: &Workspace, id: ArtId, area: Option<UiRect>, hand: Option<UiRect>) {
+    let Some(area) = area else { return };
+    let to_local = |r: UiRect| Affine2::from_translation(vec2(-r.x, -r.y));
+    match (id, hand) {
+        (ArtId::Workspace, _) => with_transform(to_local(area), || concrete::draw(ws, area, area)),
+        (ArtId::WorkspaceHand, Some(hand)) => with_transform(to_local(hand), || concrete::draw_drag(ws, area, hand)),
+        _ => {}
     }
 }

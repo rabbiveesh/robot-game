@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 
+use crate::ui::rect::UiRect;
 use crate::ui::{ArtId, UiAction};
 
 /// The keys the game reads. Names follow the physical key (`Key1` is the `1`
@@ -69,6 +70,11 @@ pub struct FrameInput {
     pub mouse_pos: (f32, f32),
     /// A mouse press or a finger landing this frame, at `mouse_pos`.
     pub mouse_clicked: bool,
+    /// Left button (or finger) is held — true on the click frame too. Drags
+    /// read this; plain taps only need `mouse_clicked`.
+    pub mouse_down: bool,
+    /// Left button (or finger) came up this frame — where a drag drops.
+    pub mouse_released: bool,
     pub chars_typed: Vec<char>,
     /// The panel button tapped this frame, if any. Bevy UI hit-tests the
     /// nodes it drew; the game only ever sees which button it was.
@@ -76,8 +82,11 @@ pub struct FrameInput {
     /// True when this frame's click landed on a panel (button or not), so
     /// the map doesn't also take it as click-to-walk.
     pub click_on_ui: bool,
-    /// Panel art slots on screen last frame, with their logical size.
-    pub art: Vec<(ArtId, f32, f32)>,
+    /// Panel art slots on screen last frame, where they sat (logical pixels).
+    pub art: Vec<(ArtId, UiRect)>,
+    /// Wall clock, Unix seconds. Only for stamping records (the attempt log);
+    /// nothing in play reads it. 0 in tests unless set.
+    pub now: f64,
 }
 
 impl FrameInput {
@@ -114,6 +123,26 @@ impl FrameInput {
     pub fn with_mouse_click(mut self, x: f32, y: f32) -> Self {
         self.mouse_pos = (x, y);
         self.mouse_clicked = true;
+        self.mouse_down = true;
+        self
+    }
+
+    /// Button held with the pointer at (x, y) — the middle frames of a drag.
+    pub fn with_mouse_held(mut self, x: f32, y: f32) -> Self {
+        self.mouse_pos = (x, y);
+        self.mouse_down = true;
+        self
+    }
+
+    /// Button let go at (x, y) — the last frame of a drag.
+    pub fn with_mouse_release(mut self, x: f32, y: f32) -> Self {
+        self.mouse_pos = (x, y);
+        self.mouse_released = true;
+        self
+    }
+
+    pub fn with_now(mut self, unix_secs: f64) -> Self {
+        self.now = unix_secs;
         self
     }
 
@@ -127,7 +156,20 @@ impl FrameInput {
 
     /// The size of panel art slot `id`, if it was on screen.
     pub fn art_size(&self, id: ArtId) -> Option<(f32, f32)> {
-        self.art.iter().find(|(a, ..)| *a == id).map(|&(_, w, h)| (w, h))
+        self.art_rect(id).map(|r| (r.w, r.h))
+    }
+
+    /// Where panel art slot `id` sat on screen last frame — for art the kid
+    /// drags things around in.
+    pub fn art_rect(&self, id: ArtId) -> Option<UiRect> {
+        self.art.iter().find(|(a, _)| *a == id).map(|&(_, r)| r)
+    }
+
+    /// Art slot `id` laid out at `rect` (tests; the app fills these itself).
+    pub fn with_art(mut self, id: ArtId, rect: UiRect) -> Self {
+        self.art.retain(|(a, _)| *a != id);
+        self.art.push((id, rect));
+        self
     }
 
     pub fn with_char(mut self, c: char) -> Self {

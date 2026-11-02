@@ -13,7 +13,8 @@ use robot_buddy_game::npc::NpcKind;
 use robot_buddy_game::save::InMemoryBackend;
 use robot_buddy_game::ui;
 use robot_buddy_game::ui::probe::UiProbe;
-use robot_buddy_game::ui::UiAction;
+use robot_buddy_game::ui::rect::UiRect;
+use robot_buddy_game::ui::{ArtId, UiAction};
 
 pub const SCREEN: (f32, f32) = (960.0, 720.0);
 pub const DT: f32 = 1.0 / 60.0;
@@ -27,6 +28,9 @@ pub struct Harness {
     pub game: Game,
     /// Bevy's layout of the panels, built on the first tap.
     probe: Option<UiProbe>,
+    /// Where the art slots a step reads were laid out (the hands-on
+    /// workspace), and the challenge panel they were laid out for.
+    art_cache: Option<(ui::challenge::ChallengeView, Vec<(ArtId, UiRect)>)>,
 }
 
 impl Harness {
@@ -37,6 +41,7 @@ impl Harness {
         Harness {
             game: Game::with_backend(seed, Box::new(InMemoryBackend::default())),
             probe: None,
+            art_cache: None,
         }
     }
 
@@ -46,14 +51,39 @@ impl Harness {
     pub fn with_backend(seed: u64, backend: InMemoryBackend) -> Self {
         let mut game = Game::with_backend(seed, Box::new(backend));
         game.refresh_save_slots();
-        Harness { game, probe: None }
+        Harness { game, probe: None, art_cache: None }
     }
 
     // ─── Primitive frame drivers ─────────────────────────
 
-    /// One frame with the given input.
+    /// One frame with the given input. Art slots a step reads (where the
+    /// hands-on workspace sits) come from Bevy's layout of the panels, as the
+    /// app hands them over.
     pub fn step(&mut self, input: &FrameInput) {
-        self.game.step(input, DT, SCREEN);
+        let mut input = input.clone();
+        if input.art.is_empty() {
+            input.art = self.art_slots();
+        }
+        self.game.step(&input, DT, SCREEN);
+    }
+
+    /// The art slots on screen, laid out only when the challenge panel
+    /// changes (and only while there's a workspace to drag in).
+    fn art_slots(&mut self) -> Vec<(ArtId, UiRect)> {
+        if self.game.challenge_workspace().is_none() {
+            return vec![];
+        }
+        let views = self.game.ui_views(SCREEN);
+        let Some(view) = views.challenge.clone() else { return vec![] };
+        if let Some((seen, slots)) = &self.art_cache {
+            if *seen == view {
+                return slots.clone();
+            }
+        }
+        let snap = self.probe.get_or_insert_with(|| UiProbe::new(SCREEN)).show(views);
+        let slots: Vec<(ArtId, UiRect)> = snap.arts.iter().map(|&(id, r)| (id, UiRect::new(r.x, r.y, r.w, r.h))).collect();
+        self.art_cache = Some((view, slots.clone()));
+        slots
     }
 
     /// One frame with no input.
@@ -96,6 +126,14 @@ impl Harness {
     /// screen, and the screen it's on has to be sound (nothing off screen,
     /// overlapping or overflowing). Then the tap lands on its centre.
     pub fn tap(&mut self, action: UiAction) {
+        let (x, y) = self.button_center(action);
+        self.step(&FrameInput::empty().with_mouse_click(x, y).with_ui_press(action));
+    }
+
+    /// Where a finger would tap `action`'s button on screen right now (the
+    /// middle of its visible part). Panics if the screen is broken or the
+    /// button isn't there, or is too little on screen to tap.
+    pub fn button_center(&mut self, action: UiAction) -> (f32, f32) {
         let views = self.game.ui_views(SCREEN);
         let snap = self.probe.get_or_insert_with(|| UiProbe::new(SCREEN)).show_for(views, action);
         let problems = snap.problems();
@@ -105,8 +143,7 @@ impl Harness {
         });
         let seen = b.visible();
         assert!(seen.w >= 20.0 && seen.h >= 20.0, "{action:?} is too little on screen to tap ({seen:?})");
-        let (x, y) = seen.center();
-        self.step(&FrameInput::empty().with_mouse_click(x, y).with_ui_press(action));
+        seen.center()
     }
 
     /// Step (with no input) until `pred(&Game)` returns true. Panics if the
@@ -326,6 +363,66 @@ impl Harness {
     /// Convenience alias matching the user's example wording.
     pub fn answer_correctly(&mut self) {
         self.answer_challenge_correctly();
+    }
+
+    // ─── Concrete "Show me" workspace ────────────────────
+
+    /// Press down at `from`, carry to `to`, let go — three frames, like a finger.
+    pub fn drag(&mut self, from: (f32, f32), to: (f32, f32)) {
+        self.step(&FrameInput::empty().with_mouse_click(from.0, from.1));
+        self.step(&FrameInput::empty().with_mouse_held(to.0, to.1));
+        self.step(&FrameInput::empty().with_mouse_release(to.0, to.1));
+    }
+
+    /// Tap the active challenge's "Show me" button.
+    pub fn press_show_me(&mut self) {
+        self.tap(UiAction::Challenge(ui::challenge::ChallengeId::ShowMe));
+    }
+
+    /// Where Bevy put the workspace (the challenge panel as it stands).
+    pub fn workspace_area(&mut self) -> UiRect {
+        self.art_slots().into_iter().find(|(id, _)| *id == ArtId::Workspace)
+            .map(|(_, r)| r).expect("the workspace should be laid out")
+    }
+
+    fn workspace_layout(&mut self) -> ui::concrete::Layout {
+        let area = self.workspace_area();
+        let ws = self.game.challenge_workspace().expect("no hands-on workspace open");
+        ui::concrete::layout(ws, area)
+    }
+
+    /// Where a counter the kid could pick up right now sits.
+    pub fn a_grabbable_counter(&mut self) -> (f32, f32) {
+        self.workspace_layout().grabbable.first().expect("nothing left to pick up").center
+    }
+
+    /// The middle of where counters have to land (frames or basket).
+    pub fn drop_target(&mut self) -> (f32, f32) {
+        self.workspace_layout().drop_zone.center()
+    }
+
+    /// Drag counters to their target, one at a time, until the model is built.
+    pub fn build_the_model(&mut self) {
+        for _ in 0..40 {
+            if self.game.challenge_workspace().map_or(true, |ws| ws.is_built()) {
+                return;
+            }
+            let (from, to) = (self.a_grabbable_counter(), self.drop_target());
+            self.drag(from, to);
+        }
+        panic!("build_the_model: still not built after 40 drags");
+    }
+
+    /// From the dev map, go to the control room and use the manipulatives
+    /// bench. Lands in a challenge with the workspace open.
+    pub fn open_manipulatives_bench(&mut self) {
+        if self.game.map.id != "control" {
+            self.walk_to(2, 9);
+            self.step_through_portal(KeyCode::Left, "control");
+        }
+        self.walk_to_npc(NpcKind::CtrlManipulatives);
+        self.interact();
+        self.wait_until(|g| g.state == GameState::Challenge);
     }
 
     /// Hold a direction key until the player's current map id changes to
@@ -587,28 +684,117 @@ impl Harness {
         self.tap(UiAction::Shop(ui::shop::ShopId::Swatch(outfit_color_index(color))));
     }
 
-    // ─── Shelly's pearl-leap helpers ─────────────────────
+    // ─── Shelly's Pearl Hop helpers ──────────────────────
 
-    /// Commit to a leap size by tapping its tile on Shelly's strip. Panics
-    /// if the size isn't on offer.
-    pub fn pick_leap_size(&mut self, size: u8) {
-        {
-            let s = self.game.leap_session().expect("pick_leap_size: no pearl trip going");
-            assert!(s.puzzle.choices.contains(&size), "{size} isn't on offer (choices: {:?})", s.puzzle.choices);
+    /// Walk up to Shelly on this map and talk to her. Pearl Hop opens (her
+    /// first-time show-off may be playing — see `skip_shelly_demo`).
+    pub fn open_pearl_hop(&mut self) {
+        self.walk_to_npc(NpcKind::Clam);
+        self.interact();
+        if self.game.state == GameState::InteractionMenu {
+            self.select_option("talk");
         }
-        self.tap(UiAction::Leap(ui::leap::LeapId::Size(size)));
+        assert_eq!(self.game.state, GameState::PearlHop, "talking to Shelly should open Pearl Hop");
     }
 
-    /// One leap east (the Leap button), waiting out the slide.
-    pub fn leap(&mut self) {
-        self.tap(UiAction::Leap(ui::leap::LeapId::Leap));
-        self.run_until(|g| !g.player.moving, 120);
+    /// Tap through Shelly's first-time show-off, if it's playing.
+    pub fn skip_shelly_demo(&mut self) {
+        if self.game.active_pearl_hop().is_some_and(|a| a.demo.is_some()) {
+            let (x, y) = self.game.pearl_hop_layout(SCREEN).unwrap().scene.home();
+            self.click(x, y);
+        }
+        assert!(self.game.active_pearl_hop().is_some_and(|a| a.demo.is_none()), "the demo should be over");
     }
 
-    /// Swim back to the launch stone, waiting out the slide.
-    pub fn swim_back(&mut self) {
-        self.tap(UiAction::Leap(ui::leap::LeapId::SwimBack));
-        self.run_until(|g| !g.player.moving, 120);
+    /// The round on the rock right now.
+    pub fn pearl_hop_round(&self) -> robot_buddy_domain::logic::pearl_hop::HopRound {
+        self.game.active_pearl_hop().expect("Pearl Hop isn't open").session.round.clone()
+    }
+
+    /// A pull that lands Shelly on the pearl.
+    pub fn winning_aim(&self) -> u16 {
+        self.pearl_hop_round().winning_aims()[0]
+    }
+
+    /// A pull that misses: sails past the pearl if `past`, else comes up short.
+    pub fn missing_aim(&self, past: bool) -> u16 {
+        use robot_buddy_domain::logic::pearl_hop::Landing;
+        let r = self.pearl_hop_round();
+        let want = if past { Landing::Past } else { Landing::Short };
+        (r.min_aim..=r.max_aim)
+            .find(|&a| r.resolve(a).landing == want)
+            .unwrap_or_else(|| panic!("no {want:?} aim in {r:?}"))
+    }
+
+    /// Toss Shelly the way a kid does: press on her, drag back to the pull
+    /// for `aim`, let go. Then watch the toss play out — she's on the pearl,
+    /// or back on her rock after a miss.
+    pub fn toss_shelly(&mut self, aim: u16) {
+        let l = self.game.pearl_hop_layout(SCREEN).expect("toss_shelly: Pearl Hop isn't open");
+        let (hx, hy) = l.scene.home();
+        let (tx, ty) = l.scene.drag_point_for(aim);
+        self.step(&FrameInput::empty().with_mouse_click(hx, hy));
+        for i in 1..=6 {
+            let u = i as f32 / 6.0;
+            self.step(&FrameInput::empty().with_mouse_held(hx + (tx - hx) * u, hy + (ty - hy) * u));
+        }
+        self.step(&FrameInput::empty().with_mouse_release(tx, ty));
+        self.wait_for_shelly();
+    }
+
+    /// Toss Shelly from the keyboard: arrows to the aim, Space to let go.
+    pub fn toss_shelly_with_keys(&mut self, aim: u16) {
+        for _ in 0..400 {
+            let now = self.game.active_pearl_hop().expect("Pearl Hop isn't open").session.aim;
+            match now.cmp(&aim) {
+                std::cmp::Ordering::Less => self.press(KeyCode::Right),
+                std::cmp::Ordering::Greater => self.press(KeyCode::Left),
+                std::cmp::Ordering::Equal => break,
+            }
+        }
+        self.press(KeyCode::Space);
+        self.wait_for_shelly();
+    }
+
+    /// Let the toss play out: the win's celebration is over (Again! is up),
+    /// or after a miss she's back on her rock ready to go again.
+    pub fn wait_for_shelly(&mut self) {
+        use robot_buddy_domain::logic::pearl_hop::HopPhase;
+        self.run_until(
+            |g| g.active_pearl_hop().is_none_or(|a| a.session.phase == HopPhase::Aiming || a.session.win_done()),
+            1500,
+        );
+    }
+
+    /// Toss Shelly the way a native Linux touchscreen can: it reports a
+    /// press, then no motion and no release while the finger is down. Press
+    /// Shelly to pick her up, then tap the stone she should land on.
+    pub fn toss_shelly_by_taps(&mut self, aim: u16) {
+        let l = self.game.pearl_hop_layout(SCREEN).expect("toss_shelly_by_taps: Pearl Hop isn't open");
+        let (hx, hy) = l.scene.home();
+        let target = l.scene.tap_point_for(aim);
+        self.step(&FrameInput::empty().with_mouse_click(hx, hy));
+        for _ in 0..5 {
+            // Held, no motion, no release: still at the press point.
+            self.step(&FrameInput::empty().with_mouse_held(hx, hy));
+        }
+        self.step(&FrameInput::empty().with_mouse_click(target.0, target.1));
+        for _ in 0..3 {
+            self.step(&FrameInput::empty().with_mouse_held(target.0, target.1));
+        }
+        self.wait_for_shelly();
+    }
+
+    /// Tap Pearl Hop's Leave button.
+    pub fn leave_pearl_hop_by_tap(&mut self) {
+        assert!(self.game.active_pearl_hop().is_some(), "Pearl Hop isn't open");
+        self.tap(UiAction::PearlHop(ui::pearl_hop::HopId::Leave));
+    }
+
+    /// Tap "Again!" after a win.
+    pub fn pearl_hop_again(&mut self) {
+        assert!(self.game.active_pearl_hop().is_some(), "Pearl Hop isn't open");
+        self.tap(UiAction::PearlHop(ui::pearl_hop::HopId::Again));
     }
 
     /// Stand the player on a tile outright (for setting up on a far-off map).

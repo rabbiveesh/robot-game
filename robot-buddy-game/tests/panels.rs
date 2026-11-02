@@ -270,7 +270,7 @@ mod challenges {
     }
 
     fn views(cs: &ChallengeState, c: &Challenge, screen: (f32, f32)) -> UiViews {
-        UiViews { challenge: Some(ChallengeView::new(cs, c, screen)), ..Default::default() }
+        UiViews { challenge: Some(ChallengeView::new(cs, c, None, screen)), ..Default::default() }
     }
 
     // One test per screen, so the sweep spreads across cores (it is most of
@@ -313,6 +313,54 @@ mod challenges {
                         let v = robot_buddy_game::ui::visuals::plan(c, r.w);
                         assert!(v.bbox.w <= r.w + 0.5 && v.bbox.h <= r.h + 0.5,
                             "{what}: visual is {:?}, its slot is {r:?}", v.bbox);
+                    }
+                }
+            }
+        }
+    }
+
+    /// The hands-on workspace (Concrete-stage Show me) in every phase it can
+    /// share the panel with, for put-together and take-away, one frame and two,
+    /// under a plain and a wrapped question — on every screen, down to a phone.
+    /// Every counter sits inside the slot Bevy gave it.
+    #[test]
+    fn the_hands_on_workspace_is_sound_everywhere() {
+        use robot_buddy_domain::learning::challenge_generator::generate_challenge_at;
+        use robot_buddy_domain::types::Operation;
+        use robot_buddy_game::ui::concrete::{self, Workspace};
+        use robot_buddy_game::ui::rect::UiRect;
+
+        let mut rng = SmallRng::seed_from_u64(7);
+        let mut cases: Vec<(Challenge, Workspace)> = Vec::new();
+        for band in [2u8, 4] {
+            for op in [Operation::Add, Operation::Sub] {
+                for _ in 0..4 {
+                    let c = generate_challenge_at(band, op, &mut rng);
+                    if let Some(ws) = Workspace::for_challenge(&c, &mut rng) {
+                        cases.push((c, ws));
+                    }
+                }
+            }
+        }
+        assert!(cases.iter().any(|(_, ws)| ws.session.puzzle.target > 10), "cover a two-frame case");
+
+        for screen in SCREENS {
+            let mut probe = UiProbe::new(screen);
+            for (c, ws) in &cases {
+                for display in [c.display_text.as_str(), WORD_PROBLEM] {
+                    for (name, cs) in phases(c, display).into_iter().filter(|(_, cs)| cs.hint_used) {
+                        let views = UiViews { challenge: Some(ChallengeView::new(&cs, c, Some(ws), screen)), ..Default::default() };
+                        let snap = probe.show(views);
+                        let what = format!("workspace {name} ({} {} {}) at {screen:?}", c.numbers.a, c.numbers.op, c.numbers.b);
+                        let problems = snap.problems();
+                        assert!(problems.is_empty(), "{what}:\n  {}", problems.join("\n  "));
+                        let r = snap.art(ArtId::Workspace).unwrap_or_else(|| panic!("{what}: the workspace is laid out"));
+                        let area = UiRect::new(r.x, r.y, r.w, r.h);
+                        assert!(area.h > 40.0, "{what}: room to drag in ({area:?})");
+                        for counter in concrete::layout(ws, area).counters() {
+                            assert!(area.contains(counter.center.0, counter.center.1), "{what}: a counter spills out of the workspace");
+                        }
+                        assert!(snap.art(ArtId::WorkspaceHand).is_some(), "{what}: the hand rides over everything");
                     }
                 }
             }
@@ -453,40 +501,61 @@ fn quest_beats_are_sound_everywhere() {
     );
 }
 
-// ─── Leap, descent, shooter ──────────────────────────────
+// ─── Pearl Hop, descent, shooter ─────────────────────────
 
+/// Shelly's panel at every stage — aiming, mid-win (pearl flying to the
+/// purse) and after the win (Again! up) — with short and long captions and a
+/// big purse, on every screen. The panel sits where `pearl_hop::layout` says
+/// the scene isn't (the lagoon is drawn by hand around it), and the scene has
+/// to keep real room to play in, even on a small phone.
 #[test]
-fn shellys_strip_is_sound_everywhere() {
-    use robot_buddy_domain::logic::leap::{leap_reducer, Clue, LeapAction, LeapPuzzle, LeapSession};
-    use robot_buddy_game::ui::leap::{LeapId, LeapView};
-    let fresh = LeapSession::new(LeapPuzzle {
-        max: 24,
-        pearl: 20,
-        size: 5,
-        count: 4,
-        choices: vec![3, 4, 5, 6],
-        clue: Clue::Count { n: 4 },
-    });
-    let committed = leap_reducer(fresh.clone(), LeapAction::Choose { size: 5 });
-    let call = "My pearl's under stone 20! You get there in 4 leaps — how big is each one?".to_string();
-    sweep_all(
-        "leap",
-        |_| {
-            [("choosing", &fresh), ("committed", &committed)]
-                .into_iter()
-                .map(|(n, s)| (n.to_string(), UiViews { leap: Some(LeapView::new(s, call.clone())), ..Default::default() }))
-                .collect()
-        },
-        |name, snap| {
-            if name.starts_with("choosing") {
-                for size in [3, 4, 5, 6] {
-                    assert!(has(snap, UiAction::Leap(LeapId::Size(size))), "{name}: size {size}");
-                }
-            } else {
-                assert!(has(snap, UiAction::Leap(LeapId::Leap)) && has(snap, UiAction::Leap(LeapId::SwimBack)), "{name}");
+fn pearl_hop_is_sound_everywhere() {
+    use rand::SeedableRng;
+    use robot_buddy_domain::logic::pearl_hop::{generate_round, hop_reducer, HopAction, HopSession};
+    use robot_buddy_game::ui::pearl_hop::{self, HopId, HopPanelView, HopView, ShellyOutfit};
+
+    let captions = ["Find my pearl!", "My pearl!  +3 pearls  (your net caught one!)", "Boing! Not there yet!"];
+    let worn: BTreeSet<String> = ["hat".to_string()].into_iter().collect();
+    let mut sessions = Vec::new();
+    for band in [1u8, 3, 6, 9] {
+        let round = generate_round(band, &mut rand::rngs::SmallRng::seed_from_u64(band as u64));
+        let aiming = HopSession::new(round.clone());
+        let mut s = hop_reducer(hop_reducer(aiming.clone(), HopAction::Aim { at: round.winning_aims()[0] }), HopAction::Toss);
+        let mut mid_win = None;
+        for _ in 0..400 {
+            s = hop_reducer(s, HopAction::Tick { dt: 0.05 });
+            if mid_win.is_none() && s.win_clock().is_some_and(|c| c > 0.6) {
+                mid_win = Some(s.clone());
             }
-        },
-    );
+        }
+        assert!(s.win_done());
+        sessions.extend([(format!("band {band} aiming"), aiming), (format!("band {band} mid-win"), mid_win.unwrap()), (format!("band {band} won"), s)]);
+    }
+    for screen in SCREENS {
+        let mut probe = UiProbe::new(screen);
+        for (name, session) in &sessions {
+            for caption in captions {
+                let view = HopView { session, pearls: 1234, caption, outfit: ShellyOutfit { worn: &worn, color: "red" } };
+                let l = pearl_hop::layout(&view, screen);
+                let snap = probe.show(UiViews { pearl_hop: Some(HopPanelView::new(&view)), ..Default::default() });
+                let what = format!("{name}, {caption:?} at {screen:?}");
+                let problems = snap.problems();
+                assert!(problems.is_empty(), "{what}:\n  {}", problems.join("\n  "));
+
+                let scene = l.scene.rect;
+                assert!(scene.h >= 200.0 && scene.w >= 300.0, "room to play: {what}: {scene:?}");
+                let leave = snap.button(UiAction::PearlHop(HopId::Leave)).expect("Leave is always tappable").rect;
+                assert!((leave.y + leave.h) <= scene.y + 0.5, "Leave sits above the scene: {what}");
+                let cap = snap.texts.iter().find(|t| t.text == caption).unwrap_or_else(|| panic!("the caption: {what}"));
+                assert!(cap.rect.y >= scene.bottom() - 0.5, "the caption sits under the scene: {what}");
+                let again = snap.button(UiAction::PearlHop(HopId::Again));
+                assert_eq!(again.is_some(), session.win_done(), "Again! only once the win has played: {what}");
+                if let Some(again) = again {
+                    assert!(again.rect.y - (cap.rect.y + cap.rect.h) >= 12.0, "Again! has room under the caption: {what}");
+                }
+            }
+        }
+    }
 }
 
 #[test]

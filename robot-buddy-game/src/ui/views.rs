@@ -15,7 +15,7 @@ use super::quest::QuestPanelView;
 use super::shop::ShopPanelView;
 use super::swag::SwagPanelView;
 use super::descent::DescentView;
-use super::leap::LeapView;
+use super::pearl_hop::HopPanelView;
 use super::ArtId;
 
 #[derive(Resource, Default, Clone)]
@@ -28,7 +28,7 @@ pub struct UiViews {
     pub quest: Option<QuestPanelView>,
     pub shop: Option<ShopPanelView>,
     pub swag: Option<SwagPanelView>,
-    pub leap: Option<LeapView>,
+    pub pearl_hop: Option<HopPanelView>,
     pub descent: Option<DescentView>,
     pub shooter_footer: Option<super::shooter::FooterView>,
 }
@@ -59,13 +59,22 @@ impl UiViews {
                     super::descent::draw_art(v, w, h, time);
                 }
             }
+            ArtId::HopLeaveIcon | ArtId::HopAgainIcon => super::pearl_hop::draw_icon(id, w, h, time),
+            // In screen coordinates: see `draw_all_art`.
+            ArtId::Workspace | ArtId::WorkspaceHand => {}
         }
     }
 
     /// Record the art for every slot in `slots` (from `FrameInput::art`).
-    pub fn draw_all_art(&self, slots: &[(ArtId, f32, f32)]) {
-        for &(id, w, h) in slots {
-            crate::draw::art(id.layer(), || self.draw_art(id, w, h));
+    pub fn draw_all_art(&self, slots: &[(ArtId, super::rect::UiRect)]) {
+        let rect = |id: ArtId| slots.iter().find(|(a, _)| *a == id).map(|&(_, r)| r);
+        for &(id, r) in slots {
+            match (id, self.challenge.as_ref().and_then(|c| c.workspace.as_deref())) {
+                (ArtId::Workspace | ArtId::WorkspaceHand, Some(ws)) => crate::draw::art(id.layer(), || {
+                    super::challenge::draw_workspace(ws, id, rect(ArtId::Workspace), rect(ArtId::WorkspaceHand))
+                }),
+                _ => crate::draw::art(id.layer(), || self.draw_art(id, r.w, r.h)),
+            }
         }
     }
 }

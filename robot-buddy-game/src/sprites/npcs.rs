@@ -700,3 +700,62 @@ pub fn draw_hermit_crab(x: f32, y: f32, dir: Dir, time: f32) {
         draw_circle(ex, cy - 10.0 + sway, 1.8, eye);
     }
 }
+
+/// Shelly's face in Pearl Hop: how wide her mouth is, what her eyes do, and
+/// whether her little feet are flailing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClamFace {
+    /// 0 shut … 1 wide open (a yell, a cheer).
+    pub mouth: f32,
+    /// 0 normal, 1 wide (mid-air panic), -1 squeezed shut (effort).
+    pub eyes: f32,
+    pub flail: bool,
+}
+
+/// Pearl Hop's Shelly: the world clam's shape (so `SwagFit::CLAM` fits her
+/// too), with a face that yells, squints and cheers. Drawn upright in tile
+/// space; `sprites::dressed` turns her for the squish, the spin and the flip.
+pub fn draw_clam_cartoon(x: f32, y: f32, face: ClamFace, time: f32) {
+    let r = 14.0;
+    let (cx, cy) = (x + 24.0, y + 30.0);
+    let shell = Color::new(0.94, 0.67, 0.71, 1.0);
+    let ridge = Color::new(0.78, 0.47, 0.53, 1.0);
+    let ink = Color::new(0.10, 0.13, 0.20, 1.0);
+
+    if face.flail {
+        for (i, side) in [-1.0f32, 1.0].into_iter().enumerate() {
+            let wig = (time * 26.0 + i as f32 * 2.0).sin() * r * 0.35;
+            draw_line(cx + side * r * 0.35, cy + r * 0.45, cx + side * r * 0.55 + wig, cy + r * 0.95, 2.4, ridge);
+        }
+    }
+    // Bottom shell.
+    draw_ellipse(cx, cy + r * 0.25, r, r * 0.5, 0.0, shell);
+    // The mouth: a dark gap that yawns open to yell or cheer.
+    let open = r * (0.12 + 0.38 * face.mouth.clamp(0.0, 1.0));
+    draw_ellipse(cx, cy + r * 0.02, r * 0.82, open, 0.0, Color::new(0.24, 0.12, 0.18, 1.0));
+    if face.mouth > 0.5 {
+        draw_ellipse(cx, cy + r * 0.1, r * 0.35, open * 0.45, 0.0, Color::new(0.93, 0.45, 0.55, 1.0));
+    }
+    // Top shell, lifted by the open mouth, with its scallop ridges.
+    let lift = open * 0.6;
+    draw_ellipse(cx, cy - r * 0.2 - lift, r * 0.95, r * 0.5, 0.0, shell);
+    for i in -1..=1 {
+        let i = i as f32;
+        draw_line(cx + i * r * 0.45, cy - r * 0.55 - lift, cx + i * r * 0.3, cy - r * 0.05 - lift, 1.5, ridge);
+    }
+    // Eyes peeking over the lid (where the world clam's are).
+    for side in [-1.0f32, 1.0] {
+        let (ex, ey) = (cx + side * r * 0.32, cy - r * 0.6 - lift);
+        let er = r * if face.eyes > 0.5 { 0.3 } else { 0.24 };
+        if face.eyes < -0.5 {
+            let d = er * 0.9;
+            draw_line(ex - d, ey - d * 0.6, ex + d * 0.2, ey, 1.6, ink);
+            draw_line(ex - d, ey + d * 0.6, ex + d * 0.2, ey, 1.6, ink);
+        } else {
+            draw_circle(ex, ey, er, WHITE);
+            draw_circle_lines(ex, ey, er, 1.0, ink);
+            let look = if face.eyes > 0.5 { 0.0 } else { er * 0.25 };
+            draw_circle(ex + look, ey, er * if face.eyes > 0.5 { 0.35 } else { 0.5 }, ink);
+        }
+    }
+}

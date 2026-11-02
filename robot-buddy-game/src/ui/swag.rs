@@ -184,20 +184,15 @@ fn spawn_panel(p: &mut ChildSpawner, v: &SwagPanelView) {
 
 /// Paint the buddy in their current outfit into the preview slot.
 pub fn draw_art(v: &SwagPanelView) {
-    use crate::sprites::{self, Dir};
-    let (px, py) = (6.0, 10.0);
-    let time = get_time() as f32;
+    use crate::sprites::dressed::{draw_dressed, Body, Outfit, Posture};
+    use crate::sprites::{swag::SwagFit, Dir};
     let look = &v.look;
-    match look.sprite {
-        Some(sprite) => {
-            sprite.draw_sprite(px, py, Dir::Down, time, false);
-            sprites::swag::draw_swag(px, py, Dir::Down, 0.0, &look.worn, &look.color, sprite.swag_fit());
-        }
-        None => {
-            sprites::robot::draw_robot(px, py, Dir::Down, 0, time);
-            sprites::swag::draw_swag(px, py, Dir::Down, 0.0, &look.worn, &look.color, sprites::swag::SwagFit::ROBOT);
-        }
-    }
+    let (body, fit) = match look.sprite {
+        Some(sprite) => (Body::Npc { sprite, asleep: false }, sprite.swag_fit()),
+        None => (Body::Robot { frame: 0 }, SwagFit::ROBOT),
+    };
+    let outfit = Outfit { worn: &look.worn, color: &look.color, fit };
+    draw_dressed(Posture::tile(6.0, 10.0), body, Dir::Down, &outfit, get_time() as f32);
 }
 
 pub enum SwagInput {

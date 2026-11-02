@@ -11,11 +11,11 @@ use ::rand::seq::SliceRandom;
 use std::collections::HashMap;
 
 use robot_buddy_domain::challenge::challenge_state::{
-    ChallengeState, DisplaySpeech, RenderHint, VoiceState,
+    ChallengeAction, ChallengeState, DisplaySpeech, RenderHint, VoiceState,
     challenge_reducer,
 };
 use robot_buddy_domain::learning::challenge_generator::{
-    Challenge, ChallengeProfile, generate_challenge,
+    Challenge, ChallengeProfile, generate_challenge, generate_challenge_at,
 };
 use robot_buddy_domain::learning::learner_profile::{
     LearnerProfile, LearnerEvent, learner_reducer,
@@ -29,6 +29,8 @@ use robot_buddy_domain::learning::intake_assessor::{
 use robot_buddy_domain::economy::give;
 use robot_buddy_domain::economy::rewards;
 use robot_buddy_domain::economy::interaction_options::{self, NpcInfo, PlayerState};
+use robot_buddy_domain::logic::manipulate_concrete::ConcreteKind;
+use robot_buddy_domain::learning::attempt_log::{AnswerAt, AttemptLog, AttemptRecord, Help};
 use robot_buddy_domain::logic::kenken::{
     self, KenKenAction, KenKenPhase, KenKenSession, cage_ops_for_band, generate_kenken,
 };
@@ -41,9 +43,7 @@ use robot_buddy_domain::logic::balance::{
 use robot_buddy_domain::logic::descent::{
     DiveAction, DiveNudge, DivePhase, DiveSession, dive_reducer, generate_dive,
 };
-use robot_buddy_domain::logic::leap::{
-    Clue, LeapAction, LeapPhase, LeapPuzzle, LeapSession, generate_leap, leap_reducer,
-};
+use robot_buddy_domain::logic::pearl_hop::HopStage;
 use robot_buddy_domain::logic::shooter::{
     ShooterSession, ShooterAction, ShooterPhase, ShotSource, shooter_reducer,
 };
@@ -64,7 +64,6 @@ use crate::tilemap::{self, Map, TILE_SIZE};
 use crate::sprites::{self, Dir};
 use crate::follower::Follower;
 use crate::npc::{self, NpcKind, npc_dialogue_lines};
-use crate::number_track;
 use crate::ui;
 use crate::ui::dialogue::{DialogueBox, DialogueLine};
 use crate::ui::title_screen::{TitleAction, NewGameAction, NewGameForm};
@@ -76,12 +75,12 @@ use crate::session;
 use crate::input::FrameInput;
 
 mod descent;
-mod leap;
+mod pearl_hop;
 mod puzzles;
 mod shooter;
 mod shop;
 
-use self::leap::{draw_number_track, leap_call};
+pub use self::pearl_hop::{ActivePearlHop, DemoStep, PEARL_HOP_DEMO};
 use self::puzzles::{start_balance, start_kenken, start_pattern, start_sudoku};
 
 pub const GAME_W: f32 = 960.0;
@@ -116,6 +115,8 @@ pub enum GameState {
     Swag,
     /// Diving the shaft to the trench — the descent minigame.
     Descent,
+    /// Shelly's slingshot number-path minigame.
+    PearlHop,
     Quest,
     /// The Goyish Map's number-bond space shooter (real-time minigame).
     Shooter,
@@ -157,6 +158,7 @@ struct Activities {
     shop: Option<ActiveShop>,
     swag: Option<ActiveSwag>,
     descent: Option<ActiveDescent>,
+    pearl_hop: Option<ActivePearlHop>,
     quest: Option<ActiveQuest>,
     /// A random encounter's challenge is queued to open.
     pending_challenge: bool,
@@ -189,8 +191,21 @@ impl IntakeState {
 struct ActiveChallenge {
     state: ChallengeState,
     challenge: Challenge,
+    /// The hands-on "Show me" workspace, once a Concrete-stage kid asks for it.
+    workspace: Option<ui::concrete::Workspace>,
     complete_timer: f32,
     start_time: f32,
+    // For the attempt log:
+    /// Every answer given, and when.
+    answers: Vec<AnswerAt>,
+    /// When Show me was pressed (game time).
+    help_at: Option<f32>,
+    /// The learner's CRA stage for this operation when it was asked (Show me
+    /// lowers the one on `state`).
+    stage_asked: CraStage,
+    /// Opened from the dev bench to show off a manipulative, not the kid's
+    /// own play: kept out of the profile and the attempt log.
+    practice: bool,
 }
 
 pub struct ActiveKenKen {
@@ -320,8 +335,8 @@ pub struct Entity {
     pub moving: bool,
     pub dir: Dir,
     pub frame: u32,
-    /// Pixels per second for the move in flight. Walking pace by default; a
-    /// leap raises it for one hop and it resets on arrival.
+    /// Pixels per second for the move in flight. Walking pace; kept per
+    /// entity so a one-off faster move can't leak into the next step.
     pub speed: f32,
 }
 
@@ -357,24 +372,13 @@ impl Entity {
             self.x = self.target_x;
             self.y = self.target_y;
             self.moving = false;
-            self.speed = MOVE_SPEED; // a one-off leap speed never sticks
+            self.speed = MOVE_SPEED; // a one-off speed never sticks
             self.frame += 1;
             return true;
         }
         self.x += dx / dist * step;
         self.y += dy / dist * step;
         false
-    }
-
-    /// Send this entity to a tile at a one-off speed, so a multi-tile leap
-    /// takes about as long as a single step instead of trudging across the
-    /// gap. Speed resets to walking pace on arrival.
-    pub fn start_leap(&mut self, nx: usize, ny: usize, seconds: f32) {
-        let dx = nx as f32 * TILE_SIZE - self.x;
-        let dy = ny as f32 * TILE_SIZE - self.y;
-        let dist = (dx * dx + dy * dy).sqrt();
-        self.start_move(nx, ny);
-        self.speed = (dist / seconds.max(0.05)).max(MOVE_SPEED);
     }
 
     pub fn start_move(&mut self, nx: usize, ny: usize) {
@@ -414,6 +418,15 @@ pub enum GameEvent {
     DialogueAdvanced,
     ChallengeStarted { question: String },
     ChallengeResolved { correct: bool, response_ms: f64 },
+    /// "Show me" at the Concrete stage opened the hands-on workspace.
+    ManipulativeOpened { kind: ConcreteKind },
+    /// The kid finished building the problem in the workspace (all counters
+    /// moved). Not an answer — the quiz still decides.
+    ManipulativeBuilt { kind: ConcreteKind },
+    /// A whole row of five moved as one piece (a grouping signal).
+    ManipulativeRowMoved,
+    /// A full ten-frame snapped into a ten-rod (`bundled`), or a rod opened.
+    TenRod { bundled: bool },
     /// A gate guardian's puzzle was solved; the passage is now open.
     GateOpened { gate_id: String },
     /// The rocket spent fuel taking a space jump.
@@ -471,20 +484,20 @@ pub enum GameEvent {
     EncounterTriggered { kind: String },
     /// A quest run reached its final step.
     QuestCompleted,
-    /// The kid found Shelly's pearl: landed on the called-out stone of a
-    /// number path. `mark` is the stone's number; `jumps` is how many stone-
-    /// to-stone hops the kid took vs the `optimal` straight count-on from
-    /// where they stepped onto the path — silent efficiency signal for the
-    /// adaptive system (never shown to the kid).
-    NumberLineReached { mark: u8, jumps: u8, optimal: u8 },
-    /// Shelly set up a pearl trip: the pearl's stone and the leap size/count
-    /// that reaches it.
-    LeapTripOffered { pearl: u8, size: u8, count: u8 },
-    /// The kid landed on Shelly's pearl. `resets` is how many wrong leap sizes
-    /// they tried first — the silent read on whether the size was reasoned out
-    /// or found by trial (never shown to the kid).
-    PearlFound { stone: u8, size: u8, leaps: u8, resets: u8, pearls: u32 },
-    /// Pearls credited to the kid, from any source (a leap, a clean dive).
+    /// Shelly opened a round of Pearl Hop: the stage the kid's band plays,
+    /// and the pearl's number.
+    PearlHopStarted { stage: HopStage, pearl: u16 },
+    /// Shelly came down from a toss. `aim` and `landed` are in the round's
+    /// sub-units; `hit` is whether she's on the pearl. Silent assessment —
+    /// never shown to the kid.
+    PearlHopTossed { stage: HopStage, aim: u16, landed: u16, hit: bool },
+    /// The pearl popped. `tosses` counts this round's tries (1 = clean).
+    PearlHopWon { stage: HopStage, tosses: u8, pearls: u32 },
+    /// Shelly's first-time show-off has played (or been skipped) for good.
+    PearlHopDemoSeen,
+    /// The kid left Pearl Hop.
+    PearlHopLeft,
+    /// Pearls credited to the kid, from any source (Pearl Hop, a clean dive).
     PearlsAwarded { amount: u32 },
     SudokuStarted { grid_size: u8, source: String },
     SudokuResolved {
@@ -535,15 +548,10 @@ pub struct Game {
     /// or gets pushed onto a portal tile he travels through it, so this tracks
     /// where he ended up. Only meaningful while `sparky_parked`.
     sparky_map: &'static str,
-    /// The pearl trip in progress on this map's stone path — Shelly's chosen
-    /// leap size and where the kid has leapt to. Only lives while they're
-    /// standing on the stone it thinks they're on, so walking around the path
-    /// can never pass for leaping it. See `check_number_track_landing`.
-    leap_session: Option<LeapSession>,
     /// Brief floating cheer text + remaining seconds, shown after a collection.
     track_toast: Option<(String, f32)>,
-    /// Reef-local currency, earned hopping the number path and (later) from the
-    /// deeper zones; spent at the reef trader on diving gear.
+    /// Reef-local currency, earned at Shelly's Pearl Hop and from clean
+    /// dives; spent at Hermie's stall in the trench.
     pub pearls: u32,
     pearl_hud: PearlHud,
     /// Wander cooldown for parked Sparky. Ticks down only while parked AND
@@ -585,6 +593,10 @@ pub struct Game {
     pub features: FeatureFlags,
     /// Tiles walked since the last random encounter (for encounter pacing).
     steps_since_encounter: u32,
+    /// Which manipulative the control room's bench opens next (dev only).
+    manip_bench_next: usize,
+    /// The "grab the stick" nudge has been said this play session.
+    row_nudge_given: bool,
     /// Gate id whose challenge is currently on screen (set when the kid takes
     /// on a gate guardian; cleared when that challenge resolves).
     opening_gate: Option<String>,
@@ -598,6 +610,9 @@ pub struct Game {
     /// the long "we're UNDERWATER!" speech is a first-time thrill instead of a
     /// toll paid on every dive.
     seen_intros: std::collections::HashSet<String>,
+    /// Minigame demos that have already played (Shelly's Pearl Hop show-off).
+    /// Persisted, so she only shows off once.
+    seen_demos: std::collections::HashSet<String>,
     /// Where the Dogfish House's bubble column leads — the map and tile of the
     /// dive that landed there. Set by a dive from a map with no shaft, spent by
     /// the column. Persisted. See `game/descent.rs`.
@@ -662,6 +677,9 @@ pub struct Game {
     rng: SmallRng,
     pub events: Vec<GameEvent>,
     pub session_log: session::SessionLog,
+    /// Every challenge, in detail, across sessions (saved; bounded). What the
+    /// parent export carries for `analyze`.
+    pub attempt_log: AttemptLog,
 }
 
 impl Game {
@@ -693,7 +711,6 @@ impl Game {
             companion: None,
             sparky_parked: false,
             sparky_map: SPARKY_HOME_MAP,
-            leap_session: None,
             track_toast: None,
             pearls: 0,
             pearl_hud: PearlHud::new(),
@@ -707,10 +724,13 @@ impl Game {
             wardrobe: Wardrobe::new(),
             features: FeatureFlags::default(),
             steps_since_encounter: 0,
+            manip_bench_next: 0,
+            row_nudge_given: false,
             opening_gate: None,
             satisfied_gates: std::collections::HashSet::new(),
             paid_tolls: std::collections::HashSet::new(),
             seen_intros: std::collections::HashSet::new(),
+            seen_demos: std::collections::HashSet::new(),
             dive_return: None,
             game_pace: GamePace::default(),
             upgrades: std::collections::BTreeSet::new(),
@@ -743,6 +763,7 @@ impl Game {
             rng: SmallRng::seed_from_u64(seed),
             events: Vec::new(),
             session_log: session::SessionLog::new(),
+            attempt_log: AttemptLog::new(),
         }
     }
 
@@ -787,6 +808,11 @@ impl Game {
             .map(|ac| &ac.challenge)
             .or_else(|| self.intake.as_ref().and_then(|iq| iq.challenge.as_ref().map(|ac| &ac.challenge)))?;
         ch.choices.iter().position(|c| c.correct)
+    }
+
+    /// The hands-on "Show me" workspace, if one is open.
+    pub fn challenge_workspace(&self) -> Option<&ui::concrete::Workspace> {
+        self.activity.challenge.as_ref().and_then(|ac| ac.workspace.as_ref())
     }
 
     /// Phase of the active challenge (intake or normal). None if no challenge.
@@ -845,9 +871,22 @@ impl Game {
         self.activity.swag.as_ref()
     }
 
-    /// The pearl trip in progress, if the kid is standing on Shelly's stones.
-    pub fn leap_session(&self) -> Option<&LeapSession> {
-        self.leap_session.as_ref()
+    /// If `id` names a Pearl Hop host here (or tagging along), what one of
+    /// her finds is worth.
+    fn pearl_hop_host(&self, id: &str) -> Option<u32> {
+        self.npcs.iter().chain(self.companion.iter())
+            .find(|n| n.id_str() == id && n.pearl_hop)
+            .map(|n| pearl_hop::pearl_hop_base(n.home_map))
+    }
+
+    /// Shelly's Pearl Hop, while it's up.
+    pub fn active_pearl_hop(&self) -> Option<&ActivePearlHop> {
+        self.activity.pearl_hop.as_ref()
+    }
+
+    /// Has Shelly's first-time show-off already played for this save?
+    pub fn has_seen_demo(&self, key: &str) -> bool {
+        self.seen_demos.contains(key)
     }
 
     pub fn active_descent(&self) -> Option<&ActiveDescent> {
@@ -1062,7 +1101,6 @@ impl Game {
         // Buddies heading off-map blink home once they've walked out of view.
         if self.state == GameState::Playing {
             self.evict_offscreen_leavers(screen);
-            self.check_number_track_landing(dt);
         }
 
         // Interaction menu input (layout from step-side; render() draws separately)
@@ -1078,7 +1116,7 @@ impl Game {
             || (self.debug_overlay.visible && input.pressed(KeyCode::E))
         {
             let json = session::build_export(
-                &self.player_name, &self.session_log, &self.gifts_given,
+                &self.player_name, &self.session_log, self.attempt_log.records(), &self.gifts_given,
                 self.dum_dums, self.play_time, &self.profile, self.map.id,
             );
             let filename = format!("robot-buddy-session-{}.json", self.play_time as u64);
@@ -1103,6 +1141,7 @@ impl Game {
             GameState::Shop => { self.step_shop(input); false }
             GameState::Swag => { self.step_swag(input); false }
             GameState::Descent => { self.step_descent(input, dt); false }
+            GameState::PearlHop => { self.step_pearl_hop(input, dt, screen); false }
             GameState::Quest => { self.step_quest(input); false }
         }
     }
@@ -1173,6 +1212,7 @@ impl Game {
                         self.dum_dums = 20;
                         self.play_time = 0.0;
                         self.behavior_signals.clear();
+                        self.attempt_log = AttemptLog::new();
 
                         self.map = Map::by_id("dev");
                         self.npcs = npc::npcs_for_map(self.map.id);
@@ -1201,6 +1241,7 @@ impl Game {
                         self.play_time = 0.0;
                         self.active_slot = slot;
                         self.behavior_signals.clear();
+                        self.attempt_log = AttemptLog::new();
 
                         self.map = Map::overworld();
                         self.player = Entity::new(14, 12);
@@ -1497,12 +1538,6 @@ impl Game {
 
     fn step_playing(&mut self, input: &FrameInput, dt: f32, screen: (f32, f32)) {
         // ── Movement: collect intents, resolve, apply ───────────────────
-        // On Shelly's stones the kid leaps rather than walks — the current in
-        // the gaps makes ordinary steps impossible anyway. Handled first so a
-        // tap on her panel never doubles as a click-to-walk.
-        if self.handle_leap_input(input) {
-            return;
-        }
         // A tap on the map sets a walk path (click-to-walk); keyboard input
         // overrides it. The debug overlay owns clicks when it's up, and a tap
         // on a panel is never also a step.
@@ -1711,6 +1746,8 @@ impl Game {
                 &self.npcs, self.companion.as_ref(),
             ).map(|n| (n.kind, n.can_receive_gifts, n.never_challenge, n.is_puzzler, n.gate, n.gate_id, n.refuel, n.launch_shooter, n.dive, n)) {
                 let (target_kind, can_receive_gifts, never_challenge, is_puzzler, is_gate, gate_id, is_refuel, is_launch_shooter, is_dive, target_ref) = target;
+                // Shelly's "Talk" is Pearl Hop: what a find is worth where she lives.
+                let hop_base = target_ref.pearl_hop.then(|| pearl_hop::pearl_hop_base(target_ref.home_map));
                 let target_id = target_kind.as_str().to_string();
                 let target_name = target_kind.display_name().to_string();
 
@@ -1778,6 +1815,10 @@ impl Game {
                 self.menu_can_challenge = !never_challenge;
 
                 if opts.len() == 1 {
+                    if let Some(base) = hop_base {
+                        self.start_pearl_hop(base, self.menu_target_id.clone());
+                        return;
+                    }
                     let lines = npc_dialogue_lines(target_ref, &mut self.rng);
                     if self.menu_can_challenge && self.rng.gen::<f32>() < 0.4 {
                         self.activity.pending_challenge = true;
@@ -1951,7 +1992,47 @@ impl Game {
                 if ac.complete_timer >= 2.5 { dismiss = true; }
             }
 
+            // The hands-on workspace gets first claim on the pointer: a press on
+            // a counter is a pickup, not a click on the panel beneath it.
+            let mut pointer_busy = false;
+            if let Some(ws) = ac.workspace.as_mut() {
+                ws.tick(dt);
+            }
+            // Where the panel put the workspace (last frame's layout).
+            let area = input.art_rect(ui::ArtId::Workspace);
+            if let (Some(ws), Some(area)) = (ac.workspace.as_mut(), area) {
+                match ui::concrete::handle_pointer(ws, input, area) {
+                    ui::concrete::Pointer::Idle => {}
+                    ui::concrete::Pointer::Busy => pointer_busy = true,
+                    ui::concrete::Pointer::Landed(landed) => {
+                        pointer_busy = true;
+                        if landed.row {
+                            self.events.push(GameEvent::ManipulativeRowMoved);
+                        }
+                        if landed.filled_ten {
+                            audio::tts::speak(&buddy, ui::concrete::FULL_TEN_LINE);
+                        } else if !self.row_nudge_given
+                            && landed.singles_past_a_row >= ui::concrete::ROW_NUDGE_AFTER
+                        {
+                            // Once, and only after a whole row's worth of singles.
+                            self.row_nudge_given = true;
+                            audio::tts::speak(&buddy, ui::concrete::ROW_NUDGE_LINE);
+                        }
+                        if landed.built {
+                            self.events.push(GameEvent::ManipulativeBuilt {
+                                kind: ws.session.puzzle.kind,
+                            });
+                        }
+                    }
+                    ui::concrete::Pointer::Rod { bundled, .. } => {
+                        pointer_busy = true;
+                        self.events.push(GameEvent::TenRod { bundled });
+                    }
+                }
+            }
+
             if let Some(action) = ui::challenge::handle_key(&ac.state, &ac.challenge, input) {
+                note_action(ac, &action, self.game_time);
                 ac.state = challenge_reducer(ac.state.clone(), action);
                 speak_challenge_feedback(&ac.state, &buddy);
             } else if ac.state.phase == Phase::Complete
@@ -1960,10 +2041,14 @@ impl Game {
                 dismiss = true;
             }
 
-            if !dismiss && input.mouse_clicked {
+            if !dismiss && !pointer_busy && input.mouse_clicked {
                 if let Some(action) = ui::challenge::handle_click(input.ui_press, &ac.state, &ac.challenge) {
+                    let show_me = matches!(action, ChallengeAction::ShowMe);
+                    note_action(ac, &action, self.game_time);
                     ac.state = challenge_reducer(ac.state.clone(), action);
-                    speak_challenge_feedback(&ac.state, &buddy);
+                    if !(show_me && open_concrete_workspace(ac, &mut self.rng, &mut self.events, &buddy)) {
+                        speak_challenge_feedback(&ac.state, &buddy);
+                    }
                 } else if ac.state.phase == Phase::Complete {
                     dismiss = true;
                 }
@@ -1974,53 +2059,44 @@ impl Game {
                 let was_correct = ac.state.correct == Some(true);
                 let response_ms = ((self.game_time - ac.start_time) as f64 * 1000.0).min(30000.0);
 
-                self.session_log.record_challenge(session::ChallengeRecord {
-                    question: ac.challenge.display_text.clone(),
-                    correct_answer: ac.challenge.correct_answer,
-                    player_answer: None,
-                    correct: was_correct,
-                    operation: ac.challenge.numbers.op.clone(),
-                    band: ac.challenge.band,
-                    sampled_band: ac.challenge.sampled_band,
-                    hint_used: ac.state.hint_used,
-                    told_me: ac.state.told_me,
-                    attempts: ac.state.attempts,
-                    source: self.menu_target_id.clone(),
-                    play_time_at_event: self.play_time,
-                });
+                if !ac.practice {
+                    let record = attempt_record(&ac, was_correct, input.now, self.play_time, &self.menu_target_id);
+                    self.session_log.record_challenge(record.clone());
+                    self.attempt_log = std::mem::take(&mut self.attempt_log).record(record);
 
-                let event = LearnerEvent::PuzzleAttempted {
-                    correct: was_correct,
-                    operation: ac.challenge.operation,
-                    sub_skill: ac.challenge.sub_skill,
-                    band: ac.challenge.sampled_band,
-                    center_band: Some(ac.challenge.center_band),
-                    response_time_ms: Some(response_ms),
-                    hint_used: ac.state.hint_used,
-                    told_me: ac.state.told_me,
-                    cra_level_shown: Some(ac.state.render_hint.cra_stage),
-                    timestamp: Some(self.game_time as f64 * 1000.0),
-                };
-                self.profile = learner_reducer(self.profile.clone(), event);
-
-                if response_ms < 1000.0 && !was_correct {
-                    let sig = BehaviorSignal {
-                        signal: "rapid_clicking".into(),
+                    let event = LearnerEvent::PuzzleAttempted {
+                        correct: was_correct,
+                        operation: ac.challenge.operation,
+                        sub_skill: ac.challenge.sub_skill,
+                        band: ac.challenge.sampled_band,
+                        center_band: Some(ac.challenge.center_band),
+                        response_time_ms: Some(response_ms),
+                        hint_used: ac.state.hint_used,
+                        told_me: ac.state.told_me,
+                        cra_level_shown: Some(ac.state.render_hint.cra_stage),
                         timestamp: Some(self.game_time as f64 * 1000.0),
                     };
-                    self.behavior_signals.push(sig);
-                    self.profile = learner_reducer(self.profile.clone(), LearnerEvent::Behavior {
-                        signal: "rapid_clicking".into(),
-                    });
-                }
+                    self.profile = learner_reducer(self.profile.clone(), event);
 
-                let frustration = detect_frustration(
-                    &self.profile.rolling_window, &self.behavior_signals,
-                );
-                if frustration.level == FrustrationLevel::High {
-                    self.profile = learner_reducer(self.profile.clone(), LearnerEvent::FrustrationDetected {
-                        level: "high".into(),
-                    });
+                    if response_ms < 1000.0 && !was_correct {
+                        let sig = BehaviorSignal {
+                            signal: "rapid_clicking".into(),
+                            timestamp: Some(self.game_time as f64 * 1000.0),
+                        };
+                        self.behavior_signals.push(sig);
+                        self.profile = learner_reducer(self.profile.clone(), LearnerEvent::Behavior {
+                            signal: "rapid_clicking".into(),
+                        });
+                    }
+
+                    let frustration = detect_frustration(
+                        &self.profile.rolling_window, &self.behavior_signals,
+                    );
+                    if frustration.level == FrustrationLevel::High {
+                        self.profile = learner_reducer(self.profile.clone(), LearnerEvent::FrustrationDetected {
+                            level: "high".into(),
+                        });
+                    }
                 }
 
                 if let Some(ref reward) = ac.state.reward {
@@ -2148,6 +2224,34 @@ impl Game {
                 audio::tts::speak(&self.current_buddy_name(), &ac.challenge.speech_text);
                 self.activity.challenge = Some(ac);
                 self.set_state(GameState::Challenge);
+            }
+            CtrlManipulatives => {
+                // The bench: each visit opens the next manipulative, already
+                // out as if a Concrete-stage kid had pressed "Show me". Numbers
+                // follow the band knob (clamped to where the frames apply).
+                let bench = ui::concrete::BENCH;
+                let op = bench[self.manip_bench_next % bench.len()];
+                self.manip_bench_next += 1;
+                let band = self.profile.math_band.clamp(2, 4);
+                let rng = &mut self.rng;
+                let mut challenge = generate_challenge_at(band, op, rng);
+                for _ in 0..20 {
+                    if ui::concrete::puzzle_for(&challenge, rng).is_some() { break; }
+                    challenge = generate_challenge_at(band, op, rng);
+                }
+                if ui::concrete::puzzle_for(&challenge, rng).is_none() {
+                    challenge = generate_challenge_at(2, op, rng);
+                }
+                let mut ac = active_challenge_for(challenge, &self.profile, self.game_time);
+                ac.state.render_hint.cra_stage = CraStage::Concrete;
+                ac.practice = true;
+                note_action(&mut ac, &ChallengeAction::ShowMe, self.game_time);
+                ac.state = challenge_reducer(ac.state, ChallengeAction::ShowMe);
+                let buddy = self.current_buddy_name();
+                self.begin_challenge(ac);
+                if let Some(ac) = self.activity.challenge.as_mut() {
+                    open_concrete_workspace(ac, &mut self.rng, &mut self.events, &buddy);
+                }
             }
             CtrlToggleEncounters => {
                 self.features.encounters = !self.features.encounters;
@@ -2355,6 +2459,10 @@ impl Game {
                         }
                         let lines = sparky_dialogue_lines(&mut self.rng);
                         self.start_dialogue(lines);
+                    } else if let Some(base) = self.pearl_hop_host(&self.menu_target_id.clone()) {
+                        // Talking to Shelly IS Pearl Hop.
+                        self.start_pearl_hop(base, self.menu_target_id.clone());
+                        return;
                     } else {
                         // Pull lines first to free the borrow before start_dialogue.
                         // The companion is checked too: a mount you're riding
@@ -2514,7 +2622,7 @@ impl Game {
                     }
                     SettingsResult::ExportSession => {
                         let json = session::build_export(
-                            &self.player_name, &self.session_log, &self.gifts_given,
+                            &self.player_name, &self.session_log, self.attempt_log.records(), &self.gifts_given,
                             self.dum_dums, self.play_time, &self.profile, self.map.id,
                         );
                         let filename = format!("robot-buddy-session-{}.json", self.play_time as u64);
@@ -3239,10 +3347,6 @@ impl Game {
         let dest_id = self.map.id;
         self.npcs = self.load_map_roster(dest_id);
 
-        // Reset the ambient pearl to the new map's path start (if any).
-        // A pearl trip belongs to the map it started on.
-        self.leap_session = None;
-
         self.player.tile_x = dest_x;
         self.player.tile_y = dest_y;
         self.player.x = dest_x as f32 * TILE_SIZE;
@@ -3282,12 +3386,12 @@ impl Game {
 
     // ─── Rendering ─────────────────────────────────────
 
-    /// Paint whatever `who` is wearing over the sprite just drawn for them.
-    /// No-op for anyone who's been given nothing, which is almost everyone.
-    fn draw_swag_on(&self, who: &str, x: f32, y: f32, dir: Dir, fit: sprites::swag::SwagFit) {
-        let worn = self.wardrobe.worn_by(who);
-        if worn.is_empty() { return; }
-        sprites::swag::draw_swag(x, y, dir, 0.0, worn, self.outfit_color(who), fit);
+    /// Draw `who` (a wearer id) as `body`, upright at the tile (x, y), with
+    /// whatever they're wearing — through the one dressed-character helper,
+    /// so no buddy is ever drawn without their swag.
+    fn draw_dressed(&self, who: &str, body: sprites::dressed::Body, x: f32, y: f32, dir: Dir, fit: sprites::swag::SwagFit) {
+        let outfit = sprites::dressed::Outfit { worn: self.wardrobe.worn_by(who), color: self.outfit_color(who), fit };
+        sprites::dressed::draw_dressed(sprites::dressed::Posture::tile(x, y), body, dir, &outfit, self.game_time);
     }
 
     fn render_world(&mut self, screen: (f32, f32)) {
@@ -3324,13 +3428,6 @@ impl Game {
             // visible over undrawn void: wherever the camera looks, tiles are.
             let view = visible_world_rect((self.camera.x, self.camera.y), (sw, sh));
             tilemap::draw_map(&self.map, view.x, view.y, view.w, view.h, self.game_time);
-
-            // Embodied number line: stepping-stones drawn on the ground (under
-            // the sprites) so the kid hops across the numbers.
-            if let Some(track) = number_track::track_for_map(self.map.id) {
-                let here = track.index_of((self.player.tile_x, self.player.tile_y));
-                draw_number_track(&track, here, self.leap_session.as_ref(), self.game_time);
-            }
 
             // Click-to-walk destination marker: a pulsing ring on the tapped
             // tile, drawn on the ground (under the sprites) until arrival.
@@ -3409,13 +3506,11 @@ impl Game {
                     }
                     SpriteKind::Sparky => {
                         let e = &self.sparky.entity;
-                        sprites::robot::draw_robot(e.x, e.y, e.dir, e.frame, self.game_time);
-                        self.draw_swag_on("sparky", e.x, e.y, e.dir,
-                            sprites::swag::SwagFit::ROBOT);
+                        self.draw_dressed("sparky", sprites::dressed::Body::Robot { frame: e.frame },
+                            e.x, e.y, e.dir, sprites::swag::SwagFit::ROBOT);
                     }
                     SpriteKind::Npc(n) => {
-                        n.draw(self.game_time);
-                        self.draw_swag_on(n.id_str(), n.entity.x, n.entity.y, n.entity.dir,
+                        self.draw_dressed(n.id_str(), n.body(), n.entity.x, n.entity.y, n.entity.dir,
                             n.sprite.swag_fit());
                     }
                     SpriteKind::Mount(n) => {
@@ -3423,10 +3518,21 @@ impl Game {
                         // sprite at the player's tile, facing the player's way,
                         // so the kid sits astride its back rather than
                         // alongside a blob.
-                        n.draw_at(self.player.x, self.player.y, self.player.dir, self.game_time);
-                        self.draw_swag_on(n.id_str(), self.player.x, self.player.y,
+                        self.draw_dressed(n.id_str(), n.body(), self.player.x, self.player.y,
                             self.player.dir, n.sprite.swag_fit());
                     }
+                }
+            }
+
+            // Minigame hosts (Shelly, Inkwell) wear an attract beacon, drawn
+            // over every sprite so the "there's a game here" badge is never
+            // hidden behind a passer-by.
+            let hosts = self.npcs.iter()
+                .filter(|n| npc_in_camera(view, n))
+                .chain(self.companion.iter().filter(|c| !c.is_rideable()));
+            for n in hosts {
+                if let Some(b) = n.hosts_minigame() {
+                    sprites::attract::draw_beacon(n.entity.x, n.entity.y, self.game_time, b);
                 }
             }
 
@@ -3554,8 +3660,7 @@ impl Game {
             shop: self.shop_panel_view().filter(|_| in_world),
             swag: self.swag_panel_view().filter(|_| in_world),
             settings: self.settings_open.then(|| ui::settings_overlay::SettingsView::new(self.settings_model(), screen)),
-            leap: self.leap_session.as_ref().filter(|_| in_world)
-                .map(|s| ui::leap::LeapView::new(s, leap_call(&s.puzzle))),
+            pearl_hop: self.pearl_hop_view().map(|v| ui::pearl_hop::HopPanelView::new(&v)),
             shooter_footer: self.activity.shooter.as_ref()
                 .filter(|a| a.session.phase != ShooterPhase::Complete)
                 .map(|_| ui::shooter::FooterView),
@@ -3563,7 +3668,7 @@ impl Game {
             challenge: self
                 .shown_challenge()
                 .filter(|_| in_world)
-                .map(|ac| ui::challenge::ChallengeView::new(&ac.state, &ac.challenge, screen)),
+                .map(|ac| ui::challenge::ChallengeView::new(&ac.state, &ac.challenge, ac.workspace.as_ref(), screen)),
         }
     }
 
@@ -3630,6 +3735,13 @@ impl Game {
         }
 
 
+        // Shelly's Pearl Hop — a full-screen minigame; its buttons and caption
+        // are a panel on top.
+        if let Some(view) = self.pearl_hop_view() {
+            let layout = ui::pearl_hop::layout(&view, screen);
+            let art = self.pearl_hop_art(&layout);
+            ui::pearl_hop::draw(&view, &layout, &art, self.game_time);
+        }
     }
 
     // ─── Save helpers ──────────────────────────────────
@@ -3676,10 +3788,12 @@ impl Game {
             satisfied_gates: self.satisfied_gates.iter().cloned().collect(),
             paid_tolls: self.paid_tolls.iter().cloned().collect(),
             seen_intros: self.seen_intros.iter().cloned().collect(),
+            seen_demos: self.seen_demos.iter().cloned().collect(),
             dive_return: self.dive_return.clone(),
             fuel: self.fuel,
             upgrades: self.upgrades.iter().cloned().collect(),
             game_pace: self.game_pace,
+            attempt_log: self.attempt_log.clone(),
         }
     }
 
@@ -3697,10 +3811,12 @@ impl Game {
         self.satisfied_gates = save_data.satisfied_gates.iter().cloned().collect();
         self.paid_tolls = save_data.paid_tolls.iter().cloned().collect();
         self.seen_intros = save_data.seen_intros.iter().cloned().collect();
+        self.seen_demos = save_data.seen_demos.iter().cloned().collect();
         self.dive_return = save_data.dive_return.clone();
         self.fuel = save_data.fuel;
         self.upgrades = save_data.upgrades.iter().cloned().collect();
         self.game_pace = save_data.game_pace;
+        self.attempt_log = save_data.attempt_log.clone();
 
         self.map = Map::by_id(&save_data.map_id);
         self.npcs_offstage.clear();
@@ -3844,7 +3960,12 @@ fn make_challenge_profile(profile: &LearnerProfile) -> ChallengeProfile {
 fn start_challenge(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32) -> ActiveChallenge {
     let cp = make_challenge_profile(profile);
     let challenge = generate_challenge(&cp, rng);
+    active_challenge_for(challenge, profile, game_time)
+}
 
+/// Present an already-generated challenge at the learner's CRA stage for its
+/// operation.
+fn active_challenge_for(challenge: Challenge, profile: &LearnerProfile, game_time: f32) -> ActiveChallenge {
     let cra = profile.cra_stages
         .get(&challenge.operation)
         .copied()
@@ -3876,8 +3997,13 @@ fn start_challenge(rng: &mut SmallRng, profile: &LearnerProfile, game_time: f32)
     ActiveChallenge {
         state: cs,
         challenge,
+        workspace: None,
         complete_timer: 0.0,
         start_time: game_time,
+        answers: Vec::new(),
+        help_at: None,
+        stage_asked: cra,
+        practice: false,
     }
 }
 
@@ -3909,8 +4035,13 @@ fn start_intake_challenge(challenge: Challenge, _band: u8, game_time: f32) -> Ac
     ActiveChallenge {
         state: cs,
         challenge,
+        workspace: None,
         complete_timer: 0.0,
         start_time: game_time,
+        answers: Vec::new(),
+        help_at: None,
+        stage_asked: CraStage::Abstract,
+        practice: false,
     }
 }
 
@@ -4105,6 +4236,67 @@ fn display_name_for_buddy_id(id: &str) -> String {
         .unwrap_or_else(|| id.to_string())
 }
 
+/// Note what the attempt log needs from an action before it's applied: an
+/// answer and when, or when Show me was first pressed.
+fn note_action(ac: &mut ActiveChallenge, action: &ChallengeAction, game_time: f32) {
+    let ms = ((game_time - ac.start_time).max(0.0) * 1000.0) as u32;
+    match action {
+        ChallengeAction::AnswerSubmitted { answer } => ac.answers.push(AnswerAt { value: *answer, ms }),
+        ChallengeAction::ShowMe if ac.help_at.is_none() => ac.help_at = Some(game_time),
+        _ => {}
+    }
+}
+
+/// The attempt log's record of a finished challenge.
+fn attempt_record(ac: &ActiveChallenge, correct: bool, now: f64, play_secs: f32, source: &str) -> AttemptRecord {
+    let c = &ac.challenge;
+    let help = match (&ac.workspace, ac.state.hint_used) {
+        (Some(_), _) => Help::Workspace,
+        (None, true) => Help::Picture,
+        (None, false) => Help::None,
+    };
+    AttemptRecord {
+        at: now,
+        play_secs,
+        source: source.to_string(),
+        operation: c.operation,
+        sub_skill: c.sub_skill,
+        a: c.numbers.a,
+        b: c.numbers.b,
+        format: c.numbers.format.clone(),
+        band: c.sampled_band,
+        center_band: c.center_band,
+        cra_stage: ac.stage_asked,
+        correct_answer: c.correct_answer,
+        answers: ac.answers.clone(),
+        correct,
+        help,
+        help_ms: ac.help_at.map(|t| ((t - ac.start_time).max(0.0) * 1000.0) as u32),
+        told_me: ac.state.told_me,
+        workspace: ac.workspace.as_ref().map(|w| w.usage().clone()),
+    }
+}
+
+/// "Show me" landed on the Concrete stage: swap the static picture for the
+/// hands-on workspace, and have the buddy say what to do (the only
+/// instructions a pre-reader gets). Returns false — leaving the static
+/// picture — when the problem doesn't fit the ten-frames.
+fn open_concrete_workspace(
+    ac: &mut ActiveChallenge,
+    rng: &mut SmallRng,
+    events: &mut Vec<GameEvent>,
+    buddy: &str,
+) -> bool {
+    if ac.workspace.is_some() || ac.state.render_hint.cra_stage != CraStage::Concrete {
+        return false;
+    }
+    let Some(ws) = ui::concrete::Workspace::for_challenge(&ac.challenge, rng) else { return false };
+    audio::tts::speak(buddy, ui::concrete::intro_line(&ws));
+    events.push(GameEvent::ManipulativeOpened { kind: ws.session.puzzle.kind });
+    ac.workspace = Some(ws);
+    true
+}
+
 fn speak_challenge_feedback(cs: &ChallengeState, speaker: &str) {
     if let Some(ref fb) = cs.feedback {
         audio::tts::speak(speaker, &fb.speech);
@@ -4132,12 +4324,12 @@ fn secret_entry_dialogue(map_id: &str, speaker: &str) -> Vec<DialogueLine> {
         "reef" => vec![
             line("BLUB BLUB! We're UNDERWATER, boss! And I didn't even rust! Best upgrade EVER!"),
             line("Look — coral, kelp, and is that a SHARK napping on the path? Let's go say hi!"),
-            line("See Shelly the clam by the number-stones? Her bubble says which stone hides her PEARL!"),
+            line("See Shelly the clam? Talk to her — she'll let you FLING her at her pearl!"),
             line("And little houses to the east! An underwater VILLAGE! Can we knock? Please please please?"),
         ],
         "trench" => vec![
             line("WHOA, the deep trench! It's darker down here, boss... and look at all the glowing vents!"),
-            line("There's another Shelly with number-stones — find her pearl! The bright bubble column takes us back up."),
+            line("There's another Shelly down here — her pearls are worth double! The bright bubble column takes us back up."),
         ],
         tilemap::DOGFISH_HOUSE => vec![
             // Only Inkwell offers a dive, so she's the one saying this — keep
