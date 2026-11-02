@@ -18,6 +18,8 @@ pub enum Beacon {
     Pearl,
     /// Inkwell's dive.
     Dive,
+    /// Sockbot's Sock Shop.
+    Sock,
 }
 
 const RIM: Color = Color::new(0.05, 0.10, 0.22, 0.9);
@@ -30,6 +32,7 @@ pub fn draw_beacon(x: f32, y: f32, time: f32, beacon: Beacon) {
     let t = time + match beacon {
         Beacon::Pearl => 0.0,
         Beacon::Dive => 1.7,
+        Beacon::Sock => 0.9,
     };
 
     // Bubble ring round the host's middle, drifting slowly round.
@@ -86,6 +89,17 @@ pub fn draw_beacon(x: f32, y: f32, time: f32, beacon: Beacon) {
                 vec2(bx, by + br * 0.68),
                 RIM,
             );
+        }
+        Beacon::Sock => {
+            // A fat striped sock, toe kicking out.
+            let (sx, sy, sw) = (bx - br * 0.32, by - br * 0.62, br * 0.5);
+            draw_rectangle(sx - 1.5, sy - 1.5, sw + 3.0, br * 0.9 + 3.0, RIM);
+            draw_rectangle(sx - 1.5, sy + br * 0.62 - 1.5, sw + br * 0.42 + 3.0, br * 0.42 + 3.0, RIM);
+            let pink = Color::new(0.94, 0.35, 0.63, 1.0);
+            draw_rectangle(sx, sy, sw, br * 0.9, pink);
+            draw_rectangle(sx, sy + br * 0.62, sw + br * 0.42, br * 0.42, pink);
+            draw_rectangle(sx, sy, sw, br * 0.2, WHITE);
+            draw_rectangle(sx, sy + br * 0.34, sw, br * 0.12, WHITE);
         }
     }
     // A little tail pointing down at the host, so the badge is clearly theirs.

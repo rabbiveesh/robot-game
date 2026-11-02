@@ -406,6 +406,8 @@ pub struct Npc {
     pub launch_shooter: bool,
     /// Runs Pearl Hop: talking to her opens the slingshot minigame (Shelly).
     pub pearl_hop: bool,
+    /// Runs the Sock Shop (Sockbot): "Talk" opens it.
+    pub sock_shop: bool,
     /// True while this NPC is strolling back to its home tile after being
     /// swapped out as the player's buddy (on the same map). It walks a
     /// precomputed route stored in `pathing` via `next_route_intent`; when the
@@ -606,12 +608,20 @@ impl Npc {
         self
     }
 
+    /// Builder: this NPC runs the Sock Shop — "Talk" opens it.
+    pub fn sock_shop(mut self) -> Self {
+        self.sock_shop = true;
+        self
+    }
+
     /// Hosts a minigame (Inkwell's dive, Shelly's Pearl Hop) — the world draws
     /// an attract beacon over them so a kid can see there's a game here.
     pub fn hosts_minigame(&self) -> Option<crate::sprites::attract::Beacon> {
         use crate::sprites::attract::Beacon;
         if self.pearl_hop {
             Some(Beacon::Pearl)
+        } else if self.sock_shop {
+            Some(Beacon::Sock)
         } else if self.dive {
             Some(Beacon::Dive)
         } else {
@@ -698,6 +708,7 @@ fn npc(home_map: &'static str, kind: NpcKind, tx: usize, ty: usize, sprite: Spri
         dive: false,
         launch_shooter: false,
         pearl_hop: false,
+        sock_shop: false,
         homing: false,
         leaving_map: false,
     }
@@ -812,7 +823,7 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(Roomba,    15, 14, S::Roomba,    true, true,  false).wandering(),
             n(TinyBot,   23, 7,  S::TinyBot,   true, false, false).wandering(),
             n(RustyBot,  7, 16,  S::RustyBot,  true, false, false),
-            n(SockBot,   21, 16, S::SockBot,   true, false, false).wandering(),
+            n(SockBot,   21, 16, S::SockBot,   true, false, false).sock_shop(),
         ],
         "control" => vec![
             // Dev knob bay -- each NPC is one control. game.rs intercepts dev-control

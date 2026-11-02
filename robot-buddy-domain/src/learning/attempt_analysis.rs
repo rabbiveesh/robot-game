@@ -46,12 +46,16 @@ pub struct Report {
     pub strategy_earlier: Option<StrategyLine>,
     pub workspace: WorkspaceLine,
     /// Shelly's Pearl Hop, one toss per record: first half → second half.
-    pub skip_counting: SkipCountLine,
+    pub skip_counting: MinigameLine,
+    /// Sockbot's Sock Shop, one handed-over order per record.
+    pub pairing: MinigameLine,
 }
 
+/// A minigame's own skill line, kept out of the arithmetic lines: every try
+/// (one toss, one order), first half → second half.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct SkipCountLine {
-    pub tosses: usize,
+pub struct MinigameLine {
+    pub tries: usize,
     pub early: Half,
     pub late: Half,
 }
@@ -135,14 +139,20 @@ pub struct WorkspaceLine {
     pub first_try_accuracy: Option<f64>,
 }
 
+fn minigame_line(rs: &[&AttemptRecord]) -> MinigameLine {
+    let mid = rs.len() / 2;
+    MinigameLine { tries: rs.len(), early: half(&rs[..mid]), late: half(&rs[mid..]) }
+}
+
 /// Build the report. `records` in any order; they're sorted by time here.
 pub fn analyze(records: &[AttemptRecord]) -> Report {
     let mut all: Vec<&AttemptRecord> = records.iter().collect();
     all.sort_by(|x, y| x.at.total_cmp(&y.at).then(x.play_secs.total_cmp(&y.play_secs)));
     let (hops, rs): (Vec<&AttemptRecord>, Vec<&AttemptRecord>) = all.into_iter().partition(|r| r.is_skip_counting());
-    let mid = hops.len() / 2;
+    let (socks, rs): (Vec<&AttemptRecord>, Vec<&AttemptRecord>) = rs.into_iter().partition(|r| r.is_pairing());
     Report {
-        skip_counting: SkipCountLine { tosses: hops.len(), early: half(&hops[..mid]), late: half(&hops[mid..]) },
+        skip_counting: minigame_line(&hops),
+        pairing: minigame_line(&socks),
         attempts: rs.len(),
         days: days(&rs),
         operations: operations(&rs),
@@ -371,10 +381,24 @@ fn write_strategy(f: &mut fmt::Formatter<'_>, when: &str, s: &StrategyLine) -> f
     )
 }
 
+fn write_minigame(f: &mut fmt::Formatter<'_>, title: &str, tries: &str, hit: &str, k: &MinigameLine) -> fmt::Result {
+    writeln!(f, "\n{title}, first half → second half")?;
+    if k.tries < MIN_FOR_TREND {
+        writeln!(f, "  {} {tries}, not enough yet", k.tries)
+    } else {
+        writeln!(
+            f,
+            "  {} {tries}   {hit} {} → {}   time {} → {}",
+            k.tries, pct(k.early.unaided_accuracy), pct(k.late.unaided_accuracy),
+            secs(k.early.unaided_median_ms), secs(k.late.unaided_median_ms),
+        )
+    }
+}
+
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{} challenges", self.attempts)?;
-        if self.attempts == 0 && self.skip_counting.tosses == 0 {
+        if self.attempts == 0 && self.skip_counting.tries == 0 && self.pairing.tries == 0 {
             return Ok(());
         }
 
@@ -410,18 +434,8 @@ impl fmt::Display for Report {
         }
         write_strategy(f, "lately", &self.strategy)?;
 
-        let k = &self.skip_counting;
-        writeln!(f, "\nSkip counting (Shelly's Pearl Hop, every toss), first half → second half")?;
-        if k.tosses < MIN_FOR_TREND {
-            writeln!(f, "  {} tosses, not enough yet", k.tosses)?;
-        } else {
-            writeln!(
-                f,
-                "  {} tosses   on the pearl {} → {}   time {} → {}",
-                k.tosses, pct(k.early.unaided_accuracy), pct(k.late.unaided_accuracy),
-                secs(k.early.unaided_median_ms), secs(k.late.unaided_median_ms),
-            )?;
-        }
+        write_minigame(f, "Skip counting (Shelly's Pearl Hop, every toss)", "tosses", "on the pearl", &self.skip_counting)?;
+        write_minigame(f, "Pairing (Sockbot's Sock Shop, every order)", "orders", "right pairs", &self.pairing)?;
 
         let w = &self.workspace;
         writeln!(f, "\nHands-on workspace")?;
@@ -569,8 +583,21 @@ mod tests {
         let rep = analyze(&[toss.clone(), toss, attempt(2, 3, 5, 3000)]);
         assert_eq!(rep.attempts, 1, "only the real challenge counts as a challenge");
         assert!(rep.operations.iter().all(|o| o.operation != Operation::Multiply));
-        assert_eq!(rep.skip_counting.tosses, 2);
+        assert_eq!(rep.skip_counting.tries, 2);
         assert!(rep.to_string().contains("Skip counting"));
+    }
+
+    #[test]
+    fn sock_orders_report_as_pairing_not_arithmetic() {
+        let mut order = attempt(3, 4, 6, 4000);
+        order.operation = Operation::Multiply;
+        order.format = "socks_group".into();
+        let rep = analyze(&[order.clone(), order, attempt(2, 3, 5, 3000)]);
+        assert_eq!(rep.attempts, 1, "only the real challenge counts as a challenge");
+        assert!(rep.operations.iter().all(|o| o.operation != Operation::Multiply));
+        assert_eq!(rep.pairing.tries, 2);
+        assert_eq!(rep.skip_counting.tries, 0);
+        assert!(rep.to_string().contains("Pairing"));
     }
 
     #[test]

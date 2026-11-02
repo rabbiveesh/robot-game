@@ -578,6 +578,52 @@ fn the_dive_shaft_is_sound_everywhere() {
     );
 }
 
+/// Sockbot's shop at every stage, with a big order (tens buttons), a long
+/// line, and after the win (Next up): every button tappable, the shop scene
+/// keeps room to see the feet, on every screen.
+#[test]
+fn the_sock_shop_is_sound_everywhere() {
+    use robot_buddy_domain::logic::socks::{sock_reducer, SockAction, SockRound, SockSession, SockStage, Walker, WIN_SECS};
+    use robot_buddy_game::ui::socks::{SockId, SockView};
+    let rounds = [
+        SockRound { stage: SockStage::Feet, walker: Walker::StarBot, robots: 1, max_pairs: 6 },
+        SockRound { stage: SockStage::Group, walker: Walker::BugBot, robots: 3, max_pairs: 20 },
+        SockRound { stage: SockStage::Order, walker: Walker::CentiBot, robots: 10, max_pairs: 60 },
+    ];
+    let mut cases = Vec::new();
+    for r in rounds {
+        let need = r.pairs_needed() as i32;
+        let choosing = sock_reducer(SockSession::new(r.clone()), SockAction::Add { n: need + 3 });
+        let mut won = sock_reducer(sock_reducer(SockSession::new(r.clone()), SockAction::Add { n: need }), SockAction::Send);
+        for _ in 0..200 {
+            won = sock_reducer(won, SockAction::Tick { dt: WIN_SECS / 20.0 });
+        }
+        assert!(won.win_done());
+        cases.push((format!("{:?} choosing", r.stage), choosing));
+        cases.push((format!("{:?} won", r.stage), won));
+    }
+    sweep_all(
+        "sock shop",
+        |_| cases.iter().flat_map(|(name, s)| {
+            ["Every foot is cozy!", "Every foot is cozy! And one lonely sock for ME! My collection grows!"].map(|line| {
+                (format!("{name}, {line:?}"), UiViews { socks: Some(SockView::new(s, line)), ..Default::default() })
+            })
+        }).collect(),
+        |name, snap| {
+            assert!(has(snap, UiAction::Socks(SockId::Leave)), "{name}");
+            let won = name.contains("won");
+            assert_eq!(has(snap, UiAction::Socks(SockId::Next)), won, "{name}");
+            assert_eq!(has(snap, UiAction::Socks(SockId::Send)), !won, "{name}");
+            if !won {
+                assert!(has(snap, UiAction::Socks(SockId::More(1))) && has(snap, UiAction::Socks(SockId::Fewer(1))), "{name}");
+                assert_eq!(has(snap, UiAction::Socks(SockId::More(10))), name.starts_with("Order"), "tens only for big orders: {name}");
+            }
+            let shop = snap.art(ArtId::SockShop).expect("the shop scene");
+            assert!(shop.h >= 150.0 && shop.w >= 280.0, "the shop keeps room to see the feet: {name}: {shop:?}");
+        },
+    );
+}
+
 #[test]
 fn the_shooter_footer_is_sound_everywhere() {
     use robot_buddy_game::ui::shooter::{FooterId, FooterView};

@@ -44,6 +44,7 @@ use robot_buddy_domain::logic::descent::{
     DiveAction, DiveNudge, DivePhase, DiveSession, dive_reducer, generate_dive,
 };
 use robot_buddy_domain::logic::pearl_hop::HopStage;
+use robot_buddy_domain::logic::socks::SockStage;
 use robot_buddy_domain::logic::shooter::{
     ShooterSession, ShooterAction, ShooterPhase, ShotSource, shooter_reducer,
 };
@@ -75,12 +76,14 @@ use crate::session;
 use crate::input::FrameInput;
 
 mod descent;
+mod socks;
 mod pearl_hop;
 mod puzzles;
 mod shooter;
 mod shop;
 
 pub use self::pearl_hop::{ActivePearlHop, DemoStep, PEARL_HOP_DEMO};
+pub use self::socks::{ActiveSocks, SOCK_CLEAN_BONUS, SOCK_PAY};
 use self::puzzles::{start_balance, start_kenken, start_pattern, start_sudoku};
 
 pub const GAME_W: f32 = 960.0;
@@ -117,6 +120,8 @@ pub enum GameState {
     Descent,
     /// Shelly's slingshot number-path minigame.
     PearlHop,
+    /// Sockbot's Sock Shop: socks for robots, in pairs.
+    SockShop,
     Quest,
     /// The Goyish Map's number-bond space shooter (real-time minigame).
     Shooter,
@@ -159,6 +164,7 @@ struct Activities {
     swag: Option<ActiveSwag>,
     descent: Option<ActiveDescent>,
     pearl_hop: Option<ActivePearlHop>,
+    socks: Option<ActiveSocks>,
     quest: Option<ActiveQuest>,
     /// A random encounter's challenge is queued to open.
     pending_challenge: bool,
@@ -497,6 +503,16 @@ pub enum GameEvent {
     PearlHopDemoSeen,
     /// The kid left Pearl Hop.
     PearlHopLeft,
+    /// Sockbot's next customer stepped up: the stage the kid's band plays,
+    /// and the pairs the order needs.
+    SockShopStarted { stage: SockStage, pairs: u16 },
+    /// An order was handed over. `snug` is whether it was the right number of
+    /// pairs. Silent assessment — never shown to the kid.
+    SockOrderSent { stage: SockStage, pairs: u16, needed: u16, snug: bool },
+    /// Every foot socked. `tries` counts this order's hand-overs (1 = clean).
+    SockShopWon { stage: SockStage, tries: u8, dum_dums: u32 },
+    /// The kid left the Sock Shop.
+    SockShopLeft,
     /// Pearls credited to the kid, from any source (Pearl Hop, a clean dive).
     PearlsAwarded { amount: u32 },
     SudokuStarted { grid_size: u8, source: String },
@@ -879,6 +895,11 @@ impl Game {
             .map(|n| pearl_hop::pearl_hop_base(n.home_map))
     }
 
+    /// Does `id` name the Sock Shop's keeper here (or tagging along)?
+    fn sock_shop_host(&self, id: &str) -> bool {
+        self.npcs.iter().chain(self.companion.iter()).any(|n| n.id_str() == id && n.sock_shop)
+    }
+
     /// Shelly's Pearl Hop, while it's up.
     pub fn active_pearl_hop(&self) -> Option<&ActivePearlHop> {
         self.activity.pearl_hop.as_ref()
@@ -1153,6 +1174,7 @@ impl Game {
             GameState::Swag => { self.step_swag(input); false }
             GameState::Descent => { self.step_descent(input, dt); false }
             GameState::PearlHop => { self.step_pearl_hop(input, dt, screen); false }
+            GameState::SockShop => { self.step_sock_shop(input, dt); false }
             GameState::Quest => { self.step_quest(input); false }
         }
     }
@@ -1759,6 +1781,8 @@ impl Game {
                 let (target_kind, can_receive_gifts, never_challenge, is_puzzler, is_gate, gate_id, is_refuel, is_launch_shooter, is_dive, target_ref) = target;
                 // Shelly's "Talk" is Pearl Hop: what a find is worth where she lives.
                 let hop_base = target_ref.pearl_hop.then(|| pearl_hop::pearl_hop_base(target_ref.home_map));
+                // Sockbot's "Talk" is the Sock Shop.
+                let sock_shop = target_ref.sock_shop;
                 let target_id = target_kind.as_str().to_string();
                 let target_name = target_kind.display_name().to_string();
 
@@ -1828,6 +1852,10 @@ impl Game {
                 if opts.len() == 1 {
                     if let Some(base) = hop_base {
                         self.start_pearl_hop(base, self.menu_target_id.clone());
+                        return;
+                    }
+                    if sock_shop {
+                        self.start_sock_shop();
                         return;
                     }
                     let lines = npc_dialogue_lines(target_ref, &mut self.rng);
@@ -2473,6 +2501,10 @@ impl Game {
                     } else if let Some(base) = self.pearl_hop_host(&self.menu_target_id.clone()) {
                         // Talking to Shelly IS Pearl Hop.
                         self.start_pearl_hop(base, self.menu_target_id.clone());
+                        return;
+                    } else if self.sock_shop_host(&self.menu_target_id.clone()) {
+                        // Talking to Sockbot IS the Sock Shop.
+                        self.start_sock_shop();
                         return;
                     } else {
                         // Pull lines first to free the borrow before start_dialogue.
@@ -3676,6 +3708,7 @@ impl Game {
                 .filter(|a| a.session.phase != ShooterPhase::Complete)
                 .map(|_| ui::shooter::FooterView),
             descent: self.activity.descent.as_ref().map(|ad| ui::descent::DescentView::new(&ad.session, ad.message.as_deref())),
+            socks: self.sock_view(),
             challenge: self
                 .shown_challenge()
                 .filter(|_| in_world)
