@@ -71,6 +71,23 @@ pub fn round_rect(r: UiRect, radius: f32, color: Color) {
     draw_circle(r.x + r.w - rad, r.y + r.h - rad, rad, color);
 }
 
+/// A top-to-bottom colour fade over `r`, in `steps` flat bands.
+pub fn vgradient(r: UiRect, top: Color, bottom: Color, steps: usize) {
+    let steps = steps.max(1);
+    let band = r.h / steps as f32;
+    for i in 0..steps {
+        let t = if steps == 1 { 0.0 } else { i as f32 / (steps - 1) as f32 };
+        let c = Color::new(
+            top.r + (bottom.r - top.r) * t,
+            top.g + (bottom.g - top.g) * t,
+            top.b + (bottom.b - top.b) * t,
+            top.a + (bottom.a - top.a) * t,
+        );
+        // +1 so rounding never leaves a hairline gap between bands.
+        draw_rectangle(r.x, r.y + band * i as f32, r.w, (band + 1.0).min(r.bottom() - (r.y + band * i as f32)), c);
+    }
+}
+
 /// Dim everything behind a modal (pass the frame's bounds).
 pub fn dim(bounds: UiRect, alpha: f32) {
     fill(bounds, Color::new(0.0, 0.0, 0.0, alpha));
@@ -123,6 +140,23 @@ impl Canvas {
         self.check(r.x, r.y, r.right(), r.bottom());
         draw_rectangle_lines(r.x, r.y, r.w, r.h, thickness, color);
     }
+    /// Filled ellipse with radii `rx`, `ry`, turned `rotation` degrees.
+    pub fn ellipse(&self, x: f32, y: f32, rx: f32, ry: f32, rotation: f32, color: Color) {
+        let r = rx.max(ry);
+        self.check(x - r, y - r, x + r, y + r);
+        draw_ellipse(x, y, rx, ry, rotation, color);
+    }
+    /// Filled triangle.
+    pub fn triangle(&self, a: (f32, f32), b: (f32, f32), c: (f32, f32), color: Color) {
+        self.check(a.0.min(b.0).min(c.0), a.1.min(b.1).min(c.1), a.0.max(b.0).max(c.0), a.1.max(b.1).max(c.1));
+        draw_triangle(vec2(a.0, a.1), vec2(b.0, b.1), vec2(c.0, c.1), color);
+    }
+    /// One line of text centred on `cx`, on `baseline`.
+    pub fn text_centered(&self, s: &str, cx: f32, baseline: f32, size: u16, color: Color) {
+        use super::metrics::{FontMetrics, TextMetrics};
+        let w = FontMetrics::bundled().width(s, size);
+        self.text(s, cx - w / 2.0, baseline, size, color);
+    }
     /// One line of text, left edge at `x`, on `baseline`.
     pub fn text(&self, s: &str, x: f32, baseline: f32, size: u16, color: Color) {
         use super::metrics::{FontMetrics, TextMetrics};
@@ -133,7 +167,7 @@ impl Canvas {
     }
 }
 
-/// Smallest font the unmigrated panels (leap, descent) shrink a line to.
+/// Smallest font the unmigrated panels (descent) shrink a line to.
 pub const MIN_FONT: u16 = 11;
 
 /// Draw `text` centered on baseline `y` in `p`, shrunk (down to [`MIN_FONT`])

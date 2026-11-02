@@ -277,7 +277,7 @@ pub mod challenge_sweep {
             for c in &all {
                 for display in [c.display_text.as_str(), WORD_PROBLEM] {
                     for (name, cs) in phases(c, display) {
-                        let l = challenge::layout(&cs, c, screen);
+                        let l = challenge::layout(&cs, c, None, screen);
                         if let Err(e) = check_sane(&l.frame, screen_rect(screen)) {
                             let els: Vec<_> = l.frame.elements().iter().map(|e| (e.id, e.rect)).collect();
                             panic!(
@@ -303,6 +303,49 @@ pub mod challenge_sweep {
         }
     }
 
+    /// The hands-on workspace (Concrete-stage Show me) in every phase it can
+    /// share the panel with, for put-together and take-away, one frame and two,
+    /// under a plain and a wrapped question — on every screen, down to a phone.
+    pub fn the_hands_on_workspace_is_sane_everywhere() {
+        use robot_buddy_domain::learning::challenge_generator::generate_challenge_at;
+        use robot_buddy_domain::types::Operation;
+        use robot_buddy_game::ui::concrete::{self, Workspace};
+
+        let mut rng = SmallRng::seed_from_u64(7);
+        let mut cases: Vec<(Challenge, Workspace)> = Vec::new();
+        for band in [2u8, 4] {
+            for op in [Operation::Add, Operation::Sub] {
+                for _ in 0..4 {
+                    let c = generate_challenge_at(band, op, &mut rng);
+                    if let Some(ws) = Workspace::for_challenge(&c, &mut rng) {
+                        cases.push((c, ws));
+                    }
+                }
+            }
+        }
+        assert!(cases.iter().any(|(_, ws)| ws.session.puzzle.target > 10), "cover a two-frame case");
+
+        for &screen in &SWEEP_SCREENS {
+            for (c, ws) in &cases {
+                for display in [c.display_text.as_str(), WORD_PROBLEM] {
+                    for (name, cs) in phases(c, display).into_iter().filter(|(_, cs)| cs.hint_used) {
+                        let l = challenge::layout(&cs, c, Some(ws), screen);
+                        if let Err(e) = check_sane(&l.frame, screen_rect(screen)) {
+                            panic!("workspace {name} ({} {} {}) at {screen:?}:\n  - {}",
+                                c.numbers.a, c.numbers.op, c.numbers.b, e.join("\n  - "));
+                        }
+                        let area = l.workspace().expect("the workspace is laid out");
+                        let inner = concrete::layout(ws, area);
+                        for counter in inner.counters() {
+                            assert!(area.contains(counter.center.0, counter.center.1),
+                                "a counter spills out of the workspace at {screen:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// A miss shows "Hmm, not quite!" in a slot that was already there, so the
     /// answer buttons don't jump out from under the kid's finger.
     pub fn a_wrong_answer_does_not_move_the_answer_buttons() {
@@ -312,7 +355,7 @@ pub mod challenge_sweep {
                     let p = presented(c, display);
                     let fed = challenge_reducer(p.clone(), ChallengeAction::AnswerSubmitted { answer: wrong(c) });
                     assert_eq!(fed.phase, Phase::Feedback);
-                    let (before, after) = (challenge::layout(&p, c, screen), challenge::layout(&fed, c, screen));
+                    let (before, after) = (challenge::layout(&p, c, None, screen), challenge::layout(&fed, c, None, screen));
                     for i in 0..c.choices.len() {
                         assert_eq!(before.choice(i), after.choice(i), "button {i} moved at {screen:?} for {display:?}");
                     }
@@ -327,7 +370,7 @@ pub mod challenge_sweep {
     pub fn tapping_a_drawn_button_answers_it_even_under_a_wrapped_question() {
         let c = &challenges()[0];
         let cs = presented(c, WORD_PROBLEM);
-        let l = challenge::layout(&cs, c, (960.0, 720.0));
+        let l = challenge::layout(&cs, c, None, (960.0, 720.0));
         let q = l.frame.get(challenge::ChallengeId::Question).unwrap();
         let wrapped = match &q.kind {
             robot_buddy_game::ui::layout::Kind::Text(t) => t.lines.len(),
@@ -431,6 +474,51 @@ pub fn quest_beats_are_sane_everywhere() {
                 let l = quest::layout(&view, "The Case of the Missing Lanterns", message, screen);
                 assert_sane(&l.frame, screen_rect(screen));
                 assert_eq!(l.continue_btn().is_some(), view.has_continue());
+            }
+        }
+    }
+}
+
+// ─── Pearl Hop ──────────────────────────────────────────
+
+/// Shelly's panel at every stage — aiming, mid-win (pearl flying to the
+/// purse) and after the win (Again! up) — with short and long captions, a big
+/// purse and a hat on, on every sweep screen. The scene has to keep real room
+/// to play in, even on a small phone.
+pub fn pearl_hop_is_sane_everywhere() {
+    use rand::SeedableRng;
+    use robot_buddy_domain::logic::pearl_hop::{generate_round, hop_reducer, HopAction, HopSession};
+    use robot_buddy_game::ui::pearl_hop::{self, HopView, ShellyOutfit};
+
+    let captions = ["Find my pearl!", "My pearl!  +3 pearls  (your net caught one!)", "Boing! Not there yet!"];
+    let worn: BTreeSet<String> = ["hat".to_string()].into_iter().collect();
+    for band in [1u8, 2, 3, 4, 5, 6, 9] {
+        let round = generate_round(band, &mut rand::rngs::SmallRng::seed_from_u64(band as u64));
+        let aiming = HopSession::new(round.clone());
+        let mut s = hop_reducer(hop_reducer(aiming.clone(), HopAction::Aim { at: round.winning_aims()[0] }), HopAction::Toss);
+        let mut mid_win = None;
+        for _ in 0..400 {
+            s = hop_reducer(s, HopAction::Tick { dt: 0.05 });
+            if mid_win.is_none() && s.win_clock().is_some_and(|c| c > 0.6) {
+                mid_win = Some(s.clone());
+            }
+        }
+        assert!(s.win_done());
+        let mid_win = mid_win.unwrap();
+        for &screen in &SWEEP_SCREENS {
+            for session in [&aiming, &mid_win, &s] {
+                for caption in captions {
+                    let view = HopView { session, pearls: 1234, caption, outfit: ShellyOutfit { worn: &worn, color: "red" } };
+                    let l = pearl_hop::layout(&view, screen);
+                    assert_sane(&l.frame, screen_rect(screen));
+                    assert!(l.leave().is_some(), "Leave is always tappable");
+                    assert_eq!(l.again().is_some(), session.win_done(), "Again! only once the win has played");
+                    if let (Some(again), Some(cap)) = (l.again(), l.frame.rect(pearl_hop::HopId::Caption)) {
+                        assert!(again.y - cap.bottom() >= 12.0, "Again! has room under the caption at {screen:?}");
+                    }
+                    let scene = l.scene.rect;
+                    assert!(scene.h >= 200.0 && scene.w >= 300.0, "room to play at {screen:?}: {scene:?}");
+                }
             }
         }
     }

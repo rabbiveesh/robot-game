@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::{BTreeMap, HashMap};
 use crate::sprites::Dir;
+use robot_buddy_domain::learning::attempt_log::AttemptLog;
 use robot_buddy_domain::learning::learner_profile::LearnerProfile;
 use robot_buddy_domain::economy::shop::COLOR_CHANGE;
 use robot_buddy_domain::economy::wardrobe::{self, Wardrobe};
@@ -12,6 +13,10 @@ use robot_buddy_domain::types::GamePace;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SaveData {
     pub version: u32,
+    /// Every challenge in detail, across sessions (bounded — see
+    /// `attempt_log::MAX_ATTEMPTS`). Older saves load with an empty log.
+    #[serde(default)]
+    pub attempt_log: AttemptLog,
     pub name: String,
     pub gender: Gender,
     pub map_id: String,
@@ -95,6 +100,10 @@ pub struct SaveData {
     /// `migrate_legacy` can infer they've already seen).
     #[serde(default)]
     pub seen_intros: Vec<String>,
+    /// Minigame demos that have already played, e.g. Shelly's Pearl Hop
+    /// show-off. Older saves load empty, so she shows off once.
+    #[serde(default)]
+    pub seen_demos: Vec<String>,
     /// Where the Dogfish House's bubble column leads: the map and tile the kid
     /// dove from. Saved so quitting down there never strands anyone. Older
     /// saves (and saves made anywhere else) load as None, and the column falls
@@ -628,6 +637,7 @@ mod tests {
         }"#;
         let mut save: SaveData = serde_json::from_str(json).expect("legacy save should load");
         assert!(save.seen_intros.is_empty(), "old saves have no intro list");
+        assert!(save.seen_demos.is_empty(), "old saves load before Pearl Hop existed: Shelly shows off once");
 
         save.migrate_legacy();
         assert!(save.seen_intros.contains(&"reef".to_string()),

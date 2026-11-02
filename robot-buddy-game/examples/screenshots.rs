@@ -281,6 +281,29 @@ async fn main() {
         snap_game("20_dogfish_house", &mut h).await;
     }
 
+    // ── Pearl Hop: Shelly's beacon on the reef, then every stage, aiming and won ──
+    {
+        let mut h = Harness::new(21);
+        h.start_dev_game();
+        h.game.map = Map::reef();
+        h.game.npcs = npc_mod::npcs_for_map("reef");
+        h.game.npcs_offstage.clear();
+        h.warp_to(6, 12);
+        h.advance(20);
+        snap_game("21_reef_shelly_beacon", &mut h).await;
+        for band in [1u8, 2, 3, 6] {
+            h.game.profile.math_band = band;
+            h.open_pearl_hop();
+            h.skip_shelly_demo();
+            snap_game(&format!("22_pearl_hop_band{band}"), &mut h).await;
+            let aim = h.winning_aim();
+            h.toss_shelly(aim);
+            h.advance(30);
+            snap_game(&format!("23_pearl_hop_band{band}_won"), &mut h).await;
+            h.leave_pearl_hop_by_tap();
+        }
+    }
+
     // ── Panels drawn directly: a 4-line dialogue and a wrapped word problem ──
     {
         use robot_buddy_game::ui::dialogue::{DialogueBox, DialogueLine};
@@ -331,10 +354,47 @@ async fn main() {
             );
             for (name, cs) in [("presented", &p), ("showme_feedback", &hinted_fed), ("taught", &taught)] {
                 snap(&format!("14_challenge_band{band}_{name}"), |screen| {
-                    let l = challenge::layout(cs, &c, screen);
-                    challenge::draw(&l, cs, &c, 1.0);
+                    let l = challenge::layout(cs, &c, None, screen);
+                    challenge::draw(&l, cs, &c, None, 1.0);
                 }).await;
             }
         }
+    }
+
+    // ── Hands-on "Show me": the manipulatives bench, put together then take away ──
+    {
+        let mut h = Harness::new(7);
+        h.start_dev_game();
+        h.game.profile.math_band = 4; // numbers past ten: two frames
+        h.open_manipulatives_bench();
+        h.advance(30);
+        snap_game("15_workspace_add_open", &mut h).await;
+
+        // Mid-drag: a counter in hand over the frames.
+        let (from, to) = (h.a_grabbable_counter(), h.drop_target());
+        h.step(&FrameInput::empty().with_mouse_click(from.0, from.1));
+        h.step(&FrameInput::empty().with_mouse_held(to.0, to.1));
+        snap_game("16_workspace_carrying", &mut h).await;
+        h.step(&FrameInput::empty().with_mouse_release(to.0, to.1));
+
+        h.build_the_model();
+        h.advance(60);
+        snap_game("17_workspace_add_built", &mut h).await;
+
+        let ten = h.game.challenge_workspace().and_then(|ws| {
+            let area = h.game.challenge_layout(common::SCREEN)?.workspace()?;
+            robot_buddy_game::ui::concrete::layout(ws, area).badges[0]
+        });
+        if let Some(badge) = ten {
+            h.click(badge.center().0, badge.center().1);
+            h.advance(60);
+            snap_game("18_workspace_add_rod", &mut h).await;
+        }
+        h.answer_correctly();
+        h.wait_until(|g| g.state == GameState::Playing);
+
+        h.open_manipulatives_bench();
+        h.advance(30);
+        snap_game("19_workspace_take_away_open", &mut h).await;
     }
 }

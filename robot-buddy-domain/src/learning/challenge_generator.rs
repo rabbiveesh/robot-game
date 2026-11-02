@@ -261,7 +261,7 @@ pub fn generate_numbers(band: u8, operation: Operation, rng: &mut impl Rng) -> N
                 let total = rng.gen_range(5..=14);
                 let b = rng.gen_range(1..total);
                 (total, b, total - b, "+", "bond", Some(total))
-            } else if operation == Operation::Sub || rng.gen::<f64>() < 0.4 {
+            } else if operation == Operation::Sub || (operation != Operation::Add && rng.gen::<f64>() < 0.4) {
                 let a = rng.gen_range(5..=14);
                 let b = rng.gen_range(1..=(a - 1).min(8));
                 (a, b, a - b, "-", "standard", None)
@@ -276,7 +276,7 @@ pub fn generate_numbers(band: u8, operation: Operation, rng: &mut impl Rng) -> N
                 let total = rng.gen_range(10..=19);
                 let b = rng.gen_range(1..=(total - 2));
                 (total, b, total - b, "+", "bond", Some(total))
-            } else if operation == Operation::Sub || rng.gen::<f64>() < 0.45 {
+            } else if operation == Operation::Sub || (operation != Operation::Add && rng.gen::<f64>() < 0.45) {
                 let a = rng.gen_range(8..=19);
                 let b = rng.gen_range(1..=(a - 1).min(10));
                 (a, b, a - b, "-", "standard", None)
@@ -471,6 +471,18 @@ pub fn generate_challenge(profile: &ChallengeProfile, rng: &mut impl Rng) -> Cha
     let available = band_operations(sampled_band);
     let operation = pick_operation(available, &profile.operation_stats, rng);
 
+    build_challenge(profile.math_band, sampled_band, operation, rng)
+}
+
+/// A challenge for a chosen band and operation, skipping the adaptive draw.
+/// For dev tooling that needs a specific kind of problem on demand (the
+/// manipulatives bench). `operation` should be one `band_operations(band)`
+/// offers; otherwise the band's number generator picks its own.
+pub fn generate_challenge_at(band: u8, operation: Operation, rng: &mut impl Rng) -> Challenge {
+    build_challenge(band, band, operation, rng)
+}
+
+fn build_challenge(center_band: u8, sampled_band: u8, operation: Operation, rng: &mut impl Rng) -> Challenge {
     let nums = generate_numbers(sampled_band, operation, rng);
     let choices = make_choices(nums.answer, rng);
     let sub_skill = classify_challenge(nums.a, nums.b, operation);
@@ -502,7 +514,7 @@ pub fn generate_challenge(profile: &ChallengeProfile, rng: &mut impl Rng) -> Cha
         operation,
         sub_skill,
         features,
-        center_band: profile.math_band,
+        center_band,
         sampled_band,
         band: sampled_band,
         numbers: Numbers {
@@ -540,6 +552,20 @@ mod tests {
         assert_eq!(c.operation, Operation::Add);
         assert!(c.correct_answer <= 5);
         assert!(c.correct_answer > 0);
+    }
+
+    #[test]
+    fn generate_challenge_at_honors_the_requested_operation() {
+        for seed in 0..50 {
+            let sub = generate_challenge_at(3, Operation::Sub, &mut rng(seed));
+            assert_eq!(sub.operation, Operation::Sub);
+            assert_eq!(sub.numbers.op, "-");
+            assert_eq!(sub.correct_answer, sub.numbers.a - sub.numbers.b);
+
+            let add = generate_challenge_at(3, Operation::Add, &mut rng(seed));
+            assert_eq!(add.operation, Operation::Add);
+            assert_eq!(add.numbers.op, "+");
+        }
     }
 
     #[test]
