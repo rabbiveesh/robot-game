@@ -14,33 +14,21 @@
 #[path = "../tests/common/mod.rs"]
 #[allow(dead_code)]
 mod common;
+mod reel;
 
-use bevy::prelude::*;
-use bevy::render::view::screenshot::{save_to_disk, Screenshot};
-use bevy::window::WindowResolution;
 use common::{Harness, SCREEN};
 use robot_buddy_domain::logic::pearl_hop::{HopPhase, Landing};
-use robot_buddy_game::app::{DrawList, DrawPlugin};
-use robot_buddy_game::draw::{self, Cmd, Color};
+use robot_buddy_game::draw::{self, Color};
 use robot_buddy_game::game::GameState;
 use robot_buddy_game::input::{FrameInput, KeyCode};
 use robot_buddy_game::npc::{self as npc_mod, NpcKind};
 use robot_buddy_game::tilemap::Map;
-use robot_buddy_game::ui::kit::ArtSizes;
 use robot_buddy_game::ui::pearl_hop::HopId;
-use robot_buddy_game::ui::views::UiViews;
 use robot_buddy_game::ui::UiAction;
+use reel::{Frame, Output};
 
 const FPS: f32 = 30.0;
 const DT: f32 = 1.0 / FPS;
-
-/// One recorded frame: the clock, the screen's draw calls (finger and
-/// banner included) and the panels' views.
-struct Frame {
-    time: f64,
-    cmds: Vec<Cmd>,
-    views: UiViews,
-}
 
 /// Drives the game one frame at a time, recording each.
 struct Director {
@@ -63,11 +51,10 @@ impl Director {
         let screen = self.screen();
         self.h.game.step(&input, DT, screen);
         let time = self.frames.len() as f64 * DT as f64;
-        draw::begin_frame(screen, time);
+        Frame::begin(screen, time);
         self.h.game.render(screen, &input);
         self.overlay();
-        let cmds = draw::take_commands();
-        self.frames.push(Frame { time, cmds, views: self.h.game.ui_views(screen) });
+        self.frames.push(Frame::capture(&self.h.game, screen, time));
     }
 
     fn overlay(&self) {
@@ -266,13 +253,7 @@ fn to_reef(h: &mut Harness) {
 }
 
 fn main() {
-    let dir = std::env::var("DEMO_DIR").unwrap_or_else(|_| "pearl_hop_frames".into());
-    std::fs::create_dir_all(&dir).unwrap();
-    for entry in std::fs::read_dir(&dir).unwrap().flatten() {
-        if entry.path().extension().is_some_and(|e| e == "png") {
-            let _ = std::fs::remove_file(entry.path());
-        }
-    }
+    let out = Output::from_env("Pearl Hop demo", "pearl_hop_frames", "pearl_hop_demo.mp4", FPS, SCREEN);
 
     let mut h = Harness::new(2024);
     h.start_dev_game();
@@ -363,83 +344,5 @@ fn main() {
     d.idle(2.5);
 
     println!("{} frames ({:.1}s); pearls: {}", d.frames.len(), d.frames.len() as f32 / FPS, d.h.game.pearls);
-    play(d.frames, dir);
-}
-
-/// Frames each recorded frame is shown before its screenshot (text needs one
-/// to lay out).
-const SETTLE: u32 = 1;
-/// App frames per recorded frame.
-const PER_FRAME: u32 = 2;
-/// Frames before the first one, while the renderer builds its pipelines.
-const WARMUP: u32 = 30;
-/// Frames after the last screenshot, for the PNG writes to finish.
-const DRAIN: u32 = 60;
-
-#[derive(Resource)]
-struct Recording {
-    frames: Vec<Frame>,
-    dir: String,
-}
-
-fn play(frames: Vec<Frame>, dir: String) {
-    let (w, h) = SCREEN;
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Pearl Hop demo".into(),
-                resolution: WindowResolution::new(w as u32, h as u32).with_scale_factor_override(1.0),
-                resizable: false,
-                ..default()
-            }),
-            ..default()
-        }))
-        .add_plugins(DrawPlugin)
-        .insert_resource(Recording { frames, dir })
-        .add_systems(Update, show_frame.before(robot_buddy_game::ui::kit::PanelSystems))
-        .run();
-}
-
-fn show_frame(
-    mut tick: Local<u32>,
-    rec: Res<Recording>,
-    mut list: ResMut<DrawList>,
-    mut views: ResMut<UiViews>,
-    art: Res<ArtSizes>,
-    mut commands: Commands,
-    mut exit: MessageWriter<AppExit>,
-) {
-    *tick += 1;
-    let Some(t) = tick.checked_sub(WARMUP) else { return };
-    let i = (t / PER_FRAME) as usize;
-    let Some(f) = rec.frames.get(i) else {
-        if t >= rec.frames.len() as u32 * PER_FRAME + DRAIN {
-            encode(&rec.dir);
-            exit.write(AppExit::Success);
-        }
-        return;
-    };
-    *views = f.views.clone();
-    draw::begin_frame(SCREEN, f.time);
-    views.draw_all_art(&art.0);
-    list.0 = f.cmds.iter().cloned().chain(draw::take_commands()).collect();
-    if t % PER_FRAME == SETTLE {
-        let path = format!("{}/{:05}.png", rec.dir, i + 1);
-        commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
-    }
-}
-
-/// The numbered PNGs into an H.264 MP4 (yuv420p, even size).
-fn encode(dir: &str) {
-    let mp4 = std::env::var("DEMO_MP4").unwrap_or_else(|_| "pearl_hop_demo.mp4".into());
-    let ffmpeg = std::env::var("DEMO_FFMPEG").unwrap_or_else(|_| "ffmpeg".into());
-    let status = std::process::Command::new(ffmpeg)
-        .args(["-y", "-loglevel", "error", "-framerate", &format!("{FPS}"), "-i", &format!("{dir}/%05d.png")])
-        .args(["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-c:v", "libx264", "-preset", "medium"])
-        .args(["-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart", &mp4])
-        .status();
-    match status {
-        Ok(s) => println!("ffmpeg: {s}; video at {mp4}"),
-        Err(e) => eprintln!("ffmpeg didn't run ({e}); the frames are in {dir}"),
-    }
+    reel::play(d.frames, out);
 }

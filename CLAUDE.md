@@ -63,6 +63,8 @@ robot-buddy-domain/              # Pure Rust domain (no browser deps)
                                  #   descent (the dive shaft that gates the trench),
                                  #   pearl_hop (Shelly's slingshot number path: count,
                                  #   skip-count, X hops = divide, growing with the band)
+                                 #   socks (Sockbot's Sock Shop in Robot Land: pairs of socks
+                                 #   for robots' feet: odd/even, doubling, halving, by band)
     quest/                       # Quest data model + step reducer + micro-quest gen
     world/                       # movement resolver, random encounters
     text/                        # voice_parser (spoken-number → integer)
@@ -86,10 +88,11 @@ robot-buddy-game/                # Bevy game (depends on domain)
     web.rs                       # browser APIs via web-sys: localStorage, speech, download, clock
     save.rs                      # SaveBackend trait + LocalStorageBackend (prod) + InMemoryBackend (tests)
     tilemap.rs, npc.rs, session.rs, settings.rs
-    sprites/                     # player, robot, npcs, swag (cosmetics, per-body fit),
+    sprites/                     # player, robot, npcs, robots (Robot Land's broken residents),
+                                 #   swag (cosmetics, per-body fit),
                                  #   attract (the "game here!" beacon over minigame hosts),
                                  #   dressed (THE way a character is drawn: body + swag, posed)
-    ui/                          # challenge, concrete (hands-on "Show me" workspace), descent, dialogue, hud, interaction_menu, pearl_hop, shop, swag, swatches, title_screen, settings_overlay, visuals
+    ui/                          # challenge, concrete (hands-on "Show me" workspace), descent, dialogue, hud, interaction_menu, pearl_hop, shop, socks, swag, swatches, title_screen, settings_overlay, visuals
                                  #   Panels are Bevy UI (ADR-006): Game::ui_views → UiViews (views.rs)
                                  #   → each panel's bundle; taps come back as UiAction in FrameInput
       kit.rs                     # Panel trait, taps, Shrink (text that fits), art slots, scroll lists

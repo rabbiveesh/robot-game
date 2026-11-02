@@ -285,6 +285,22 @@ pub fn draw_circle_lines(x: f32, y: f32, r: f32, thickness: f32, color: Color) {
     push(Cmd::CircleLines { x: x - o.x, y: y - o.y, r, thickness, color });
 }
 
+/// Ellipse outline: `w`/`h` are the semi-axes, `rotation` is in degrees.
+/// Drawn as a closed run of short lines, so it follows any transform.
+pub fn draw_ellipse_lines(x: f32, y: f32, w: f32, h: f32, rotation: f32, thickness: f32, color: Color) {
+    const N: usize = 28;
+    let (s, c) = rotation.to_radians().sin_cos();
+    let at = |i: usize| {
+        let a = i as f32 / N as f32 * std::f32::consts::TAU;
+        let (ex, ey) = (w * a.cos(), h * a.sin());
+        (x + ex * c - ey * s, y + ex * s + ey * c)
+    };
+    for i in 0..N {
+        let ((x1, y1), (x2, y2)) = (at(i), at(i + 1));
+        draw_line(x1, y1, x2, y2, thickness, color);
+    }
+}
+
 /// `w`/`h` are the semi-axes; `rotation` is in degrees.
 pub fn draw_ellipse(x: f32, y: f32, w: f32, h: f32, rotation: f32, color: Color) {
     let o = off();

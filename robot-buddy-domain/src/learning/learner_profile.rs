@@ -43,6 +43,10 @@ pub struct LearnerProfile {
     /// count yet, and says nothing about their adding or their band.
     #[serde(default = "default_logic_confidence")]
     pub skip_count_confidence: f64,
+    /// Running confidence in pairing (doubling, halving, odd and even), from
+    /// Sockbot's Sock Shop. Its own axis, like skip counting.
+    #[serde(default = "default_logic_confidence")]
+    pub pairs_confidence: f64,
 }
 
 fn default_kenken_level() -> u8 { 2 }
@@ -80,6 +84,7 @@ impl LearnerProfile {
             pattern_confidence: default_logic_confidence(),
             kenken_intro_seen: false,
             skip_count_confidence: default_logic_confidence(),
+            pairs_confidence: default_logic_confidence(),
         }
     }
 }
@@ -146,6 +151,14 @@ pub enum LearnerEvent {
     /// guesses included, since guessing is what not-yet-skip-counting looks like.
     #[serde(rename = "SKIP_COUNT_ATTEMPTED")]
     SkipCountAttempted {
+        correct: bool,
+        #[serde(default)]
+        response_time_ms: Option<f64>,
+    },
+    /// One order handed over at Sockbot's Sock Shop: was it the right number
+    /// of pairs? Every hand-over counts, like a Pearl Hop toss.
+    #[serde(rename = "PAIRS_ATTEMPTED")]
+    PairsAttempted {
         correct: bool,
         #[serde(default)]
         response_time_ms: Option<f64>,
@@ -441,6 +454,16 @@ pub fn learner_reducer(state: LearnerProfile, event: LearnerEvent) -> LearnerPro
                 ..state
             }
         }
+
+        // Pairing is its own skill too: never the band, the window or the
+        // per-operation stats.
+        LearnerEvent::PairsAttempted { correct, response_time_ms: _ } => {
+            let step = if correct { 0.05 } else { -0.05 };
+            LearnerProfile {
+                pairs_confidence: (state.pairs_confidence + step).clamp(0.0, 1.0),
+                ..state
+            }
+        }
     }
 }
 
@@ -604,6 +627,29 @@ mod tests {
         assert_eq!(s.math_band, 3, "a run of guesses never drops the band");
         assert!(s.rolling_window.entries.is_empty(), "nor enters the window the band is judged by");
         assert_eq!(serde_json::to_value(&s.operation_stats).unwrap(), serde_json::to_value(&before.operation_stats).unwrap());
+    }
+
+    #[test]
+    fn missing_sock_orders_lowers_only_pairing() {
+        let mut s = LearnerProfile::new();
+        s.math_band = 4;
+        let before = s.clone();
+        for _ in 0..6 {
+            s = learner_reducer(s, LearnerEvent::PairsAttempted { correct: false, response_time_ms: None });
+        }
+        assert!(s.pairs_confidence < before.pairs_confidence);
+        assert_eq!(s.skip_count_confidence, before.skip_count_confidence);
+        assert_eq!(s.math_band, 4, "a run of misses never drops the band");
+        assert!(s.rolling_window.entries.is_empty(), "nor enters the window the band is judged by");
+        assert_eq!(serde_json::to_value(&s.operation_stats).unwrap(), serde_json::to_value(&before.operation_stats).unwrap());
+    }
+
+    #[test]
+    fn old_saves_without_pairing_load() {
+        let mut v = serde_json::to_value(LearnerProfile::new()).unwrap();
+        v.as_object_mut().unwrap().remove("pairs_confidence");
+        let p: LearnerProfile = serde_json::from_value(v).unwrap();
+        assert_eq!(p.pairs_confidence, 0.5);
     }
 
     #[test]

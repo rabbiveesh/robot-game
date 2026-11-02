@@ -688,6 +688,55 @@ impl Harness {
 
     /// Walk up to Shelly on this map and talk to her. Pearl Hop opens (her
     /// first-time show-off may be playing — see `skip_shelly_demo`).
+    // ─── Sockbot's Sock Shop ───────────────────────────
+
+    /// Walk up to Sockbot and talk: that opens the Sock Shop.
+    pub fn open_sock_shop(&mut self) {
+        self.walk_to_npc(NpcKind::SockBot);
+        self.interact();
+        if self.game.state == GameState::InteractionMenu {
+            self.select_option("talk");
+        }
+        assert_eq!(self.game.state, GameState::SockShop, "talking to Sockbot should open the Sock Shop");
+    }
+
+    pub fn sock_order(&self) -> robot_buddy_domain::logic::socks::SockRound {
+        self.game.active_socks().expect("the Sock Shop is open").session.round.clone()
+    }
+
+    /// Tap the drawer's buttons, as a kid would, until `pairs` are out (the
+    /// biggest step first), then hand the order over and let it play out.
+    pub fn give_pairs(&mut self, pairs: u16) {
+        use robot_buddy_game::ui::socks::SockId;
+        use robot_buddy_game::ui::UiAction;
+        let steps = self.sock_order().steps().to_vec();
+        loop {
+            let have = self.game.active_socks().unwrap().session.pairs;
+            if have == pairs { break; }
+            let gap = have.abs_diff(pairs);
+            let n = *steps.iter().rev().find(|&&n| n <= gap).unwrap_or(&1);
+            self.tap(UiAction::Socks(if have < pairs { SockId::More(n) } else { SockId::Fewer(n) }));
+        }
+        self.tap(UiAction::Socks(SockId::Send));
+        self.wait_for_sockbot();
+    }
+
+    /// Hand over exactly what the order needs.
+    pub fn give_the_right_pairs(&mut self) {
+        let need = self.sock_order().pairs_needed();
+        self.give_pairs(need);
+    }
+
+    /// Let the socks fly and the reaction play, until the kid can choose
+    /// again or the dance is done.
+    pub fn wait_for_sockbot(&mut self) {
+        use robot_buddy_domain::logic::socks::SockPhase;
+        self.run_until(
+            |g| g.active_socks().is_some_and(|a| a.session.phase == SockPhase::Choosing || a.session.win_done()),
+            900,
+        );
+    }
+
     pub fn open_pearl_hop(&mut self) {
         self.walk_to_npc(NpcKind::Clam);
         self.interact();

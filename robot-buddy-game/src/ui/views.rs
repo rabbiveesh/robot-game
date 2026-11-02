@@ -16,6 +16,7 @@ use super::shop::ShopPanelView;
 use super::swag::SwagPanelView;
 use super::descent::DescentView;
 use super::pearl_hop::HopPanelView;
+use super::socks::SockView;
 use super::ArtId;
 
 #[derive(Resource, Default, Clone)]
@@ -30,6 +31,7 @@ pub struct UiViews {
     pub swag: Option<SwagPanelView>,
     pub pearl_hop: Option<HopPanelView>,
     pub descent: Option<DescentView>,
+    pub socks: Option<SockView>,
     pub shooter_footer: Option<super::shooter::FooterView>,
 }
 
@@ -57,6 +59,11 @@ impl UiViews {
             ArtId::DescentShaft => {
                 if let Some(v) = &self.descent {
                     super::descent::draw_art(v, w, h, time);
+                }
+            }
+            ArtId::SockShop => {
+                if let Some(v) = &self.socks {
+                    super::socks::draw_art(v, w, h, time);
                 }
             }
             ArtId::HopLeaveIcon | ArtId::HopAgainIcon => super::pearl_hop::draw_icon(id, w, h, time),
