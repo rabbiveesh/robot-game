@@ -1884,7 +1884,7 @@ fn clear_shooter_wave(h: &mut Harness) -> bool {
         aim_and_fire(h, b);
         let s = &h.game.active_shooter().unwrap().session;
         if s.wave > wave {
-            return h.game.track_toast_text().is_some();
+            return h.game.track_toast_text() == Some("Perfect wave!");
         }
     }
     panic!("wave {wave} never cleared");
@@ -1954,6 +1954,9 @@ fn goyish_shooter_a_wrong_pair_forfeits_only_that_waves_bonus() {
     aim_and_fire(&mut h, b);
     assert!(h.game.active_shooter().unwrap().session.aliens.iter().all(|al| !al.selected),
         "a wrong pair just lets go of both aliens");
+    let made = h.game.active_shooter().unwrap().session.attempts.last().map(|t| t.values[0] + t.values[1]).unwrap();
+    assert_eq!(h.game.track_toast_text(), Some(format!("Nope, that's {made}!").as_str()),
+        "a wrong pair says what it added up to");
 
     assert!(!clear_shooter_wave(&mut h), "no cheer for the wave with a wrong pair");
     for wave in 1..TOTAL_WAVES {
@@ -3858,4 +3861,29 @@ fn the_sock_shop_plays_from_the_keyboard() {
     h.press(KeyCode::Enter);
     h.wait_for_sockbot();
     assert!(h.game.active_socks().unwrap().session.win_done());
+}
+
+/// On the web the finger landing and Bevy's press on the answer button can
+/// arrive a frame apart; the answer must still count, in the intake quiz and
+/// in a challenge out in the world.
+#[test]
+fn tapping_an_answer_counts_when_the_press_trails_the_finger() {
+    use robot_buddy_domain::types::Phase;
+
+    let mut h = Harness::new(42);
+    h.start_new_game("Test");
+    h.finish_dialogue();
+    h.wait_until(|g| g.correct_choice_index().is_some());
+    h.tap_right_answer_split();
+    assert_eq!(h.game.challenge_phase(), Some(Phase::Complete), "the intake answer tap didn't register");
+
+    let mut h = Harness::new(0);
+    h.start_dev_game();
+    h.hold(KeyCode::Right);
+    h.interact();
+    h.select_option("talk");
+    h.finish_dialogue();
+    h.wait_until(|g| g.state == GameState::Challenge);
+    h.tap_right_answer_split();
+    assert_eq!(h.game.challenge_phase(), Some(Phase::Complete), "the challenge answer tap didn't register");
 }

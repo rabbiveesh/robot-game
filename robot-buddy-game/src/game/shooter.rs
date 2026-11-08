@@ -4,8 +4,14 @@ use super::*;
 use robot_buddy_domain::logic::shooter::HopDir;
 
 /// The cheer when a wave pairs off with no wrong pairs. It only ever shows for
-/// a clean wave; any other wave just clears (no "you missed", Invariant 7).
+/// a clean wave; any other wave just clears.
 pub const CLEAN_WAVE_CHEER: &str = "Perfect wave!";
+
+/// What Blaster Bubbe says when two tagged aliens don't make the target:
+/// what they do make, so the miss teaches the sum.
+pub fn wrong_pair_line(sum: u32) -> String {
+    format!("Nope, that's {sum}!")
+}
 
 impl Game {
     /// Launch the number-bond space shooter. Difficulty rides the math band and
@@ -44,6 +50,7 @@ impl Game {
 
         let prev_wave = self.activity.shooter.as_ref().map(|a| a.session.wave).unwrap_or(0);
         let prev_cleared = self.activity.shooter.as_ref().map_or(0, |a| a.session.cleared_waves.len());
+        let prev_attempts = self.activity.shooter.as_ref().map_or(0, |a| a.session.attempts.len());
         let mut finished = false;
 
         if let Some(a) = self.activity.shooter.as_mut() {
@@ -93,6 +100,16 @@ impl Game {
             } else {
                 a.ship_draw_x + gap * (1.0 - (-18.0 * dt).exp())
             };
+        }
+
+        // A pair that missed the target: say what it did make.
+        let wrong_sum = self.activity.shooter.as_ref().and_then(|a| {
+            a.session.attempts.get(prev_attempts..)?.iter().rev().find(|t| !t.correct).map(|t| t.values[0] + t.values[1])
+        });
+        if let Some(sum) = wrong_sum {
+            let line = wrong_pair_line(sum);
+            audio::tts::speak("Blaster Bubbe", &line);
+            self.track_toast = Some((line, 1.8));
         }
 
         // A wave just paired off with no wrong pairs: cheer, right as it clears.
