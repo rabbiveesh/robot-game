@@ -154,6 +154,13 @@ pub fn all_portals() -> &'static [Portal] {
         // ROBOT LAND: the gear-shaped teleporter in the corner of Gizmo's lab.
         Portal { from_map: "lab", from_x: 1, from_y: 2, to_map: "robot_land", to_x: 5, to_y: 6, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         Portal { from_map: "robot_land", from_x: 5, from_y: 5, to_map: "lab", to_x: 1, to_y: 3, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        // Robot Land's village street: three house doors, and back out.
+        Portal { from_map: "robot_land", from_x: 8, from_y: 24, to_map: "bot_house_lamp", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "bot_house_lamp", from_x: 4, from_y: 6, to_map: "robot_land", to_x: 8, to_y: 25, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "robot_land", from_x: 19, from_y: 24, to_map: "bot_house_kitchen", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "bot_house_kitchen", from_x: 4, from_y: 6, to_map: "robot_land", to_x: 19, to_y: 25, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "robot_land", from_x: 30, from_y: 24, to_map: "bot_house_bell", to_x: 4, to_y: 5, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
+        Portal { from_map: "bot_house_bell", from_x: 4, from_y: 6, to_map: "robot_land", to_x: 30, to_y: 25, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         // Hub → the Goyish Map arcade deck (free, so the kid can replay it), and back.
         Portal { from_map: "space_hub", from_x: 4, from_y: 5, to_map: "goyish_map", to_x: 6, to_y: 4, dir: Dir::Down, secret: false, cost: 0, fuel_cost: 0, dive: false },
         Portal { from_map: "goyish_map", from_x: 2, from_y: 7, to_map: "space_hub", to_x: 8, to_y: 9, dir: Dir::Up, secret: false, cost: 0, fuel_cost: 0, dive: false },
@@ -757,27 +764,36 @@ impl Map {
     /// slicks shine in the corners.
     pub fn robot_land() -> Self {
         // # gear wall · . floor · S scrap · i circuit · > conveyor · o oil
-        // B bot pad · $ chest
-        const ROWS: [&str; 19] = [
-            "########################",
-            "#....S.............S...#",
-            "#.B......iiiiii........#",
-            "#........i....i....$...#",
-            "#..S.....i....i........#",
-            "#........iiiiii...S....#",
-            "#.>>>>>>>>>>>>>>>>>>>..#",
-            "#...........i..........#",
-            "#..oo.......i.....oo...#",
-            "#..oo...S...i.....oo...#",
-            "#####.......i......#####",
-            "#...........i..........#",
-            "#..S...iiiiiiiiiii..S..#",
-            "#......i.........i.....#",
-            "#..........o...........#",
-            "#......................#",
-            "#..S..o....S.....o..S..#",
-            "#......................#",
-            "########################",
+        // B bot pad · $ chest · R roof · H house wall · w window · D door
+        // The factory floor up top; the village street of robot houses below,
+        // each door leading into a house with two more robots in it.
+        const ROWS: [&str; 26] = [
+            "####################################",
+            "#....S.............S...#############",
+            "#.B......iiiiii........#############",
+            "#........i....i....$...#############",
+            "#..S.....i....i........#############",
+            "#........iiiiii...S....#############",
+            "#.>>>>>>>>>>>>>>>>>>>..#############",
+            "#...........i..........#############",
+            "#..oo.......i.....oo...#############",
+            "#..oo...S...i.....oo...#############",
+            "#####.......i......#################",
+            "#...........i......................#",
+            "#..S...iiiiiiiiiii..S..............#",
+            "#......i.........i..........S......#",
+            "#..........o.......................#",
+            "#..................................#",
+            "#..S..o....S.....o..S.........o..S.#",
+            "#..................................#",
+            "#..................................#",
+            "#..RRRRR......RRRRR......RRRRR.....#",
+            "#..HwHwH......HwHwH......HwHwH.....#",
+            "#..HHDHH......HHDHH......HHDHH.....#",
+            "#...iiiiiiiiiiiiiiiiiiiiiiiiiii....#",
+            "#..o.......S..........o.......S....#",
+            "#..................................#",
+            "####################################",
         ];
         // Wrapped in a thick band of turning gears so the camera, which stops
         // at the map edge, can still centre on robots near the walls.
@@ -796,9 +812,48 @@ impl Map {
             'o' => Tile::OilSlick,
             'B' => Tile::BotPad,
             '$' => Tile::Chest,
+            'R' => Tile::Roof,
+            'H' => Tile::HouseWall,
+            'w' => Tile::Window,
+            'D' => Tile::Door,
             _ => Tile::MetalFloor,
         }).collect()).collect();
         Map { id: "robot_land", width: tiles[0].len(), height: tiles.len(), render_mode: RenderMode::Robotic, tiles }
+    }
+
+    /// Inside one of Robot Land's houses: a riveted room with a bit of
+    /// furniture, the door at (4,6) back out to the street.
+    pub fn bot_house(id: &'static str) -> Self {
+        use Tile::*;
+        let (w, h) = (10usize, 8usize);
+        let mut tiles = vec![vec![MetalFloor; w]; h];
+        for x in 0..w {
+            tiles[0][x] = GearWall;
+            tiles[h - 1][x] = GearWall;
+        }
+        for row in tiles.iter_mut() {
+            row[0] = GearWall;
+            row[w - 1] = GearWall;
+        }
+        match id {
+            "bot_house_lamp" => {
+                tiles[1][7] = Bookshelf;
+                tiles[1][8] = Bookshelf;
+                tiles[4][3] = Table;
+            }
+            "bot_house_kitchen" => {
+                tiles[3][5] = Table;
+                tiles[3][6] = Table;
+                tiles[5][7] = OilSlick; // a spilled pink puddle of suds
+            }
+            _ => {
+                tiles[1][7] = Bookshelf;
+                tiles[3][4] = Circuit;
+                tiles[3][5] = Circuit;
+            }
+        }
+        tiles[6][4] = Door;
+        Map { id, width: w, height: h, render_mode: RenderMode::Robotic, tiles }
     }
 
     pub fn by_id(id: &str) -> Self {
@@ -823,6 +878,11 @@ impl Map {
             "asteroid_base" => Self::asteroid_base(),
             "goyish_map" => Self::goyish_map(),
             "robot_land" => Self::robot_land(),
+            id @ ("bot_house_lamp" | "bot_house_kitchen" | "bot_house_bell") => Self::bot_house(match id {
+                "bot_house_lamp" => "bot_house_lamp",
+                "bot_house_kitchen" => "bot_house_kitchen",
+                _ => "bot_house_bell",
+            }),
             _ => Self::overworld(),
         }
     }
@@ -975,6 +1035,8 @@ fn tile_color_robotic(tile: Tile) -> Color {
         Tile::Circuit    => Color::from_rgba(34, 104, 74, 255),   // circuit-board green
         Tile::BotPad     => Color::from_rgba(70, 52, 110, 255),   // teleporter purple
         Tile::Chest      => Color::from_rgba(150, 166, 182, 255),
+        Tile::HouseWall | Tile::Door | Tile::Window => house_palette(RenderMode::Robotic).0,
+        Tile::Roof       => Color::from_rgba(70, 110, 190, 255),   // blue tin roof
         _                => tile_color_normal(tile),
     }
 }
@@ -1562,7 +1624,13 @@ fn draw_flower_detail(x: f32, y: f32, time: f32) {
 /// other mode keeps the land look. One seam so no detail fn can flash a land
 /// color underwater.
 fn house_palette(mode: RenderMode) -> (Color, Color, Color) {
-    if mode.is_underwater() {
+    if mode == RenderMode::Robotic {
+        (
+            Color::from_rgba(196, 210, 222, 255), // brushed-steel wall
+            Color::from_rgba(255, 196, 40, 255),  // hazard-yellow trim
+            Color::from_rgba(40, 70, 140, 255),   // dark tin seams
+        )
+    } else if mode.is_underwater() {
         (
             Color::from_rgba(216, 196, 156, 255), // sandstone wall
             Color::from_rgba(26, 110, 130, 255),  // teal trim

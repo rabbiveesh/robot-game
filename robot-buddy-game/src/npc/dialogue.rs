@@ -180,6 +180,36 @@ pub(crate) fn npc_dialogue_lines(npc: &Npc, rng: &mut SmallRng) -> Vec<DialogueL
             "Have you seen a stripy sock? He's my favourite. He's always missing.",
             "Two, four, six, eight! Count my socks, they're really great!",
         ],
+        LampBot => &[
+            "Is it dark? Is it getting dark? Don't turn me off. Never turn me off!",
+            "I'm not scared of the dark. I just like to keep it... far away.",
+            "Count my light beams with me! One, two, three... okay that's all of them.",
+        ],
+        HiccupBot => &[
+            "Hi! I'm Hic! HIC! Sorry. HIC!",
+            "I've had the hiccups for three hundred days. HIC! Still counting!",
+            "Say a number and I'll hiccup that many times. HIC! ...oops, that was one.",
+        ],
+        FridgeBot => &[
+            "Why did the robot go to the fridge? To CHILL out! Ha! ...brrr.",
+            "I keep my jokes cold. Like cheese. Want some cheese?",
+            "My door keeps opening by itself. I think it wants to say hi!",
+        ],
+        WashBot => &[
+            "Spin spin spin! Everything I wash comes out PINK. Even the black socks!",
+            "I washed Grandpa Gearbox once. Now he's pink. He likes it.",
+            "I'm a little dizzy. Which way is up? Spin spin!",
+        ],
+        BellBot => &[
+            "DING DONG! Oh, hello! DING! Sorry, I get excited. DING!",
+            "I'm a doorbell! When I'm happy, I ring. I'm ALWAYS happy!",
+            "Ding! Ding! That's two dings. Want to hear three? DING!",
+        ],
+        MopBot => &[
+            "Is that a PUDDLE?! Eek! Oh. It's just the floor. Phew.",
+            "I'm a mop. I'm scared of puddles. I know, I KNOW.",
+            "If you see any water, tell me! So I can run the other way.",
+        ],
         // Dev-control NPCs go through apply_dev_control, never this path.
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
         | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance

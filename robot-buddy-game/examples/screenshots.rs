@@ -315,6 +315,30 @@ fn record() -> Shots {
         }
     }
 
+    // ── Robot Land's village: the street of houses, then each one inside ──
+    {
+        use robot_buddy_game::input::KeyCode;
+        let mut h = Harness::new(23);
+        h.start_dev_game();
+        h.game.map = Map::robot_land();
+        h.game.npcs = npc_mod::npcs_for_map("robot_land");
+        h.game.npcs_offstage.clear();
+        h.game.companion = None;
+        for n in h.game.npcs.iter_mut() { n.wanders = false; }
+        h.warp_to(19, 26);
+        h.advance(20);
+        shots.snap_game("44_robot_land_village", &mut h);
+        for (house, door_x) in [("bot_house_lamp", 8), ("bot_house_kitchen", 19), ("bot_house_bell", 30)] {
+            h.game.map = Map::robot_land();
+            h.game.npcs = npc_mod::npcs_for_map("robot_land");
+            h.warp_to(door_x, 25);
+            h.step_through_portal(KeyCode::Up, house);
+            h.finish_dialogue();
+            h.advance(30);
+            shots.snap_game(&format!("45_{house}"), &mut h);
+        }
+    }
+
     // ── Robot Land: the factory floor, then Sockbot's Sock Shop at every stage ──
     {
         use robot_buddy_game::ui::socks::SockId;

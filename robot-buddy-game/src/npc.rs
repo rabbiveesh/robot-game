@@ -63,6 +63,19 @@ pub enum NpcKind {
     RustyBot,
     /// Sockbot, who sorts socks into pairs and is always one sock short.
     SockBot,
+    // Robot Land's houses — more robots, each broken in one funny way.
+    /// Lampy, a desk lamp who is scared of the dark, so he never turns off.
+    LampBot,
+    /// Hic, a round little robot with the hiccups that never stop.
+    HiccupBot,
+    /// Fridgey, a fridge who tells cold jokes; his door keeps swinging open.
+    FridgeBot,
+    /// Bubbles, a washing machine forever mid-spin; everything comes out pink.
+    WashBot,
+    /// Ding-Dong, a doorbell who rings himself whenever he's excited.
+    BellBot,
+    /// Mopsy, a mop who is terrified of puddles.
+    MopBot,
     CtrlBand,
     CtrlKenkenLevel,
     CtrlCraReset,
@@ -120,6 +133,12 @@ impl NpcKind {
             NpcKind::TinyBot => "tiny_bot",
             NpcKind::RustyBot => "rusty_bot",
             NpcKind::SockBot => "sock_bot",
+            NpcKind::LampBot => "lamp_bot",
+            NpcKind::HiccupBot => "hiccup_bot",
+            NpcKind::FridgeBot => "fridge_bot",
+            NpcKind::WashBot => "wash_bot",
+            NpcKind::BellBot => "bell_bot",
+            NpcKind::MopBot => "mop_bot",
             NpcKind::CtrlBand => "ctrl_band",
             NpcKind::CtrlKenkenLevel => "ctrl_kenken_level",
             NpcKind::CtrlCraReset => "ctrl_cra_reset",
@@ -184,6 +203,12 @@ impl NpcKind {
             NpcKind::TinyBot => "Beep",
             NpcKind::RustyBot => "Grandpa Gearbox",
             NpcKind::SockBot => "Sockbot",
+            NpcKind::LampBot => "Lampy",
+            NpcKind::HiccupBot => "Hic",
+            NpcKind::FridgeBot => "Fridgey",
+            NpcKind::WashBot => "Bubbles",
+            NpcKind::BellBot => "Ding-Dong",
+            NpcKind::MopBot => "Mopsy",
             NpcKind::CtrlBand => "Band Knob",
             NpcKind::CtrlKenkenLevel => "KenKen Knob",
             NpcKind::CtrlCraReset => "CRA Reset",
@@ -215,6 +240,7 @@ impl NpcKind {
         NpcKind::ArcadeAlien,
         NpcKind::Toaster, NpcKind::SpringBot, NpcKind::Roomba, NpcKind::TinyBot,
         NpcKind::RustyBot, NpcKind::SockBot,
+        NpcKind::LampBot, NpcKind::HiccupBot, NpcKind::FridgeBot, NpcKind::WashBot, NpcKind::BellBot, NpcKind::MopBot,
         NpcKind::CtrlBand, NpcKind::CtrlKenkenLevel,
         NpcKind::CtrlCraReset, NpcKind::CtrlIntroReset, NpcKind::CtrlTriggerKenken,
         NpcKind::CtrlTriggerPattern, NpcKind::CtrlTriggerBalance, NpcKind::CtrlTriggerSudoku,
@@ -271,6 +297,12 @@ pub enum SpriteType {
     TinyBot,
     RustyBot,
     SockBot,
+    LampBot,
+    HiccupBot,
+    FridgeBot,
+    WashBot,
+    BellBot,
+    MopBot,
 }
 
 impl SpriteType {
@@ -287,6 +319,7 @@ impl SpriteType {
         SpriteType::StarTerminal, SpriteType::Signpost,
         SpriteType::Toaster, SpriteType::SpringBot, SpriteType::Roomba,
         SpriteType::TinyBot, SpriteType::RustyBot, SpriteType::SockBot,
+        SpriteType::LampBot, SpriteType::HiccupBot, SpriteType::FridgeBot, SpriteType::WashBot, SpriteType::BellBot, SpriteType::MopBot,
     ];
 
     /// Where this body's head, collar and ground line sit, so a piece of swag
@@ -679,6 +712,12 @@ impl SpriteType {
             SpriteType::TinyBot => sprites::robots::draw_tiny_bot(x, y, time),
             SpriteType::RustyBot => sprites::robots::draw_rusty_bot(x, y, time),
             SpriteType::SockBot => sprites::robots::draw_sock_bot(x, y, time),
+            SpriteType::LampBot => sprites::robots::draw_lamp_bot(x, y, time),
+            SpriteType::HiccupBot => sprites::robots::draw_hiccup_bot(x, y, time),
+            SpriteType::FridgeBot => sprites::robots::draw_fridge_bot(x, y, time),
+            SpriteType::WashBot => sprites::robots::draw_wash_bot(x, y, time),
+            SpriteType::BellBot => sprites::robots::draw_bell_bot(x, y, time),
+            SpriteType::MopBot => sprites::robots::draw_mop_bot(x, y, time),
         }
     }
 }
@@ -824,6 +863,19 @@ pub fn npcs_for_map(map_id: &'static str) -> Vec<Npc> {
             n(TinyBot,   23, 7,  S::TinyBot,   true, false, false).wandering(),
             n(RustyBot,  7, 16,  S::RustyBot,  true, false, false),
             n(SockBot,   21, 16, S::SockBot,   true, false, false).sock_shop(),
+        ],
+        // The houses on Robot Land's village street, two robots in each.
+        "bot_house_lamp" => vec![
+            n(LampBot,   2, 2, S::LampBot,   true, false, false),
+            n(HiccupBot, 6, 3, S::HiccupBot, true, false, false).wandering(),
+        ],
+        "bot_house_kitchen" => vec![
+            n(FridgeBot, 7, 1, S::FridgeBot, true, false, false),
+            n(WashBot,   2, 3, S::WashBot,   true, false, false),
+        ],
+        "bot_house_bell" => vec![
+            n(BellBot, 2, 2, S::BellBot, true, false, false),
+            n(MopBot,  6, 4, S::MopBot,  true, false, false).wandering(),
         ],
         "control" => vec![
             // Dev knob bay -- each NPC is one control. game.rs intercepts dev-control

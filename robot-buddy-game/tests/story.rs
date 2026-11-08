@@ -3700,6 +3700,45 @@ fn every_robot_in_robot_land_can_be_walked_to_and_befriended() {
     }
 }
 
+#[test]
+fn every_house_in_robot_land_lets_you_in_to_meet_its_robots_and_back_out() {
+    use robot_buddy_game::input::KeyCode;
+
+    let houses = [
+        ("bot_house_lamp", 8, [NpcKind::LampBot, NpcKind::HiccupBot]),
+        ("bot_house_kitchen", 19, [NpcKind::FridgeBot, NpcKind::WashBot]),
+        ("bot_house_bell", 30, [NpcKind::BellBot, NpcKind::MopBot]),
+    ];
+    let mut h = in_robot_land(13, 1);
+    for (house, door_x, residents) in houses {
+        // Stroll down to the village street, under the front door, and go in.
+        h.walk_to(door_x, 25);
+        h.step_through_portal(KeyCode::Up, house);
+        h.finish_dialogue();
+        for kind in residents {
+            assert!(h.game.npcs.iter().any(|n| n.kind == kind), "{kind:?} lives in {house}");
+        }
+        for kind in residents {
+            for n in h.game.npcs.iter_mut() { n.wanders = false; }
+            assert!(!h.game.map.is_solid(
+                h.game.npcs.iter().find(|n| n.kind == kind).unwrap().entity.tile_x,
+                h.game.npcs.iter().find(|n| n.kind == kind).unwrap().entity.tile_y,
+            ), "{kind:?} is standing inside the furniture");
+            h.walk_to_npc(kind);
+            h.interact();
+            assert_eq!(h.game.state, GameState::InteractionMenu, "talking to {kind:?} opens the menu");
+            h.press(KeyCode::Escape);
+            h.wait_until(|g| g.state == GameState::Playing);
+        }
+        // Back out the door, onto the street just below it.
+        h.walk_to(4, 5);
+        h.step_through_portal(KeyCode::Down, "robot_land");
+        h.finish_dialogue();
+        assert_eq!((h.game.player.tile_x, h.game.player.tile_y), (door_x, 25), "you come out of {house} at its front door");
+        for n in h.game.npcs.iter_mut() { n.wanders = false; }
+    }
+}
+
 // ─── Sockbot's Sock Shop ────────────────────────────────
 
 fn in_robot_land(seed: u64, band: u8) -> Harness {
