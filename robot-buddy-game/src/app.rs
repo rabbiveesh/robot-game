@@ -73,7 +73,13 @@ impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(DrawPlugin)
             .init_resource::<CurrentInput>()
-            .add_systems(PreUpdate, capture.after(bevy::input::InputSystems))
+            // After picking, so a panel tap Bevy hit-tests this frame rides
+            // in the same FrameInput as the click that made it. Unordered,
+            // the two can land a frame apart (they did on the web build).
+            .add_systems(
+                PreUpdate,
+                capture.after(bevy::input::InputSystems).after(bevy::picking::PickingSystems::Last),
+            )
             .add_systems(Update, run_frame.before(PanelSystems));
     }
 }

@@ -1363,7 +1363,7 @@ impl Game {
                         dismiss = true;
                     }
 
-                    if !dismiss && input.mouse_clicked {
+                    if !dismiss && (input.mouse_clicked || input.ui_press.is_some()) {
                         if let Some(action) = ui::challenge::handle_click(input.ui_press, &ac.state, &ac.challenge) {
                             ac.state = challenge_reducer(ac.state.clone(), action);
                             speak_challenge_feedback(&ac.state, "Sparky");
@@ -2080,7 +2080,9 @@ impl Game {
                 dismiss = true;
             }
 
-            if !dismiss && !pointer_busy && input.mouse_clicked {
+            // A tapped answer button counts on its own: Bevy's press needn't
+            // arrive in the same frame as the finger landing.
+            if !dismiss && !pointer_busy && (input.mouse_clicked || input.ui_press.is_some()) {
                 if let Some(action) = ui::challenge::handle_click(input.ui_press, &ac.state, &ac.challenge) {
                     let show_me = matches!(action, ChallengeAction::ShowMe);
                     note_action(ac, &action, self.game_time);

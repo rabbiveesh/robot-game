@@ -130,6 +130,24 @@ impl Harness {
         self.step(&FrameInput::empty().with_mouse_click(x, y).with_ui_press(action));
     }
 
+    /// Tap a panel button the way the browser can deliver it: the finger
+    /// lands one frame, and Bevy's press on the button arrives the next,
+    /// on its own. A button has to work either way.
+    pub fn tap_split(&mut self, action: UiAction) {
+        let (x, y) = self.button_center(action);
+        self.step(&FrameInput::empty().with_mouse_click(x, y));
+        let mut press = FrameInput::empty().with_mouse_held(x, y).with_ui_press(action);
+        press.mouse_clicked = false;
+        self.step(&press);
+    }
+
+    /// Tap the active challenge's right answer, finger then press a frame
+    /// apart (see [`Self::tap_split`]).
+    pub fn tap_right_answer_split(&mut self) {
+        let idx = self.game.correct_choice_index().expect("tap_right_answer_split: no active challenge");
+        self.tap_split(UiAction::Challenge(ui::challenge::ChallengeId::Choice(idx)));
+    }
+
     /// Where a finger would tap `action`'s button on screen right now (the
     /// middle of its visible part). Panics if the screen is broken or the
     /// button isn't there, or is too little on screen to tap.
