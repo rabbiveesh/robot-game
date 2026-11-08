@@ -131,6 +131,12 @@ impl AttemptRecord {
         self.format.starts_with("pearl_hop")
     }
 
+    /// An order handed over at Sockbot's Sock Shop: pairing practice, not a
+    /// math challenge.
+    pub fn is_pairing(&self) -> bool {
+        self.format.starts_with("socks_")
+    }
+
     /// Identity for de-duplicating records that appear in several exports.
     pub fn key(&self) -> (u64, u32, i32, i32) {
         (self.at.to_bits(), self.play_secs.to_bits(), self.a, self.b)

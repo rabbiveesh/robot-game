@@ -42,7 +42,7 @@ js-sys = "0.3"
 getrandom = { version = "0.3", features = ["wasm_js"] }
 
 [features]
-# PNG encoding for examples/screenshots.rs and pearl_hop_demo.rs, kept out of the shipped WASM:
+# PNG encoding for examples/screenshots.rs and the demo reels, kept out of the shipped WASM:
 #   cargo run -p robot-buddy-game --example screenshots --features screenshots
 screenshots = ["bevy/png"]
 
@@ -52,6 +52,10 @@ required-features = ["screenshots"]
 
 [[example]]
 name = "pearl_hop_demo"
+required-features = ["screenshots"]
+
+[[example]]
+name = "robot_land_demo"
 required-features = ["screenshots"]
 
 [dev-dependencies]

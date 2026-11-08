@@ -3632,3 +3632,230 @@ fn building_the_model_is_logged_as_workspace_help() {
     assert!(w.singles + w.rows > 0, "counters were moved");
     assert!(!r.unaided());
 }
+
+// ─── Robot Land ─────────────────────────────────────────
+
+#[test]
+fn the_bot_pad_in_gizmos_lab_beams_you_to_robot_land_and_back() {
+    use robot_buddy_game::input::KeyCode;
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let mut h = Harness::new(5);
+    h.start_dev_game();
+    h.game.map = Map::lab();
+    h.game.npcs = npc_mod::npcs_for_map("lab");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+    h.game.sparky.entity.tile_x = 3;
+    h.game.sparky.entity.x = 3.0 * 48.0;
+    h.game.sparky.entity.target_x = 3.0 * 48.0;
+
+    // The pad sits in the lab's west corner at (1,2); step up onto it.
+    snap_player(&mut h, 1, 3);
+    h.step_through_portal(KeyCode::Up, "robot_land");
+    assert_eq!(h.game.map.id, "robot_land");
+    assert!(h.game.npcs.iter().any(|n| n.kind == NpcKind::Toaster),
+        "Toasty is home to greet arrivals");
+
+    // The return pad is right above the arrival tile.
+    h.finish_dialogue();
+    h.step_through_portal(KeyCode::Up, "lab");
+    assert_eq!(h.game.map.id, "lab");
+}
+
+#[test]
+fn every_robot_in_robot_land_can_be_walked_to_and_befriended() {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+
+    let map = Map::robot_land();
+    assert!(map.tiles.iter().all(|r| r.len() == map.width), "Robot Land rows are all the same width");
+
+    let roster = npc_mod::npcs_for_map("robot_land");
+    assert_eq!(roster.len(), 6);
+    for npc in &roster {
+        assert!(npc.can_receive_gifts, "{} should be giftable — every themed critter is a potential buddy", npc.name());
+        assert!(!map.is_solid(npc.entity.tile_x, npc.entity.tile_y), "{} is standing inside a wall", npc.name());
+    }
+
+    // Walk to each robot in turn from the arrival tile.
+    let mut h = Harness::new(9);
+    h.start_dev_game();
+    h.game.map = map;
+    h.game.npcs = roster;
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+    h.warp_to(5, 6);
+    for kind in [NpcKind::Toaster, NpcKind::TinyBot, NpcKind::SpringBot, NpcKind::Roomba, NpcKind::SockBot, NpcKind::RustyBot] {
+        // Freeze the wanderers so the target doesn't step away mid-walk.
+        for n in h.game.npcs.iter_mut() { n.wanders = false; }
+        h.walk_to_npc(kind);
+        h.interact();
+        assert_eq!(h.game.state, GameState::InteractionMenu, "talking to {kind:?} opens the menu");
+        h.press(robot_buddy_game::input::KeyCode::Escape);
+        h.wait_until(|g| g.state == GameState::Playing);
+    }
+}
+
+#[test]
+fn every_house_in_robot_land_lets_you_in_to_meet_its_robots_and_back_out() {
+    use robot_buddy_game::input::KeyCode;
+
+    let houses = [
+        ("bot_house_lamp", 8, [NpcKind::LampBot, NpcKind::HiccupBot]),
+        ("bot_house_kitchen", 19, [NpcKind::FridgeBot, NpcKind::WashBot]),
+        ("bot_house_bell", 30, [NpcKind::BellBot, NpcKind::MopBot]),
+    ];
+    let mut h = in_robot_land(13, 1);
+    for (house, door_x, residents) in houses {
+        // Stroll down to the village street, under the front door, and go in.
+        h.walk_to(door_x, 25);
+        h.step_through_portal(KeyCode::Up, house);
+        h.finish_dialogue();
+        for kind in residents {
+            assert!(h.game.npcs.iter().any(|n| n.kind == kind), "{kind:?} lives in {house}");
+        }
+        for kind in residents {
+            for n in h.game.npcs.iter_mut() { n.wanders = false; }
+            assert!(!h.game.map.is_solid(
+                h.game.npcs.iter().find(|n| n.kind == kind).unwrap().entity.tile_x,
+                h.game.npcs.iter().find(|n| n.kind == kind).unwrap().entity.tile_y,
+            ), "{kind:?} is standing inside the furniture");
+            h.walk_to_npc(kind);
+            h.interact();
+            assert_eq!(h.game.state, GameState::InteractionMenu, "talking to {kind:?} opens the menu");
+            h.press(KeyCode::Escape);
+            h.wait_until(|g| g.state == GameState::Playing);
+        }
+        // Back out the door, onto the street just below it.
+        h.walk_to(4, 5);
+        h.step_through_portal(KeyCode::Down, "robot_land");
+        h.finish_dialogue();
+        assert_eq!((h.game.player.tile_x, h.game.player.tile_y), (door_x, 25), "you come out of {house} at its front door");
+        for n in h.game.npcs.iter_mut() { n.wanders = false; }
+    }
+}
+
+// ─── Sockbot's Sock Shop ────────────────────────────────
+
+fn in_robot_land(seed: u64, band: u8) -> Harness {
+    use robot_buddy_game::tilemap::Map;
+    use robot_buddy_game::npc as npc_mod;
+    let mut h = Harness::new(seed);
+    h.start_dev_game();
+    h.game.profile.math_band = band;
+    h.game.map = Map::robot_land();
+    h.game.npcs = npc_mod::npcs_for_map("robot_land");
+    h.game.npcs_offstage.clear();
+    h.game.companion = None;
+    park_sparky(&mut h);
+    for n in h.game.npcs.iter_mut() { n.wanders = false; }
+    h.warp_to(5, 6);
+    h
+}
+
+#[test]
+fn sockbot_wears_a_game_here_beacon_and_talking_opens_his_shop() {
+    let mut h = in_robot_land(3, 1);
+    let sockbot = h.game.npcs.iter().find(|n| n.kind == NpcKind::SockBot).unwrap();
+    assert!(sockbot.hosts_minigame().is_some(), "a kid can see there's a game at Sockbot's");
+    let mark = h.mark();
+    h.open_sock_shop();
+    assert!(h.events_since(mark).iter().any(|e| matches!(e, GameEvent::SockShopStarted { .. })));
+}
+
+#[test]
+fn the_right_number_of_pairs_socks_every_foot_and_pays_dum_dums() {
+    for band in [1u8, 3, 5] {
+        let mut h = in_robot_land(11, band);
+        h.open_sock_shop();
+        let before = h.game.dum_dums;
+        h.give_the_right_pairs();
+        let a = h.game.active_socks().unwrap();
+        assert!(a.session.win_done(), "band {band}: every foot socked");
+        assert_eq!(h.game.dum_dums, before + robot_buddy_game::game::SOCK_PAY + robot_buddy_game::game::SOCK_CLEAN_BONUS,
+            "band {band}: paid, with the first-try bonus");
+
+        // Next robot steps up.
+        h.tap(robot_buddy_game::ui::UiAction::Socks(robot_buddy_game::ui::socks::SockId::Next));
+        assert!(!h.game.active_socks().unwrap().session.win_done(), "band {band}: a fresh order");
+        assert_eq!(h.game.state, GameState::SockShop);
+    }
+}
+
+/// Too few and a foot stays cold; too many and the spares bounce back. The
+/// kid's count is kept, and they go again. Never "wrong".
+#[test]
+fn a_miss_is_a_cold_foot_or_spare_socks_and_the_kid_goes_again() {
+    use robot_buddy_domain::logic::socks::{Fit, SockPhase};
+    let mut h = in_robot_land(5, 2);
+    h.open_sock_shop();
+    let need = h.sock_order().pairs_needed();
+    let before = h.game.dum_dums;
+
+    h.give_pairs(need + 1);
+    let a = h.game.active_socks().unwrap();
+    assert_eq!(a.session.phase, SockPhase::Choosing, "back at the counter, ready to go again");
+    assert_eq!(a.session.sent, Some(Fit::Spare { pairs: 1 }));
+    assert_eq!(a.session.pairs, need + 1, "the count is kept so the kid adjusts from it");
+    assert!(!a.caption.to_lowercase().contains("wrong"), "{:?}", a.caption);
+
+    h.give_pairs(need - 1);
+    assert!(matches!(h.game.active_socks().unwrap().session.sent, Some(Fit::Short { .. })));
+
+    h.give_pairs(need);
+    assert!(h.game.active_socks().unwrap().session.win_done());
+    assert_eq!(h.game.dum_dums, before + robot_buddy_game::game::SOCK_PAY, "socked on the third try: no first-try bonus");
+}
+
+/// Every order handed over is a pairing data point, and only that: it never
+/// moves the math band, the rolling window, or skip counting.
+#[test]
+fn sock_orders_count_against_pairing_only() {
+    let mut h = in_robot_land(8, 4);
+    h.open_sock_shop();
+    let (pairs, skip) = (h.game.profile.pairs_confidence, h.game.profile.skip_count_confidence);
+    let need = h.sock_order().pairs_needed();
+    for _ in 0..4 {
+        h.give_pairs(need + 2);
+    }
+    h.give_pairs(need);
+
+    assert_eq!(h.game.profile.math_band, 4, "four misses and a win leave the band alone");
+    assert!(h.game.profile.rolling_window.entries.is_empty(), "nor reach the window the band is judged by");
+    assert!(h.game.profile.pairs_confidence < pairs, "they do say pairing isn't there yet");
+    assert_eq!(h.game.profile.skip_count_confidence, skip);
+    let orders: Vec<_> = h.game.attempt_log.records().iter().filter(|r| r.is_pairing()).collect();
+    assert_eq!(orders.len(), 5, "every hand-over is in the parent's log");
+    assert_eq!(orders.iter().filter(|r| r.correct).count(), 1);
+    assert!(orders.iter().all(|r| r.correct_answer == need as i32));
+}
+
+#[test]
+fn the_sock_shop_can_be_left_by_tap_or_escape() {
+    let mut h = in_robot_land(2, 1);
+    h.open_sock_shop();
+    h.tap(robot_buddy_game::ui::UiAction::Socks(robot_buddy_game::ui::socks::SockId::Leave));
+    assert_eq!(h.game.state, GameState::Playing);
+    assert!(h.game.active_socks().is_none());
+
+    h.open_sock_shop();
+    h.press(KeyCode::Escape);
+    assert_eq!(h.game.state, GameState::Playing);
+}
+
+#[test]
+fn the_sock_shop_plays_from_the_keyboard() {
+    let mut h = in_robot_land(4, 3);
+    h.open_sock_shop();
+    let need = h.sock_order().pairs_needed();
+    for _ in 0..need {
+        h.press(KeyCode::Up);
+    }
+    h.press(KeyCode::Enter);
+    h.wait_for_sockbot();
+    assert!(h.game.active_socks().unwrap().session.win_done());
+}

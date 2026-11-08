@@ -58,6 +58,8 @@ impl SwagFit {
     /// up over the lid, so the hat rides on top of them.
     pub const CLAM_CARTOON: SwagFit = SwagFit { head: 13.0, chest: 31.0, ground: 41.0, scale: 0.75 };
     /// Hermie, wearing a shop on his back.
+    /// Sir Vacuums-a-Lot: a disc on the floor, crown on top.
+    pub const ROOMBA: SwagFit = SwagFit { head: 26.0, chest: 34.0, ground: 45.0, scale: 0.7 };
     pub const HERMIT: SwagFit = SwagFit { head: 14.0, chest: 31.0, ground: 45.0, scale: 0.75 };
 }
 

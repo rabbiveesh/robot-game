@@ -1,7 +1,7 @@
 //! Panels and HUD.
 //!
 //! Panels that are Bevy UI (dialogue, challenge, shop, swag, quest, settings,
-//! Pearl Hop's buttons and caption, descent, the shooter's footer) are written in two halves: a pure
+//! Pearl Hop's buttons and caption, descent, Sock Shop, the shooter's footer) are written in two halves: a pure
 //! *view* the game builds from its state (`Game::ui_views`), and a *bundle*
 //! function turning that view into Bevy UI nodes. Bevy lays them out, draws
 //! them, and turns taps into [`UiAction`]s that `Game::step` reads from
@@ -30,6 +30,7 @@ pub mod shooter;
 pub mod shop;
 pub mod sudoku;
 pub mod descent;
+pub mod socks;
 pub mod swag;
 pub mod swatches;
 pub mod visuals;
@@ -50,6 +51,7 @@ pub enum UiAction {
     Shooter(shooter::FooterId),
     PearlHop(pearl_hop::HopId),
     Descent(descent::DescentId),
+    Socks(socks::SockId),
 }
 
 /// A slot inside a panel that `Game::render` paints procedural art into.
@@ -79,10 +81,12 @@ pub enum ArtId {
     HopLeaveIcon,
     /// Pearl Hop's Again! button: a pearl.
     HopAgainIcon,
+    /// Sockbot's Sock Shop: the customers, the counter and Sockbot.
+    SockShop,
 }
 
 impl ArtId {
-    pub const ALL: [ArtId; 10] = [
+    pub const ALL: [ArtId; 11] = [
         ArtId::ChallengeVisual,
         ArtId::ChallengeStars,
         ArtId::ShopPreview,
@@ -93,6 +97,7 @@ impl ArtId {
         ArtId::WorkspaceHand,
         ArtId::HopLeaveIcon,
         ArtId::HopAgainIcon,
+        ArtId::SockShop,
     ];
 
     /// The render layer this slot's art is drawn on (0 is the screen).
@@ -117,6 +122,7 @@ impl bevy::app::Plugin for PanelsPlugin {
             .add_panel::<swag::SwagPanel>()
             .add_panel::<pearl_hop::HopPanel>()
             .add_panel::<descent::DescentPanel>()
+            .add_panel::<socks::SockPanel>()
             .add_panel::<shooter::FooterPanel>();
     }
 }

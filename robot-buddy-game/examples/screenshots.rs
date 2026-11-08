@@ -315,6 +315,68 @@ fn record() -> Shots {
         }
     }
 
+    // ── Robot Land's village: the street of houses, then each one inside ──
+    {
+        use robot_buddy_game::input::KeyCode;
+        let mut h = Harness::new(23);
+        h.start_dev_game();
+        h.game.map = Map::robot_land();
+        h.game.npcs = npc_mod::npcs_for_map("robot_land");
+        h.game.npcs_offstage.clear();
+        h.game.companion = None;
+        for n in h.game.npcs.iter_mut() { n.wanders = false; }
+        h.warp_to(19, 26);
+        h.advance(20);
+        shots.snap_game("44_robot_land_village", &mut h);
+        for (house, door_x) in [("bot_house_lamp", 8), ("bot_house_kitchen", 19), ("bot_house_bell", 30)] {
+            h.game.map = Map::robot_land();
+            h.game.npcs = npc_mod::npcs_for_map("robot_land");
+            h.warp_to(door_x, 25);
+            h.step_through_portal(KeyCode::Up, house);
+            h.finish_dialogue();
+            h.advance(30);
+            shots.snap_game(&format!("45_{house}"), &mut h);
+        }
+    }
+
+    // ── Robot Land: the factory floor, then Sockbot's Sock Shop at every stage ──
+    {
+        use robot_buddy_game::ui::socks::SockId;
+        use robot_buddy_game::ui::UiAction;
+        let mut h = Harness::new(17);
+        h.start_dev_game();
+        h.game.map = Map::robot_land();
+        h.game.npcs = npc_mod::npcs_for_map("robot_land");
+        h.game.npcs_offstage.clear();
+        for n in h.game.npcs.iter_mut() { n.wanders = false; }
+        h.warp_to(18, 14);
+        h.advance(20);
+        shots.snap_game("40_robot_land_sockbot", &mut h);
+        for band in [1u8, 3, 5] {
+            h.game.profile.math_band = band;
+            h.open_sock_shop();
+            let need = h.sock_order().pairs_needed();
+            // A couple of pairs out of the drawer, short of the order.
+            for _ in 0..need.saturating_sub(1).min(3) {
+                h.tap(UiAction::Socks(SockId::More(1)));
+            }
+            shots.snap_game(&format!("41_sock_shop_band{band}"), &mut h);
+            // One pair too many: the spare bounces back on the counter.
+            let need = h.sock_order().pairs_needed();
+            while h.game.active_socks().unwrap().session.pairs < need + 1 {
+                h.tap(UiAction::Socks(SockId::More(1)));
+            }
+            h.tap(UiAction::Socks(SockId::Send));
+            h.run_until(|g| g.active_socks().is_some_and(|a| a.session.phase == robot_buddy_domain::logic::socks::SockPhase::Reacting), 600);
+            h.advance(20);
+            shots.snap_game(&format!("42_sock_shop_band{band}_spare"), &mut h);
+            h.wait_for_sockbot();
+            h.give_the_right_pairs();
+            shots.snap_game(&format!("43_sock_shop_band{band}_won"), &mut h);
+            h.tap(UiAction::Socks(SockId::Leave));
+        }
+    }
+
     // ── Panels drawn directly: a 4-line dialogue and a wrapped word problem ──
     {
         use robot_buddy_game::ui::dialogue::{DialogueBox, DialogueLine};

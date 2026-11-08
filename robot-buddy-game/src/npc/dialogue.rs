@@ -150,6 +150,66 @@ pub(crate) fn npc_dialogue_lines(npc: &Npc, rng: &mut SmallRng) -> Vec<DialogueL
         ArcadeAlien => &[
             "Bubeleh! Step right up to the cabinet and blast some number bonds!",
         ],
+        Toaster => &[
+            "POP! Oh no. I toasted my homework again.",
+            "Want some toast? Too late, it's on the ceiling.",
+            "I count my toast in twos. Two slots, see? POP POP!",
+        ],
+        SpringBot => &[
+            "Hi! I'm Clank! My head is on a spring. BOING! It's a feature!",
+            "Could you grab my head? It went over there. No, THERE.",
+            "I tried to nod yes and my head flew away. So... yes!",
+        ],
+        Roomba => &[
+            "I am Sir Vacuums-a-Lot! I have cleaned this exact spot four hundred times.",
+            "Excuse me. You are standing on a crumb. A ROYAL crumb.",
+            "Bump. Turn. Bump. Turn. I am VERY good at my job.",
+        ],
+        TinyBot => &[
+            "Beep.",
+            "Beep beep? BEEP! ...boop.",
+            "BEEEEEEEP!!! (Beep is very happy to see you.)",
+        ],
+        RustyBot => &[
+            "Back in my day we only had ONE number. It was zero. We LOVED it.",
+            "*squeak* Don't mind me, I'm just a little rusty. *squeak squeak*",
+            "Kids these days, with their batteries. I ran on a hamster named Gerald.",
+        ],
+        SockBot => &[
+            "Socks come in PAIRS! I have nine socks. That's four pairs and one very lonely sock.",
+            "Have you seen a stripy sock? He's my favourite. He's always missing.",
+            "Two, four, six, eight! Count my socks, they're really great!",
+        ],
+        LampBot => &[
+            "Is it dark? Is it getting dark? Don't turn me off. Never turn me off!",
+            "I'm not scared of the dark. I just like to keep it... far away.",
+            "Count my light beams with me! One, two, three... okay that's all of them.",
+        ],
+        HiccupBot => &[
+            "Hi! I'm Hic! HIC! Sorry. HIC!",
+            "I've had the hiccups for three hundred days. HIC! Still counting!",
+            "Say a number and I'll hiccup that many times. HIC! ...oops, that was one.",
+        ],
+        FridgeBot => &[
+            "Why did the robot go to the fridge? To CHILL out! Ha! ...brrr.",
+            "I keep my jokes cold. Like cheese. Want some cheese?",
+            "My door keeps opening by itself. I think it wants to say hi!",
+        ],
+        WashBot => &[
+            "Spin spin spin! Everything I wash comes out PINK. Even the black socks!",
+            "I washed Grandpa Gearbox once. Now he's pink. He likes it.",
+            "I'm a little dizzy. Which way is up? Spin spin!",
+        ],
+        BellBot => &[
+            "DING DONG! Oh, hello! DING! Sorry, I get excited. DING!",
+            "I'm a doorbell! When I'm happy, I ring. I'm ALWAYS happy!",
+            "Ding! Ding! That's two dings. Want to hear three? DING!",
+        ],
+        MopBot => &[
+            "Is that a PUDDLE?! Eek! Oh. It's just the floor. Phew.",
+            "I'm a mop. I'm scared of puddles. I know, I KNOW.",
+            "If you see any water, tell me! So I can run the other way.",
+        ],
         // Dev-control NPCs go through apply_dev_control, never this path.
         CtrlBand | CtrlKenkenLevel | CtrlCraReset | CtrlIntroReset
         | CtrlTriggerKenken | CtrlTriggerPattern | CtrlTriggerBalance

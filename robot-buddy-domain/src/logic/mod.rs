@@ -8,3 +8,4 @@ pub mod number_line;
 pub mod patterns;
 pub mod shooter;
 pub mod sudoku;
+pub mod socks;
